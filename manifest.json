@@ -1,0 +1,12 @@
+{
+  "display_name": "酒馆sqlite助手",
+  "loading_order": 200,
+  "js": "src/index.js",
+  "css": "src/sqlite-helper.css",
+  "author": "卡卡西天取经<q3boy1@gmail.com>",
+  "dependencies": [
+    "third-party/JS-Slash-Runner"
+  ],
+  "version": "0.1.0",
+  "auto_update": false
+}

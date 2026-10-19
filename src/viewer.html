@@ -1,0 +1,45 @@
+<section data-sqlite-viewer class="sqlite-viewer">
+  <div class="sqlite-viewer-top">
+    <div class="sqlite-viewer-tabs" role="tablist" aria-label="数据库">
+      <button type="button" class="menu_button" data-viewer-scope="global" role="tab">全局</button>
+      <button type="button" class="menu_button" data-viewer-scope="char" role="tab">角色</button>
+      <button type="button" class="menu_button" data-viewer-scope="chat" role="tab">聊天</button>
+      <button type="button" class="menu_button" data-viewer-scope="info" role="tab">信息</button>
+    </div>
+    <button type="button" class="menu_button sqlite-viewer-close" data-viewer-action="close" aria-label="关闭数据库查看器" title="关闭">×</button>
+  </div>
+  <div class="sqlite-viewer-body" data-viewer-body>
+    <aside class="sqlite-viewer-sidebar" data-viewer-sidebar>
+      <div class="sqlite-viewer-sidebar-heading"><span data-viewer-sidebar-caption>数据表</span><span data-viewer-current-table></span><button type="button" class="menu_button" data-viewer-action="sidebar" aria-label="收起数据表列表" title="收起数据表列表">‹</button></div>
+      <div class="sqlite-viewer-table-list" data-viewer-table-list aria-label="数据表"><label class="sqlite-viewer-system-tables" data-viewer-system-control><input type="checkbox" data-viewer-system-tables>显示系统表</label></div>
+    </aside>
+    <div class="sqlite-viewer-content">
+      <div class="sqlite-viewer-toolbar" data-viewer-toolbar>
+        <div class="sqlite-viewer-tabs" role="tablist" aria-label="表内容">
+          <button type="button" class="menu_button" data-viewer-view="data" role="tab">数据</button>
+          <button type="button" class="menu_button" data-viewer-view="ddl" role="tab">表结构</button>
+        </div>
+        <div class="sqlite-viewer-ddl-actions" data-viewer-ddl-actions hidden>
+          <button type="button" class="menu_button" data-viewer-action="copy-ddl">复制</button>
+          <button type="button" class="menu_button" data-viewer-action="refresh-ddl" aria-label="刷新建表语句" title="重新读取当前表的建表语句">↻</button>
+        </div>
+        <div class="sqlite-viewer-pages" data-viewer-pages>
+          <select data-viewer-page-size aria-label="每页行数"><option value="25">25 行</option><option value="50" selected>50 行</option><option value="100">100 行</option><option value="200">200 行</option></select>
+          <button type="button" class="menu_button" data-viewer-action="previous" aria-label="上一页" title="上一页">‹</button>
+          <select data-viewer-page aria-label="当前页号"><option value="1">1</option></select>
+          <button type="button" class="menu_button" data-viewer-action="next" aria-label="下一页" title="下一页">›</button>
+          <button type="button" class="menu_button" data-viewer-action="refresh" aria-label="刷新表数据" title="重新读取当前表；翻页和排序使用已读取的数据">↻</button>
+        </div>
+      </div>
+      <p class="sqlite-viewer-status" data-viewer-status role="status"></p>
+      <details data-viewer-error hidden><summary>详细原因</summary><pre data-viewer-error-text></pre></details>
+      <pre class="sqlite-viewer-ddl" data-viewer-ddl hidden><code></code></pre>
+      <div class="sqlite-viewer-grid-scroll" data-viewer-grid-scroll><table data-viewer-table-grid></table></div>
+    </div>
+  </div>
+  <div class="sqlite-viewer-info" data-viewer-info hidden>
+    <div class="sqlite-viewer-toolbar"><strong data-viewer-info-directory></strong><button type="button" class="menu_button" data-viewer-action="refresh-info" aria-label="刷新文件信息" title="重新读取三个数据库的实际文件信息">↻</button></div>
+    <p class="sqlite-viewer-status">以下是已保存的文件信息，尚未保存的修改不包含在内。路径相对于数据目录。</p>
+    <div class="sqlite-viewer-info-files" data-viewer-info-files></div>
+  </div>
+</section>

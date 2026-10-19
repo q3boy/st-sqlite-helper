@@ -1,0 +1,31 @@
+{
+  "sourceCommit": "28da1457a18ef54d7c7ab54e570b4127a7e7e9dd",
+  "sources": {
+    "skills/dvs-card-authoring/SKILL.md": "SKILL.md",
+    "skills/dvs-card-authoring/LICENSE": "LICENSE",
+    "skills/dvs-card-authoring/NOTICE.md": "NOTICE.md",
+    "doc/dvs/指南/DVS作者使用手册.md": "references/dvs-author-guide.md",
+    "doc/dvs/指南/DVS接口与进阶用法.md": "references/dvs-api.md",
+    "doc/sqlite-helper/指南/使用与维护指南.md": "references/helper-usage.md",
+    "doc/sqlite-helper/指南/业务侧使用指南.md": "references/helper-author-guide.md",
+    "doc/sqlite-helper/指南/错误说明.md": "references/helper-errors.md",
+    "doc/sqlite-helper/契约/公共接口契约.md": "references/helper-api.md",
+    "doc/sqlite-helper/契约/数据库与保存契约.md": "references/helper-sql.md",
+    "doc/sqlite-helper/契约/调用等待与恢复契约.md": "references/helper-recovery.md",
+    "doc/使用/README.md": "references/usage-index.md",
+    "doc/使用/卡片开发skill.md": "references/skill-usage.md",
+    "examples/dvs-minimal-card/card.json": "assets/dvs-minimal-card/card.json",
+    "examples/dvs-minimal-card/dvs.js": "assets/dvs-minimal-card/dvs.js",
+    "examples/dvs-minimal-card/index.yaml": "assets/dvs-minimal-card/index.yaml",
+    "examples/dvs-minimal-card/README.md": "assets/dvs-minimal-card/README.md",
+    "examples/dvs-minimal-card/welcome.txt": "assets/dvs-minimal-card/welcome.txt",
+    "examples/dvs-minimal-card/worldbook/data.txt": "assets/dvs-minimal-card/worldbook/data.txt",
+    "examples/dvs-minimal-card/worldbook/ddl.sql": "assets/dvs-minimal-card/worldbook/ddl.sql",
+    "examples/dvs-minimal-card/worldbook/init.sql": "assets/dvs-minimal-card/worldbook/init.sql",
+    "examples/dvs-minimal-card/worldbook/narrative.txt": "assets/dvs-minimal-card/worldbook/narrative.txt",
+    "examples/dvs-minimal-card/worldbook/person.txt": "assets/dvs-minimal-card/worldbook/person.txt",
+    "examples/dvs-minimal-card/worldbook/rules.txt": "assets/dvs-minimal-card/worldbook/rules.txt",
+    "examples/helper-notes/notes.js": "assets/helper-notes/notes.js",
+    "examples/helper-notes/README.md": "assets/helper-notes/README.md"
+  }
+}
