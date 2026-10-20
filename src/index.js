@@ -2074,7 +2074,7 @@ function savedIdentityFailure(error, field, identityStage) {
 
 // src/protocol.ts
 var PROTOCOL_VERSION = 21;
-var BUILD_ID = "2f3f606d-cb30-4167-8177-3ff67c131901";
+var BUILD_ID = "a4fe31d7-0cd7-4f6f-9c72-e5fe4eaae70b";
 var extensionEntryPath = new URL(import.meta.url).pathname;
 var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
 var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;
@@ -14440,6 +14440,296 @@ function createUpdateFeedback(owner, reportError) {
   };
 }
 
+// src/dvs/lorebook-version.ts
+var import_semver2 = __toESM(require_semver2(), 1);
+function version(value, label) {
+  if (typeof value !== "string")
+    throw new Error(`${label}缺少完整版本号，请填写 major.minor.patch。`);
+  const text = value.trim().replace(/^[vV]/, "");
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(text))
+    throw new Error(`${label}“${value}”不是完整 SemVer 版本号，请填写例如 0.1.0 或 v0.1.0。`);
+  try {
+    return new import_semver2.SemVer(text);
+  } catch {
+    throw new Error(`${label}“${value}”不是有效 SemVer 版本号。`);
+  }
+}
+function worldbookVersion(book, name) {
+  if (!book?.entries || typeof book.entries !== "object" || Array.isArray(book.entries))
+    throw new Error(`主世界书“${name}”不存在或内容无效。`);
+  const entries = Object.values(book.entries).filter((entry) => entry?.comment === "[DVS_VERSION]");
+  if (entries.length !== 1)
+    throw new Error(`主世界书“${name}”必须恰有一个名称为 [DVS_VERSION] 的条目，当前找到 ${entries.length} 个。`);
+  return version(entries[0].content, `主世界书“${name}”的版本`);
+}
+function localTime(date) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`;
+}
+function sameWorldbook(left, right) {
+  if (left === right)
+    return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object")
+    return false;
+  if (Array.isArray(left) !== Array.isArray(right))
+    return false;
+  const a = Object.keys(left), b = Object.keys(right);
+  return a.length === b.length && a.every((key) => Object.hasOwn(right, key) && sameWorldbook(left[key], right[key]));
+}
+async function checkLorebookVersion(port, options, now = () => new Date) {
+  let target, backup = "", newName = "", preserved = false, removed = false, imported = false;
+  try {
+    if (!options || !["WARNING_MESSAGE", "AUTO_UPDATE"].includes(options.onExpired))
+      throw new Error("请显式指定 onExpired 为 WARNING_MESSAGE 或 AUTO_UPDATE。");
+    target = port.capture();
+    const fixed = target;
+    let expectedPrimary = fixed.primary;
+    const assert = () => port.assertCurrent(fixed, expectedPrimary);
+    assert();
+    const cardVersion = version(fixed.version, "角色卡版本");
+    const original = await port.load(fixed.primary);
+    assert();
+    const oldVersion = worldbookVersion(original, fixed.primary);
+    if (!import_semver2.lt(oldVersion, cardVersion))
+      return;
+    if (options.onExpired === "WARNING_MESSAGE") {
+      port.notify("warning", `主世界书“${fixed.primary}”的版本 ${oldVersion.raw} 低于角色卡版本 ${cardVersion.raw}。请先保留当前世界书及本地修改，再从角色卡重新导入世界书并设为本卡主世界书。`);
+      return;
+    }
+    if (!await port.confirmUpdate(`主世界书“${fixed.primary}”的版本 ${oldVersion.raw} 低于角色卡版本 ${cardVersion.raw}。确认后会先另名保留旧书及全部本地修改，再从当前角色卡内嵌世界书导入新版并重新关联。是否备份并更新？`))
+      return;
+    assert();
+    const source = await port.embedded(fixed);
+    assert();
+    const raw = await port.read(fixed.primary);
+    assert();
+    backup = await port.availableName(`${fixed.primary}（更新前 ${oldVersion.raw}，${localTime(now())}）`);
+    assert();
+    await port.save(backup, raw);
+    assert();
+    if (!sameWorldbook(raw, await port.read(backup)))
+      throw new Error("另名旧书的后端内容与原书不一致，未删除原书。");
+    preserved = true;
+    assert();
+    await port.remove(fixed.primary);
+    removed = true;
+    assert();
+    newName = await port.availableName(fixed.primary);
+    assert();
+    await port.save(newName, source);
+    assert();
+    if (!sameWorldbook(source, await port.read(newName)))
+      throw new Error("新版世界书的后端内容与卡内来源不一致。");
+    imported = true;
+    assert();
+    await port.associate(fixed, newName);
+    expectedPrimary = newName;
+    assert();
+    await port.confirmAssociation(fixed, newName);
+    assert();
+    const currentVersion = worldbookVersion(await port.read(newName), newName);
+    assert();
+    if (import_semver2.lt(currentVersion, cardVersion))
+      throw new Error(`导入后主世界书版本仍为 ${currentVersion.raw}，低于角色卡 ${cardVersion.raw}。请作者修正卡内世界书后重新导入。`);
+    await port.complete(`主世界书已更新为“${newName}”（${currentVersion.raw}）。原书及全部本地修改保留在“${backup}”，可自行查看并取回修改。`, assert);
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    const progress = backup ? ` 旧书“${backup}”：${preserved ? "已从后端确认完整保留" : "尚未确认保存完整"}；原名“${target.primary}”：${removed ? "已删除" : "未确认删除"}。${newName ? ` 新书“${newName}”：${imported ? "已从后端确认导入" : "尚未确认导入完整"}。` : ""} 请在世界书列表核对这些名称，并在角色卡中检查主世界书关联；可将保留的旧书重新关联。` : "";
+    const error = new Error(`主世界书版本检查未完成：${reason}${progress}`, { cause });
+    port.notify("error", error.message);
+    throw error;
+  }
+}
+
+// src/dvs/lorebook-version-tavern.ts
+function captureTarget(owner, assertAlive) {
+  assertAlive();
+  const current = owner.SillyTavern?.getContext();
+  const card = current?.characters[Number(current.characterId)];
+  if (!current || current.groupId != null && current.groupId !== "" || current.characterId == null || current.characterId === "" || !card?.avatar)
+    throw new Error("请先打开需要检查的单人角色卡。");
+  const names = owner.TavernHelper?.getCharWorldbookNames(card.avatar);
+  if (!names?.primary || !Array.isArray(names.additional))
+    throw new Error("当前角色卡没有可用的主世界书关联，请先在角色卡中设置主世界书。");
+  return {
+    avatar: card.avatar,
+    version: card.data?.character_version,
+    primary: names.primary,
+    additional: [...names.additional]
+  };
+}
+function notifyLorebookVersion(owner, kind, message) {
+  try {
+    const toast = owner.toastr?.[kind](message, kind === "error" ? "DVS 主世界书检查未完成" : "DVS 主世界书版本", {
+      timeOut: 0,
+      extendedTimeOut: 0,
+      closeButton: true,
+      tapToDismiss: false,
+      escapeHtml: true
+    });
+    toast?.addClass("sqlite-helper-dvs-toast");
+  } catch (error) {
+    console.error("DVS 主世界书提示显示失败", error);
+  }
+}
+async function createLorebookVersionPort(owner, assertAlive) {
+  const initial = captureTarget(owner, assertAlive);
+  const nativeImport = (path) => import(path);
+  const [world, script, utils, popup] = await Promise.all([
+    nativeImport("/scripts/world-info.js"),
+    nativeImport("/script.js"),
+    nativeImport("/scripts/utils.js"),
+    nativeImport("/scripts/popup.js")
+  ]);
+  for (const method of ["loadWorldInfo", "saveWorldInfo", "updateWorldInfoList", "convertCharacterBook"])
+    if (typeof world[method] !== "function")
+      throw new Error(`当前酒馆缺少主世界书操作接口 ${method}，请更新后刷新页面。`);
+  if (!world.worldInfoCache?.delete || typeof utils.getSanitizedFilename !== "function" || typeof script.getOneCharacter !== "function" || typeof script.select_selected_character !== "function")
+    throw new Error("当前酒馆缺少主世界书缓存或角色关联刷新接口，请更新后刷新页面。");
+  if (!popup.Popup?.show?.confirm || !popup.Popup?.show?.text || popup.POPUP_RESULT?.AFFIRMATIVE === undefined)
+    throw new Error("当前酒馆缺少更新确认弹窗接口，请更新后刷新页面。");
+  const popupText = (text) => {
+    const element = owner.document.createElement("div");
+    element.textContent = text;
+    return element.innerHTML;
+  };
+  const context = () => {
+    assertAlive();
+    const current = owner.SillyTavern?.getContext();
+    if (!current || current.groupId != null && current.groupId !== "" || current.characterId == null || current.characterId === "")
+      throw new Error("请先打开需要检查的单人角色卡。");
+    return current;
+  };
+  const character = () => {
+    const current = context();
+    const card = current.characters[Number(current.characterId)];
+    if (!card?.avatar)
+      throw new Error("当前单人角色卡不可用，请重新打开角色卡。");
+    return card;
+  };
+  const books = (avatar) => {
+    const names = owner.TavernHelper?.getCharWorldbookNames(avatar);
+    if (!names || !Array.isArray(names.additional))
+      throw new Error("无法读取角色卡关联的主世界书和附加世界书列表。");
+    return names;
+  };
+  const assertCurrent = (target, primary) => {
+    if (character().avatar !== target.avatar || books(target.avatar).primary !== primary)
+      throw new Error("当前角色或主世界书关联已改变，本次检查已停止。请回到原角色卡后重新检查。");
+    if (JSON.stringify(books(target.avatar).additional) !== JSON.stringify(target.additional))
+      throw new Error("角色卡的附加世界书列表已改变，本次更新已停止，请重新检查。");
+  };
+  const post = async (path, body) => {
+    assertAlive();
+    const response = await (owner.fetch ?? fetch).call(owner, path, {
+      method: "POST",
+      headers: context().getRequestHeaders(),
+      body: JSON.stringify(body),
+      cache: "no-store"
+    });
+    if (!response.ok) {
+      const operation = {
+        "/api/characters/get": "读取角色卡",
+        "/api/characters/merge-attributes": "保存角色卡的主世界书关联",
+        "/api/worldinfo/get": "读取世界书",
+        "/api/worldinfo/delete": "删除原名世界书",
+        "/api/settings/get": "读取世界书列表"
+      };
+      throw new Error(`${operation[path] ?? "酒馆操作"}失败（HTTP ${response.status}）。`);
+    }
+    return response;
+  };
+  const readCard = async (target) => {
+    const card = await (await post("/api/characters/get", { avatar_url: target.avatar })).json();
+    if (!card || card.avatar !== target.avatar || card.shallow || !card.data)
+      throw new Error("酒馆后端没有返回目标角色卡的完整数据。");
+    return card;
+  };
+  const refresh = async (name, present) => {
+    await world.updateWorldInfoList();
+    if (!Array.isArray(world.world_names) || world.world_names.includes(name) !== present)
+      throw new Error(`世界书列表未确认${present ? "加入" : "移除"}“${name}”，请刷新页面后检查。`);
+  };
+  assertCurrent(initial, initial.primary);
+  return {
+    capture: () => initial,
+    assertCurrent,
+    async confirmUpdate(message) {
+      return await popup.Popup.show.confirm("主世界书需要更新", popupText(message), {
+        okButton: "备份并更新",
+        cancelButton: "取消"
+      }) === popup.POPUP_RESULT.AFFIRMATIVE;
+    },
+    async complete(message, assertCurrent) {
+      const result = await popup.Popup.show.text("主世界书更新成功", popupText(`${message} 点击“刷新页面”重新加载酒馆，使新世界书在聊天中生效。`), {
+        okButton: "刷新页面"
+      });
+      if (result === popup.POPUP_RESULT.AFFIRMATIVE) {
+        assertCurrent();
+        owner.location.reload();
+      }
+    },
+    load: (name) => world.loadWorldInfo(name),
+    async embedded(target) {
+      const card = await readCard(target);
+      assertCurrent(target, target.primary);
+      if (!Array.isArray(card.data.character_book?.entries))
+        throw new Error("当前角色卡没有可导入的内嵌世界书，原书保持不变。");
+      const source = world.convertCharacterBook(structuredClone(card.data.character_book));
+      if (!source?.entries || typeof source.entries !== "object" || Array.isArray(source.entries))
+        throw new Error("当前角色卡内嵌世界书无法转换为酒馆格式，原书保持不变。");
+      return source;
+    },
+    async read(name) {
+      const data = await (await post("/api/worldinfo/get", { name })).json();
+      if (!data?.entries || typeof data.entries !== "object" || Array.isArray(data.entries))
+        throw new Error(`后端世界书“${name}”不存在或内容无效。`);
+      return data;
+    },
+    async availableName(base) {
+      const settings = await (await post("/api/settings/get", {})).json();
+      if (!Array.isArray(settings.world_names))
+        throw new Error("无法读取后端世界书名称列表，未写入世界书。");
+      const name = await utils.getSanitizedFilename(base);
+      if (typeof name !== "string" || !name)
+        throw new Error("无法生成有效的世界书文件名。");
+      if (!settings.world_names.includes(name))
+        return name;
+      for (let index = 1;index < 1e5; index++) {
+        const candidate = `${name} (${index})`;
+        if (!settings.world_names.includes(candidate))
+          return candidate;
+      }
+      throw new Error("无法生成未被占用的世界书名称。");
+    },
+    async save(name, book) {
+      await world.saveWorldInfo(name, structuredClone(book), true);
+      await refresh(name, true);
+    },
+    async remove(name) {
+      await post("/api/worldinfo/delete", { name });
+      world.worldInfoCache.delete(name);
+      await refresh(name, false);
+      owner.document.querySelector("#world_editor_select")?.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+    async associate(target, name) {
+      assertCurrent(target, target.primary);
+      await post("/api/characters/merge-attributes", { avatar: target.avatar, data: { extensions: { world: name } } });
+      assertCurrent(target, target.primary);
+      await script.getOneCharacter(target.avatar);
+      assertCurrent(target, name);
+      script.select_selected_character(context().characterId, { switchMenu: false });
+    },
+    async confirmAssociation(target, name) {
+      const card = await readCard(target);
+      if (card.data.extensions?.world !== name)
+        throw new Error(`后端未确认角色卡已关联“${name}”，请手工检查角色卡的主世界书。`);
+      assertCurrent(target, name);
+    },
+    notify: (kind, message) => notifyLorebookVersion(owner, kind, message)
+  };
+}
+
 // src/dvs/runtime.ts
 function createDvsRuntime(owner, facade, prepareCurrent, reportError = (error) => console.error("DVS 操作失败", error), assertService = () => {}, readSavedConfig = async () => readConfig(undefined)) {
   let variableUiBusy = false, variableUi;
@@ -14647,6 +14937,17 @@ function createDvsRuntime(owner, facade, prepareCurrent, reportError = (error) =
     return work;
   };
   const api = Object.freeze({
+    async lorebookVersionCheck(options) {
+      let port;
+      try {
+        assertAlive();
+        port = await createLorebookVersionPort(owner, assertAlive);
+      } catch (error) {
+        notifyLorebookVersion(owner, "error", `主世界书版本检查未完成：${detail(error).message}`);
+        throw error;
+      }
+      await checkLorebookVersion(port, options);
+    },
     async register(options) {
       assertAlive();
       const starting = adapter.context(), { chatId: startingChatId, chat: startingMessages } = starting;

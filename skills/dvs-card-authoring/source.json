@@ -1,5 +1,5 @@
 {
-  "sourceCommit": "28da1457a18ef54d7c7ab54e570b4127a7e7e9dd",
+  "sourceCommit": "9a4de8014662e2801cff379b0b11912f20454cf9",
   "sources": {
     "skills/dvs-card-authoring/SKILL.md": "SKILL.md",
     "skills/dvs-card-authoring/LICENSE": "LICENSE",
@@ -14,6 +14,7 @@
     "doc/sqlite-helper/契约/调用等待与恢复契约.md": "references/helper-recovery.md",
     "doc/使用/README.md": "references/usage-index.md",
     "doc/使用/卡片开发skill.md": "references/skill-usage.md",
+    "doc/使用/安装引导脚本.md": "references/installer-guide.md",
     "examples/dvs-minimal-card/card.json": "assets/dvs-minimal-card/card.json",
     "examples/dvs-minimal-card/dvs.js": "assets/dvs-minimal-card/dvs.js",
     "examples/dvs-minimal-card/index.yaml": "assets/dvs-minimal-card/index.yaml",

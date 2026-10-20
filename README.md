@@ -13,6 +13,7 @@
 | 玩角色卡，安装、更新、查看或清理数据 | [使用与维护指南](doc/sqlite-helper/指南/使用与维护指南.md) |
 | 编写酒馆助手脚本 | [笔记示例](examples/helper-notes/README.md) → [业务侧使用指南](doc/sqlite-helper/指南/业务侧使用指南.md) |
 | 为角色卡接入 DVS | [最小角色卡](examples/dvs-minimal-card/README.md) → [DVS 作者手册](doc/dvs/指南/DVS作者使用手册.md) |
+| 随角色卡附带可选的插件安装提示 | [安装引导脚本](doc/使用/安装引导脚本.md)（JSON 导入或 JS 打包） |
 | 让 AI 协助编写或调整 DVS 卡片 | [卡片开发 skill](doc/使用/卡片开发skill.md) |
 | 找到完整使用路径和常见问题 | [使用导航](doc/使用/README.md) |
 

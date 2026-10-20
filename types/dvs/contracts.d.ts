@@ -83,7 +83,11 @@ export interface DvsUpdateStatus {
     maxAttempts: number;
     retryDelayMs: number;
 }
+export interface DvsLorebookVersionOptions {
+    onExpired: 'WARNING_MESSAGE' | 'AUTO_UPDATE';
+}
 export interface DvsApi {
+    lorebookVersionCheck(options: DvsLorebookVersionOptions): Promise<void>;
     register(options: DvsRegistration): Promise<() => void>;
     table(name: string, rows?: readonly DvsValues[]): DvsDataTable;
     getState(target?: {

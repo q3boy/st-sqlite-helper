@@ -4,13 +4,13 @@
     <section class="sqlite-helper-settings-group" aria-label="SQLite 服务">
       <label class="checkbox_label"><input type="checkbox" data-enabled><span>启用 SQLite 服务</span></label>
       <p data-enable-status></p><p class="sqlite-helper-description" data-connection></p>
-      <p class="sqlite-helper-description">数据修改后约一秒会在后台保存。关闭服务时，尚未保存的修改可能丢失。</p>
+      <p class="sqlite-helper-description">数据修改后保存有1秒左右延迟。关闭服务时，尚未保存的修改可能丢失。</p>
     </section>
     <section class="sqlite-helper-settings-group" aria-label="存储模式">
       <h4>存储模式</h4>
       <label class="checkbox_label"><input type="radio" name="sqlite-helper-storage-mode" value="opfs" data-storage-mode><span>游玩模式</span></label>
       <label class="checkbox_label"><input type="radio" name="sqlite-helper-storage-mode" value="directory" data-storage-mode><span>开发模式</span></label>
-      <p class="sqlite-helper-description">游玩模式保存在当前浏览器和酒馆站点中，无需选择目录；开发模式使用本地目录，方便外部工具查看和修改。切换不自动迁移数据，原文件仍保留；尚未保存的内存修改可能丢失。</p>
+      <p class="sqlite-helper-description">游玩模式保存在当前浏览器中，无需选择目录；开发模式使用本地目录，方便外部工具查看和修改。切换不自动迁移数据，原文件仍保留；尚未保存的内存修改可能丢失。</p>
       <label class="checkbox_label" data-auto-reload-row hidden><input type="checkbox" data-auto-reload><span>自动重新加载</span></label>
       <p class="sqlite-helper-description" data-storage-mode-status></p>
     </section>
@@ -19,7 +19,7 @@
       <p class="sqlite-helper-directory" data-directory>正在读取目录记录…</p><p class="sqlite-helper-description" data-permission></p>
       <div class="flex-container"><button type="button" class="menu_button" data-action="permission">重新授权</button><button type="button" class="menu_button" data-action="manage">管理目录…</button></div>
       <div class="flex-container sqlite-helper-reload"><select class="text_pole" aria-label="重新加载目标" data-reload-target><option value="global">全局数据库</option><option value="char">当前角色数据库</option><option value="chat">当前聊天数据库</option></select><button type="button" class="menu_button" data-action="reload">重新加载</button></div>
-      <p class="sqlite-helper-description">修改本地文件并保存后，可点击“重新加载”读取最新数据；当前尚未保存的修改可能丢失。</p>
+      <p class="sqlite-helper-description">手动修改本地数据文件并保存后，可点击“重新加载”读取最新数据；当前尚未保存的修改可能丢失。</p>
     </section>
     <section class="sqlite-helper-settings-group" aria-label="数据清理">
       <h4>数据清理</h4><p class="sqlite-helper-description" data-cleanup-target></p>
