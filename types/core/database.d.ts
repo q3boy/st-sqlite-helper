@@ -49,6 +49,8 @@ export interface TransactionHooks {
     afterSave?: () => Promise<void>;
     management?: true;
 }
+/** Scoped databases keep only their identity here; the global management table has its own definition. */
+export declare const SCOPED_META_TABLE_SQL = "CREATE TABLE IF NOT EXISTS __stsh_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)";
 export declare class SingleDatabase {
     private readonly SQL;
     private readonly storage;

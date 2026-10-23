@@ -11,8 +11,6 @@
     "IDENTITY_FAILED",
     "IDENTITY_CONFLICT",
     "STALE_IDENTITY",
-    "CHARACTER_COPY_PENDING",
-    "CHARACTER_COPY_UNCONFIRMED",
     "ENTITY_RENAME_PENDING",
     "ENTITY_RENAME_UNCONFIRMED",
     "ENTITY_DELETE_PENDING",
@@ -65,10 +63,8 @@
         "resultKind",
         "identityStage",
         "identitySaved",
-        "copyStage",
         "renameStage",
         "deleteStage",
-        "copyCleared",
         "databaseScope",
         "initializationStage",
         "databasePersisted",
@@ -79,7 +75,7 @@
         const item = value(key);
         if (item === undefined)
           continue;
-        const valid = key === "failureKind" ? ["request-rejected", "sql-rejected", "precondition-rejected", "service"].includes(item) : key === "executionState" ? ["not-started", "rolled-back", "committed", "unknown"].includes(item) : key === "resultState" ? ["not-applied", "unconfirmed"].includes(item) : key === "resultKind" ? ["database", "identity"].includes(item) : key === "identityStage" ? ["save", "register", "sync", "ownership-check"].includes(item) : key === "renameStage" || key === "deleteStage" ? ["pending", "applied", "unconfirmed", "conflict"].includes(item) : key === "copyStage" ? ["pending", "clearing", "cleared", "independent", "unconfirmed"].includes(item) : key === "identitySaved" || key === "copyCleared" || key === "databasePersisted" ? item === true : key === "databaseScope" ? ["char", "chat"].includes(item) : key === "initializationStage" ? ["root-prepare", "target-save", "root-finalize"].includes(item) : key === "businessResult" ? ["not-started", "not-saved", "saved", "unknown"].includes(item) : key === "retryable" ? typeof item === "boolean" : typeof item === "string";
+        const valid = key === "failureKind" ? ["request-rejected", "sql-rejected", "precondition-rejected", "service"].includes(item) : key === "executionState" ? ["not-started", "rolled-back", "committed", "unknown"].includes(item) : key === "resultState" ? ["not-applied", "unconfirmed"].includes(item) : key === "resultKind" ? ["database", "identity"].includes(item) : key === "identityStage" ? ["save", "register", "sync"].includes(item) : key === "renameStage" || key === "deleteStage" ? ["pending", "applied", "unconfirmed", "conflict"].includes(item) : key === "identitySaved" || key === "databasePersisted" ? item === true : key === "databaseScope" ? ["char", "chat"].includes(item) : key === "initializationStage" ? ["root-prepare", "target-save", "root-finalize"].includes(item) : key === "businessResult" ? ["not-started", "not-saved", "saved", "unknown"].includes(item) : key === "retryable" ? typeof item === "boolean" : typeof item === "string";
         if (!valid)
           return;
         Object.assign(result, { [key]: item });
@@ -182,8 +178,8 @@
   }
 
   // src/protocol.ts
-  var PROTOCOL_VERSION = 21;
-  var BUILD_ID = "a4fe31d7-0cd7-4f6f-9c72-e5fe4eaae70b";
+  var PROTOCOL_VERSION = 23;
+  var BUILD_ID = "f6f62172-ba7c-40d5-86ab-bc3a58cbfe01";
   var extensionEntryPath = undefined;
   var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
   var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;
@@ -204,123 +200,17 @@
     return ["transaction", "checked-transaction", "update", "exec", "runSql", "batch"].includes(action.type);
   }
 
-  // src/worker/character-identities.ts
-  class CharacterIdentities {
-    beforeIssue;
-    beforeRelease;
-    entities = new Map;
-    confirmed = new Set;
-    constructor(beforeIssue = async () => {}, beforeRelease = () => {}) {
-      this.beforeIssue = beforeIssue;
-      this.beforeRelease = beforeRelease;
-    }
-    hasLease(entity) {
-      const entry = this.entities.get(entity);
-      return !!entry?.token || !!entry?.waiters.length;
-    }
-    hasWorkFor(matches) {
-      return [...this.entities].some(([entity, entry]) => matches(entity) && (!!entry.token || !!entry.waiters.length));
-    }
-    seed(entity, id) {
-      if (!this.entities.has(entity))
-        this.entities.set(entity, { id, waiters: [] });
-    }
-    forget(entity) {
-      if (this.hasLease(entity))
-        throw identityFailure("旧 UUID 保存仍在途，不能清除该文件的身份候选。", "unconfirmed");
-      this.entities.delete(entity);
-    }
-    assertSettled() {
-      if ([...this.entities.values()].some((entry) => entry.token || entry.waiters.length))
-        throw identityFailure("仍有角色或聊天 UUID 初始化未完成，不能排空服务；请等待保存及 Worker 登记结束。", "unconfirmed");
-    }
-    acquire(entity, observed, owner) {
-      if (!entity || observed !== null && !isUuid(observed))
-        return Promise.reject(identityFailure("Worker 收到无效的角色或聊天目标名称或 UUID，未开始初始化；请重新取得目标并读回服务器 UUID。"));
-      observed = observed?.toLowerCase() ?? null;
-      let entry = this.entities.get(entity);
-      if (entry?.token) {
-        if (observed && observed !== entry.id)
-          return Promise.reject(identityFailure("读回的 UUID 与另一页面正在初始化的 UUID 不一致，未改写 UUID；请重新读回服务器结果。"));
-        return new Promise((resolve, reject) => entry.waiters.push({ resolve, reject }));
-      }
-      if (!observed && entry && this.confirmed.has(entry.id))
-        return Promise.resolve({ identityId: entry.id });
-      if (observed) {
-        this.confirmed.add(observed);
-        this.entities.set(entity, { id: observed, waiters: [] });
-        return Promise.resolve({ identityId: observed });
-      }
-      entry ??= { id: crypto.randomUUID(), waiters: [] };
-      entry.token = crypto.randomUUID();
-      entry.owner = owner;
-      this.entities.set(entity, entry);
-      const candidate = entry, token = entry.token;
-      return this.beforeIssue(candidate.id, entity).then(() => {
-        this.beforeRelease(entity);
-        if (candidate.token !== token || candidate.owner !== owner)
-          throw identityFailure("UUID 凭据所属连接已断开，未开始保存酒馆身份。");
-        return { identityId: candidate.id, token };
-      }).catch((error) => {
-        if (candidate.token === token && candidate.owner === owner) {
-          this.settle(entity, token, false, owner);
-        }
-        throw error;
-      });
-    }
-    pendingTicket(entity, token, owner) {
-      const entry = this.entities.get(entity);
-      if (!entry || entry.token !== token || entry.owner !== owner)
-        throw identityFailure("Worker 拒绝 UUID 登记：初始化凭据已失效或属于另一连接；请重新读回服务器 UUID 并取得目标。");
-      return { identityId: entry.id };
-    }
-    settle(entity, token, confirmed, owner) {
-      const result = this.pendingTicket(entity, token, owner);
-      const entry = this.entities.get(entity);
-      entry.token = undefined;
-      entry.owner = undefined;
-      if (confirmed) {
-        this.confirmed.add(entry.id);
-        for (const waiter of entry.waiters)
-          waiter.resolve(result);
-      } else
-        for (const waiter of entry.waiters)
-          waiter.reject(identityFailure("另一页面未完成 UUID 保存及登记，无法确认服务器结果；请重新读回原 UUID 后再尝试。", "unconfirmed"));
-      entry.waiters = [];
-      return result;
-    }
-    disconnect(owner) {
-      for (const [entity, entry] of this.entities)
-        if (entry.owner === owner && entry.token)
-          this.settle(entity, entry.token, false, owner);
-    }
-  }
-
   // src/worker/entity-coordinator.ts
   var roleKey = (entity) => `role:${JSON.stringify(entity)}`;
   var chatKey = (entity) => `chat:${entity}`;
-  var copyKey = (taskId) => `copy:${taskId}`;
   var domain = (b) => JSON.stringify([b.storageId, b.configGeneration]);
   var validEntity = (entity) => typeof entity === "string" && !!entity && entity.length <= 4096;
-  function fail(code, message, stage) {
-    throw new ServiceError({
-      code,
-      message,
-      resultKind: "identity",
-      resultState: code === "CHARACTER_COPY_UNCONFIRMED" ? "unconfirmed" : "not-applied",
-      retryable: false,
-      ...stage ? { copyStage: stage } : {}
-    });
+  function fail(code, message) {
+    throw new ServiceError({ code, message, resultKind: "identity", resultState: "not-applied", retryable: false });
   }
   function reference(value) {
     if (value && (!(value.id === null || isUuid(value.id)) || !Number.isSafeInteger(value.generation) || value.generation < 1 || typeof value.confirmed !== "boolean" || !["generated", "legacy"].includes(value.origin))) {
       throw new ServiceError({ code: "LOAD_FAILED", message: "root 文件引用记录无效，拒绝补造身份。" });
-    }
-    return value;
-  }
-  function copy(value) {
-    if (value && (!isUuid(value.taskId) || !validEntity(value.oldAvatar) || !validEntity(value.newAvatar) || value.oldAvatar === value.newAvatar || value.state !== undefined && !["active", "deleted"].includes(value.state) || value.newReferenceId !== undefined && (!Number.isSafeInteger(value.newReferenceId) || value.newReferenceId < 1) || !["pending", "clearing", "cleared", "independent", "unconfirmed"].includes(value.stage) || value.inheritedId !== undefined && !isUuid(value.inheritedId) || value.independentId !== undefined && !isUuid(value.independentId))) {
-      throw new ServiceError({ code: "LOAD_FAILED", message: "root 复制任务记录无效，拒绝解除副本门禁。" });
     }
     return value;
   }
@@ -330,12 +220,9 @@
     checkRename;
     checkTarget;
     readAccess;
-    pending = new Map;
-    leases = new Map;
     confirmed = new Map;
     currentCoordinates = new Map;
     tail = Promise.resolve();
-    disconnected = new WeakSet;
     constructor(access, checkRename = () => {}, checkTarget = () => {}, readAccess = access) {
       this.access = access;
       this.checkRename = checkRename;
@@ -356,34 +243,12 @@
         chat ? binding.chatIdentityGeneration ?? null : binding.identityGeneration ?? null
       ]);
     }
-    assertPending(entity) {
-      const task = this.pending.get(entity);
-      if (task && !["cleared", "independent"].includes(task.stage))
-        fail(task.stage === "unconfirmed" || task.stage === "clearing" ? "CHARACTER_COPY_UNCONFIRMED" : "CHARACTER_COPY_PENDING", "副本复制处理尚未确认，本次 SQL 未执行；不能访问继承的原角色库。", task.stage);
-    }
-    async load(records, existingOnly = false) {
-      const tasks = existingOnly ? await records.listExisting("copy:") : await records.list("copy:");
-      for (const { value } of tasks) {
-        const task = copy(value);
-        if (!await records.copyIsCurrent(task)) {
-          this.forgetCopy(task.taskId);
-          continue;
-        }
-        const newAvatar = task.currentNewAvatar ?? task.newAvatar, oldAvatar = task.currentOldAvatar ?? task.oldAvatar;
-        const existing = this.pending.get(newAvatar);
-        if (existing && existing.oldAvatar !== oldAvatar && existing.oldAvatar !== task.oldAvatar && !["cleared", "independent"].includes(existing.stage))
-          fail("IDENTITY_CONFLICT", "同一副本存在不同源角色的复制任务。");
-        this.pending.set(newAvatar, { taskId: task.taskId, oldAvatar, stage: task.stage });
-      }
-    }
-    propose(binding, entity, id, chat = false) {
+    propose(binding, entity, id) {
       return this.serialize(() => this.access(binding, async (records) => {
         this.checkRename(binding, entity);
         this.checkRename(binding, binding.characterEntity);
-        this.checkTarget(binding, id, chat);
-        await this.load(records);
-        this.assertPending(binding.characterEntity ?? entity);
-        const key = chat ? chatKey(entity) : roleKey(entity), old = reference(await records.get(key));
+        this.checkTarget(binding, id, true);
+        const key = chatKey(entity), old = reference(await records.get(key));
         if (old?.id && old.id !== id)
           fail("IDENTITY_CONFLICT", "该文件已确认或提议另一 UUID，不能另建身份。");
         if (old?.id === id)
@@ -394,9 +259,70 @@
           confirmed: false,
           origin: "generated",
           ...old?.referenceId ? { referenceId: old.referenceId } : {},
-          ...chat ? { parent: binding.charDbId } : {}
+          parent: binding.charDbId
         };
         await records.put(key, next, old ?? null);
+      }));
+    }
+    prepareRole(binding, entity, ensureTarget, create = true) {
+      const key = roleKey(entity);
+      return this.serialize(async () => {
+        const proposal = await this.access(binding, async (records) => {
+          if (!validEntity(entity))
+            fail("IDENTITY_CONFLICT", "角色身份准备需要有效的角色文件名。");
+          this.checkRename(binding, entity);
+          const old = reference(await records.get(key));
+          if (old?.id && (old.confirmed || old.origin === "generated")) {
+            this.checkTarget(binding, old.id, false);
+            return old;
+          }
+          if (old?.id)
+            throw new ServiceError({
+              code: "LOAD_FAILED",
+              message: "角色管理记录未确认且不是生成编号，拒绝猜测身份。"
+            });
+          if (!create)
+            return;
+          const id = crypto.randomUUID();
+          this.checkTarget(binding, id, false);
+          const next = {
+            id,
+            generation: (old?.generation ?? 0) + 1,
+            confirmed: false,
+            origin: "generated",
+            ...old?.referenceId ? { referenceId: old.referenceId } : {}
+          };
+          await records.put(key, next, old ?? null);
+          return next;
+        });
+        if (!proposal)
+          return;
+        if (proposal.origin === "generated")
+          await ensureTarget(proposal.id);
+        return this.access(binding, async (records) => {
+          this.checkRename(binding, entity);
+          const old = reference(await records.get(key));
+          if (!old || old.id !== proposal.id)
+            fail("STALE_IDENTITY", "角色编号登记在准备期间已改变，未确认身份。");
+          this.checkTarget(binding, old.id, false);
+          if (!old.confirmed)
+            await records.put(key, { ...old, confirmed: true }, old);
+          const saved = reference(await records.get(key));
+          if (!saved?.confirmed || !saved.id || !saved.referenceId)
+            throw new ServiceError({ code: "LOAD_FAILED", message: "角色编号登记后读回不一致。" });
+          return saved;
+        });
+      });
+    }
+    lookupRole(binding, entity) {
+      return this.serialize(() => this.readAccess(binding, async (records) => {
+        if (!validEntity(entity))
+          fail("IDENTITY_CONFLICT", "角色身份查找需要有效的角色文件名。");
+        this.checkRename(binding, entity);
+        if (!await records.hasManagement())
+          return;
+        const value = reference(await records.get(roleKey(entity)));
+        return value?.confirmed && value.id && value.referenceId ? value : undefined;
       }));
     }
     generation(binding, entity, chat = false) {
@@ -423,25 +349,21 @@
           this.currentCoordinates.delete(key);
         }
     }
-    candidate(binding, entity, chat = false) {
+    candidate(binding, entity) {
       return this.access(binding, async (records) => {
         this.checkRename(binding, entity);
         this.checkRename(binding, binding.characterEntity);
-        await this.load(records);
-        this.assertPending(binding.characterEntity ?? entity);
-        const value = reference(await records.get(chat ? chatKey(entity) : roleKey(entity)));
+        const value = reference(await records.get(chatKey(entity)));
         return value?.origin === "generated" && !value.confirmed && value.id ? value.id : undefined;
       });
     }
-    confirm(binding, entity, id, chat = false, matchingEntities, expectedGeneration) {
+    confirm(binding, entity, id, chat = false, expectedGeneration) {
       return this.serialize(() => this.access(binding, async (records) => {
         if (!validEntity(entity) || !isUuid(id))
           fail("IDENTITY_CONFLICT", "身份确认需要有效的文件坐标和 UUID。");
         this.checkRename(binding, entity);
         this.checkRename(binding, binding.characterEntity);
         this.checkTarget(binding, id, chat);
-        await this.load(records);
-        this.assertPending(binding.characterEntity ?? entity);
         if (expectedGeneration !== undefined) {
           const resolved = await records.readReference(entity, chat, expectedGeneration, id, chat ? binding.chatReferenceId : binding.characterReferenceId);
           const restored = reference(resolved?.reference);
@@ -452,43 +374,22 @@
           this.currentCoordinates.set(this.cacheKey(binding, entity, chat), resolved.currentEntity);
           return restored.generation;
         }
-        const key = chat ? chatKey(entity) : roleKey(entity), old = reference(await records.get(key));
+        if (!chat)
+          fail("STALE_IDENTITY", "角色编号只能由管理库登记确认，未按外部编号建立身份。");
+        const key = chatKey(entity), old = reference(await records.get(key));
         if (old?.id && old.id !== id)
           fail("STALE_IDENTITY", "文件引用与读回 UUID 不一致，不能重定向原代理。");
-        if (chat && old?.parent !== undefined && old.parent !== binding.charDbId)
+        if (old?.parent !== undefined && old.parent !== binding.charDbId)
           fail("IDENTITY_CONFLICT", "聊天引用的所属角色 UUID 不一致。");
-        const task = !chat ? copy(await records.currentCopy(entity)) : undefined;
-        if (task && task.stage === "cleared" && old?.origin !== "generated")
-          fail("IDENTITY_CONFLICT", "副本仍携带未经独立生成确认的 UUID，不能访问原库。");
-        if (!chat && (!old?.id || !old.confirmed)) {
-          for (const { key: otherKey, value } of await records.lookupRoleUuid(id)) {
-            const other = reference(value);
-            if (otherKey !== key && other.id === id)
-              fail("IDENTITY_CONFLICT", "该 UUID 已属于另一角色文件，副本不能访问原库。");
-          }
-          if (!matchingEntities && old?.origin !== "generated")
-            throw new ServiceError({
-              code: "IDENTITY_CONFLICT",
-              identityStage: "ownership-check",
-              resultKind: "identity",
-              message: "已有 UUID 缺少角色文件引用，请读回服务器角色列表核对唯一归属。"
-            });
-          if (matchingEntities && (matchingEntities.length !== 1 || matchingEntities[0] !== entity))
-            fail("IDENTITY_CONFLICT", "服务器角色列表中的 UUID 引用不唯一或目标不符，拒绝访问。");
-        }
         const next = {
           id,
           generation: old?.generation ?? 1,
           confirmed: true,
           origin: old?.origin ?? "legacy",
           ...old?.referenceId ? { referenceId: old.referenceId } : {},
-          ...chat ? { parent: binding.charDbId } : {}
+          parent: binding.charDbId
         };
         await records.put(key, next, old ?? null);
-        if (task?.stage === "cleared") {
-          await records.forgetRecord(copyKey(task.taskId));
-          this.forgetCopy(task.taskId);
-        }
         this.confirmed.set(this.cacheKey(binding, entity, chat), next);
         return next.generation;
       }));
@@ -498,8 +399,6 @@
         this.checkRename(binding, entity);
         this.checkRename(binding, binding.characterEntity);
         this.checkTarget(binding, id, chat);
-        await this.load(records, true);
-        this.assertPending(binding.characterEntity ?? entity);
         const old = reference(await records.get(chat ? chatKey(entity) : roleKey(entity)));
         if (!old?.confirmed || old.id !== id || chat && old.parent !== binding.charDbId || (chat ? binding.chatReferenceId : binding.characterReferenceId) !== undefined && old.referenceId !== (chat ? binding.chatReferenceId : binding.characterReferenceId))
           fail("STALE_IDENTITY", "没有与当前 UUID 匹配的已有确认记录；查看不会补写身份。");
@@ -512,7 +411,6 @@
       if (!["char", "chat"].includes(binding.scope ?? ""))
         return Promise.resolve();
       return this.serialize(() => (readOnly ? this.readAccess : this.access)(binding, async (records) => {
-        await this.load(records);
         const entity = binding.characterEntity;
         if (!validEntity(entity))
           fail("STALE_IDENTITY", "数据库请求缺少已确认的角色文件坐标。");
@@ -520,7 +418,6 @@
           this.checkRename(binding, entity);
           this.checkRename(binding, binding.chatEntity);
         }
-        this.assertPending(entity);
         const resolvedRole = await records.readReference(entity, false, binding.identityGeneration, binding.charDbId, binding.characterReferenceId);
         if (!allowPendingRename)
           this.checkRename(binding, resolvedRole?.currentEntity);
@@ -553,7 +450,6 @@
       this.checkRename(binding, this.currentCoordinates.get(this.cacheKey(binding, binding.characterEntity)));
       if (binding.chatEntity)
         this.checkRename(binding, this.currentCoordinates.get(this.cacheKey(binding, binding.chatEntity, true)));
-      this.assertPending(binding.characterEntity);
       const role = this.confirmed.get(this.cacheKey(binding, binding.characterEntity));
       if (!role?.confirmed || role.id !== binding.charDbId || role.generation !== binding.identityGeneration || binding.characterReferenceId !== undefined && role.referenceId !== binding.characterReferenceId)
         fail("STALE_IDENTITY", "角色访问确认已失效。");
@@ -562,183 +458,6 @@
         if (!chat || chat.id !== binding.chatDbId || chat.parent !== binding.charDbId || chat.generation !== binding.chatIdentityGeneration || binding.chatReferenceId !== undefined && chat.referenceId !== binding.chatReferenceId)
           fail("STALE_IDENTITY", "聊天访问确认已失效。");
       }
-    }
-    begin(oldAvatar, newAvatar, binding, taskId) {
-      if (!validEntity(oldAvatar) || !validEntity(newAvatar) || oldAvatar === newAvatar)
-        return Promise.reject(new ServiceError({ code: "INVALID_REQUEST", message: "角色复制事件坐标无效。" }));
-      const existing = this.pending.get(newAvatar);
-      if (existing && existing.oldAvatar !== oldAvatar && !["cleared", "independent"].includes(existing.stage)) {
-        if (!binding)
-          return Promise.reject(new ServiceError({
-            code: "IDENTITY_CONFLICT",
-            resultKind: "identity",
-            message: "矛盾复制通知已拒绝，保留原任务与已确认身份。"
-          }));
-        existing.stage = "unconfirmed";
-        return this.serialize(() => this.access(binding, async (records) => {
-          const task = copy(await records.currentCopy(newAvatar));
-          if (task && !["cleared", "independent"].includes(task.stage))
-            await records.put(copyKey(task.taskId), { ...task, stage: "unconfirmed", conflict: true }, task);
-          fail("IDENTITY_CONFLICT", "在途复制收到不同源角色通知，保留冲突，不发新清除或身份凭据。");
-        }));
-      }
-      if (!existing)
-        this.pending.set(newAvatar, { oldAvatar, stage: "pending" });
-      if (!binding)
-        return Promise.reject(new ServiceError({
-          code: "CHARACTER_COPY_PENDING",
-          resultKind: "identity",
-          copyStage: "pending",
-          message: "副本待处理；请先授权目录，尚未改写角色或执行 SQL。"
-        }));
-      return this.serialize(() => this.access(binding, async (records) => {
-        await this.load(records);
-        let task = copy(await records.currentCopy(newAvatar));
-        if (taskId) {
-          const original = copy(await records.get(copyKey(taskId)));
-          if (original && original.state === "active" && ["cleared", "independent"].includes(original.stage) && original.oldAvatar === oldAvatar && original.newAvatar === newAvatar)
-            return { ...original };
-        }
-        if (taskId && (!task || task.taskId !== taskId))
-          fail("STALE_IDENTITY", "原复制任务已经删除或副本已改名，不能按同名的新副本重试。");
-        if (task && task.oldAvatar !== oldAvatar)
-          fail("IDENTITY_CONFLICT", "副本复制来源与已有任务冲突。");
-        if (!task) {
-          const role = reference(await records.get(roleKey(newAvatar)));
-          const roleId = await records.roleIdFor(newAvatar);
-          const sourceRoleId = await records.roleIdFor(oldAvatar);
-          task = {
-            ...sourceRoleId ? { oldReferenceId: sourceRoleId } : {},
-            state: "active",
-            taskId: crypto.randomUUID(),
-            oldAvatar,
-            newAvatar,
-            ...roleId ? { newReferenceId: roleId } : {},
-            stage: role?.origin === "generated" && role.confirmed ? "independent" : "pending",
-            ...role?.origin === "generated" && role.confirmed && role.id ? { independentId: role.id } : {}
-          };
-          await records.put(copyKey(task.taskId), task);
-        }
-        if (task.stage === "independent") {
-          this.pending.delete(newAvatar);
-          await records.forgetRecord(copyKey(task.taskId));
-          this.forgetCopy(task.taskId);
-        } else {
-          this.pending.set(newAvatar, { taskId: task.taskId, oldAvatar, stage: task.stage });
-        }
-        return { ...task };
-      }));
-    }
-    acquire(oldAvatar, newAvatar, taskId, sourceId, observedId, binding, owner, hasIdentityLease) {
-      return this.serialize(() => this.access(binding, async (records) => {
-        await this.load(records);
-        const task = copy(await records.currentCopy(newAvatar));
-        if (!task || task.taskId !== taskId || task.oldAvatar !== oldAvatar)
-          fail("STALE_IDENTITY", "原复制任务已失效，不能用旧任务处理同名的新副本。");
-        if (task.conflict)
-          fail("IDENTITY_CONFLICT", "复制任务有来源冲突，不能继续自动处理。");
-        const role = reference(await records.get(roleKey(newAvatar)));
-        if (task.stage === "independent") {
-          if (observedId !== task.independentId)
-            fail("IDENTITY_CONFLICT", "独立副本的服务器 UUID 与已确认记录不同，不能覆盖页面或角色文件。");
-          return { ...task };
-        }
-        if (role?.origin === "generated" && role.id && observedId === role.id && observedId !== sourceId) {
-          const next = { ...task, stage: "independent", independentId: role.id };
-          await records.forgetRecord(copyKey(task.taskId));
-          this.forgetCopy(task.taskId);
-          return { ...next };
-        }
-        if (task.stage === "cleared") {
-          if (observedId !== null)
-            fail("IDENTITY_CONFLICT", "已清除副本读回未经确认的 UUID，不能重复清除或覆盖页面。");
-          if (!role)
-            await records.put(roleKey(newAvatar), { id: null, generation: 1, confirmed: false, origin: "generated" });
-          return { ...task };
-        }
-        if (task.stage !== "pending" || hasIdentityLease)
-          fail("CHARACTER_COPY_UNCONFIRMED", "先前身份或清除请求尚未确认结束，不能重发清除或生成独立身份。", task.stage);
-        if (role?.id && (role.origin === "generated" || role.id !== observedId || role.id !== sourceId))
-          fail("CHARACTER_COPY_UNCONFIRMED", "副本有已发出的独立身份提案或不匹配引用，需要先核对旧保存，不能自动清除。", "unconfirmed");
-        if (observedId !== null && (!isUuid(observedId) || !isUuid(sourceId) || observedId !== sourceId))
-          fail("IDENTITY_CONFLICT", "副本 UUID 与源不符，不能清除未知身份。");
-        const token = crypto.randomUUID();
-        const next = {
-          ...task,
-          stage: observedId === null ? "cleared" : "clearing",
-          ...observedId ? { inheritedId: observedId, clearToken: token } : {}
-        };
-        await records.put(roleKey(newAvatar), { id: null, generation: (role?.generation ?? 0) + 1, confirmed: false, origin: "generated" }, role ?? null);
-        const linked = copy(await records.get(copyKey(task.taskId)));
-        next.newReferenceId = linked.newReferenceId;
-        await records.put(copyKey(task.taskId), next, linked);
-        for (const key of this.confirmed.keys()) {
-          const parts = JSON.parse(key);
-          if (parts[0] === domain(binding) && parts[1] === roleKey(newAvatar)) {
-            this.confirmed.delete(key);
-            this.currentCoordinates.delete(key);
-          }
-        }
-        this.pending.set(newAvatar, { taskId: task.taskId, oldAvatar, stage: next.stage });
-        if (next.stage === "cleared") {
-          await records.forgetRecord(copyKey(task.taskId));
-          this.forgetCopy(task.taskId);
-          return { ...next };
-        }
-        this.leases.set(newAvatar, { taskId: task.taskId, token, owner, binding: { ...binding } });
-        return { ...next, token };
-      }));
-    }
-    settle(oldAvatar, newAvatar, taskId, token, confirmed, binding, owner) {
-      return this.serialize(() => this.access(binding, async (records) => {
-        if (this.disconnected.has(owner))
-          fail("STALE_IDENTITY", "清除凭据所属连接已断开，不能用迟到消息解除门禁。");
-        const lease = this.leases.get(newAvatar), task = copy(await records.currentCopy(newAvatar));
-        if (!task || task.taskId !== taskId || task.oldAvatar !== oldAvatar || task.clearToken !== token)
-          fail("STALE_IDENTITY", "清除凭据已失效，不能解除副本门禁。");
-        if (task.conflict)
-          fail("IDENTITY_CONFLICT", "复制来源冲突尚未确认，不能解除副本门禁。");
-        if (confirmed && ["cleared", "independent"].includes(task.stage))
-          return { ...task };
-        if (lease && (lease.taskId !== taskId || lease.token !== token || lease.owner !== owner || domain(lease.binding) !== domain(binding)) || !["clearing", "unconfirmed"].includes(task.stage))
-          fail("STALE_IDENTITY", "清除凭据已失效，不能解除副本门禁。");
-        const next = { ...task, stage: confirmed ? "cleared" : "unconfirmed" };
-        await records.put(copyKey(task.taskId), next, task);
-        this.leases.delete(newAvatar);
-        this.pending.set(newAvatar, { taskId: task.taskId, oldAvatar, stage: next.stage });
-        if (confirmed) {
-          await records.forgetRecord(copyKey(task.taskId));
-          this.forgetCopy(task.taskId);
-        }
-        if (!confirmed)
-          fail("CHARACTER_COPY_UNCONFIRMED", "清除请求或服务器读回未确认，副本保持禁用；不会自动重发清除。", next.stage);
-        return { ...next };
-      }));
-    }
-    forgetCopy(taskId) {
-      for (const [avatar, task] of this.pending)
-        if (task.taskId === taskId) {
-          this.pending.delete(avatar);
-          if (this.leases.get(avatar)?.taskId === taskId)
-            this.leases.delete(avatar);
-        }
-    }
-    disconnect(owner) {
-      this.disconnected.add(owner);
-      for (const [entity, lease] of this.leases)
-        if (lease.owner === owner) {
-          this.leases.delete(entity);
-          const task = this.pending.get(entity);
-          if (task)
-            task.stage = "unconfirmed";
-        }
-    }
-    assertSettled() {
-      if (this.leases.size)
-        fail("CHARACTER_COPY_PENDING", "角色复制清除仍在进行，请等待请求结束。");
-    }
-    hasCopyWorkFor(avatars) {
-      return [...this.pending].some(([avatar, task]) => (avatars.includes(avatar) || avatars.includes(task.oldAvatar)) && !["cleared", "independent"].includes(task.stage));
     }
   }
 
@@ -759,9 +478,6 @@
     if (!Array.isArray(value) || value.length !== 2 || value.some((v) => typeof v !== "string" || !v || v.length > 4096 || v.includes("\x00")))
       throw damaged("聊天文件坐标不是有效的角色和文件名。");
     return { chat: true, avatar: value[0], file: value[1] };
-  }
-  function entityKey(c) {
-    return c.chat ? `chat:${JSON.stringify([c.avatar, c.file])}` : `role:${JSON.stringify(c.avatar)}`;
   }
   function parseEntityKey(key) {
     if (key.startsWith("chat:"))
@@ -804,19 +520,120 @@
     `CREATE VIEW ${ACTIVE_ROLES} AS SELECT role_id,avatar_name,char_dbid,generation,confirmed,origin FROM ${ROLES} WHERE state='active'`,
     `CREATE VIEW ${ACTIVE_CHATS} AS SELECT c.chat_id,c.role_id,c.file_name,c.chat_dbid,c.parent_char_dbid,c.generation,c.confirmed,c.origin FROM ${CHATS} c JOIN ${ROLES} r USING(role_id) WHERE c.state='active' AND r.state='active'`
   ];
-  async function assertSchema6(root) {
-    const normalize = (s) => s.replace(/\s+/g, "").replaceAll('"', "").toLowerCase();
+  var activeSql = (sql) => sql.replaceAll(ROLES, ACTIVE_ROLES).replaceAll(CHATS, ACTIVE_CHATS);
+  async function readEntityRows(root, sql, binds) {
+    try {
+      return (await root.query({ sql: activeSql(sql), binds })).rows;
+    } catch (error) {
+      if (errorData(error).code !== "SQL_FAILED")
+        throw error;
+      throw damaged(`root 实体记录无法读取：${detail(error).message}`);
+    }
+  }
+  function roleRow(row) {
+    if (row[4] !== 0 && row[4] !== 1)
+      throw damaged("角色 confirmed 字段无效。");
+    return validateReference({ referenceId: row[0], id: row[2], generation: row[3], confirmed: row[4] === 1, origin: row[5] }, false);
+  }
+  function chatRow(row) {
+    if (row[6] !== 0 && row[6] !== 1)
+      throw damaged("聊天 confirmed 字段无效。");
+    return validateReference({ referenceId: row[0], id: row[3], parent: row[4], generation: row[5], confirmed: row[6] === 1, origin: row[7] }, true);
+  }
+  async function currentReference(root, c) {
+    const rows = c.chat ? await readEntityRows(root, `SELECT c.chat_id,r.avatar_name,c.file_name,c.chat_dbid,c.parent_char_dbid,c.generation,c.confirmed,c.origin FROM ${CHATS} c JOIN ${ROLES} r USING(role_id) WHERE r.avatar_name=? AND c.file_name=?`, [c.avatar, c.file]) : await readEntityRows(root, `SELECT role_id,avatar_name,char_dbid,generation,confirmed,origin FROM ${ROLES} WHERE avatar_name=? AND generation>0`, [c.avatar]);
+    if (rows.length > 1)
+      throw damaged("root 当前文件坐标不唯一。");
+    return rows[0] ? c.chat ? chatRow(rows[0]) : roleRow(rows[0]) : undefined;
+  }
+  var entityConflict = (message) => new ServiceError({ code: "IDENTITY_CONFLICT", message });
+  function rawGuard(sql, binds) {
+    return { sql: `INSERT INTO ${META}(key,value) SELECT NULL,'null' WHERE NOT EXISTS(${sql})`, binds };
+  }
+  function guard(sql, binds) {
+    return rawGuard(activeSql(sql), binds);
+  }
+  function referenceGuard(c, r) {
+    return guard(c.chat ? `SELECT 1 FROM ${CHATS} c JOIN ${ROLES} r USING(role_id) WHERE c.chat_id=? AND c.chat_dbid IS ? AND c.parent_char_dbid=? AND c.generation=? AND c.confirmed=? AND c.origin=?` : `SELECT 1 FROM ${ROLES} WHERE role_id=? AND char_dbid IS ? AND generation=? AND confirmed=? AND origin=?`, c.chat ? [r.referenceId, r.id, r.parent, r.generation, Number(r.confirmed), r.origin] : [r.referenceId, r.id, r.generation, Number(r.confirmed), r.origin]);
+  }
+  async function saveEntities(root, commands) {
+    try {
+      await root.transaction(commands, undefined, { management: true });
+    } catch (error) {
+      const data = errorData(error);
+      if (data.code === "SQL_FAILED" && (data.sqlError?.message?.includes(`${META}.key`) || data.sqlError?.message?.startsWith("UNIQUE constraint failed:")))
+        throw entityConflict("对象记录已改变，拒绝覆盖当前事实。");
+      throw error;
+    }
+  }
+  async function protectionReferences(root, target) {
+    const chat = target.scope === "chat";
+    const rows = (await root.query({
+      sql: chat ? `SELECT SUM(CASE WHEN state='active' AND confirmed=1 THEN 1 ELSE 0 END),SUM(CASE WHEN state='retained' THEN 1 ELSE 0 END),SUM(CASE WHEN state<>'deleted' AND confirmed=0 THEN 1 ELSE 0 END) FROM ${CHATS} WHERE parent_char_dbid=? AND chat_dbid=?` : `SELECT SUM(CASE WHEN state='active' AND confirmed=1 THEN 1 ELSE 0 END),0,SUM(CASE WHEN state='active' AND confirmed=0 THEN 1 ELSE 0 END) FROM ${ROLES} WHERE char_dbid=?`,
+      binds: chat ? [target.charDbId, target.chatDbId] : [target.charDbId]
+    })).rows[0];
+    return { active: Number(rows?.[0] ?? 0), retained: Number(rows?.[1] ?? 0), unconfirmed: Number(rows?.[2] ?? 0) };
+  }
+  var normalize = (s) => s.replace(/\s+/g, "").replaceAll('"', "").toLowerCase();
+  var sameDefinition = (stored, expected) => {
+    const strip = (s) => normalize(s).replace(/^createtableifnotexists/, "createtable");
+    return strip(stored) === strip(expected);
+  };
+  var objectType = (sql) => sql.includes(" VIEW ") ? "view" : sql.includes(" INDEX ") ? "index" : "table";
+  async function schemaDifferences(root) {
+    const result = [];
+    let metaPresent = false;
     for (const sql of SCHEMA6) {
       const name = sql.split(" ")[sql.startsWith("CREATE UNIQUE") ? 3 : 2];
       const rows = (await root.query({ sql: "SELECT sql FROM sqlite_master WHERE name=?", binds: [name] })).rows;
-      if (rows.length !== 1 || normalize(String(rows[0][0])) !== normalize(sql))
-        throw damaged(`管理对象 ${name} 结构无效。`);
+      const valid = rows.length === 1 && normalize(String(rows[0][0])) === normalize(sql);
+      if (name === META)
+        metaPresent = valid;
+      if (!valid)
+        result.push({
+          kind: "object",
+          name,
+          type: objectType(sql),
+          message: `管理对象 ${name} 结构无效。`,
+          detail: rows.length ? `${name} 的定义与当前版本不同。` : `缺少 ${name}。`
+        });
     }
-    const version = (await root.query({ sql: `SELECT value FROM ${META} WHERE key='schema_version'` })).rows;
-    if (version.length !== 1 || version[0][0] !== "6")
-      throw damaged("管理结构版本无效。");
+    if (metaPresent) {
+      const version = (await root.query({ sql: `SELECT value FROM ${META} WHERE key='schema_version'` })).rows;
+      if (version.length !== 1 || version[0][0] !== "6")
+        result.push({
+          kind: "version",
+          message: "管理结构版本无效。",
+          detail: `结构版本为 ${version.length === 1 ? String(version[0][0]) : "空"}，应为 6。`
+        });
+    }
     if ((await root.query({ sql: "SELECT * FROM pragma_foreign_key_check" })).rows.length)
-      throw damaged("管理记录外键关系无效。");
+      result.push({
+        kind: "foreign-key",
+        message: "管理记录外键关系无效。",
+        detail: "有聊天记录指向不存在的角色记录。"
+      });
+    return result;
+  }
+  async function inspectSchema6(root) {
+    const names = (await root.query({
+      sql: "SELECT name FROM sqlite_master WHERE name GLOB '__stsh_*' OR name GLOB '__st_sle_helper_*'"
+    })).rows.map((row) => String(row[0]));
+    if (!names.length)
+      return { state: "uninitialized", differences: [] };
+    const differences = names.filter((name) => name.startsWith("__st_sle_helper_")).map((name) => ({
+      kind: "legacy",
+      name,
+      message: "数据库包含已停止支持的旧管理结构，请使用当前结构的数据文件。",
+      detail: `存在已停止支持的旧管理对象 ${name}。`
+    }));
+    differences.push(...await schemaDifferences(root));
+    return { state: differences.length ? "invalid" : "valid", differences };
+  }
+  async function assertSchema6(root) {
+    const first = (await schemaDifferences(root))[0];
+    if (first)
+      throw damaged(first.message);
   }
 
   // src/worker/entity-renames.ts
@@ -892,42 +709,110 @@
         return structuredClone(ticket);
       }));
     }
-    settle(ticket, observedId, parentId, confirmed, b, hasExternalWork) {
+    settle(ticket, observedId, confirmed, b, hasExternalWork) {
       return this.serialize(() => this.access(b, async (records) => {
         const key = `${domain2(b)}:${JSON.stringify([ticket.kind, ticket.oldEntity, ticket.newEntity])}`;
         const row = this.tasks.get(key);
         if (!row || row.taskId !== ticket.taskId || row.oldEntity !== ticket.checkedOldEntity || row.newEntity !== ticket.checkedNewEntity || JSON.stringify(row.expected) !== JSON.stringify(ticket.expected))
           throw new ServiceError({ code: "STALE_IDENTITY", message: "原改名核对已失效，请重新读回。" });
-        if (!confirmed || hasExternalWork() || row.expected?.id && !row.expected.confirmed) {
+        if (!confirmed || hasExternalWork() || row.kind === "chat" && row.expected?.id && !row.expected.confirmed) {
           row.stage = "unconfirmed";
           throw new ServiceError({
             code: "ENTITY_RENAME_UNCONFIRMED",
             message: "酒馆文件或原身份尚未确认，未修改数据库引用。"
           });
         }
-        if (row.expected && (row.expected.id !== observedId || row.kind === "chat" && row.expected.parent !== parentId))
-          throw new ServiceError({
-            code: "IDENTITY_CONFLICT",
-            message: "改名文件的数据库编号与原对象不同，未修改引用。"
-          });
-        if (!row.expected) {
-          if (row.kind === "char" && observedId && (await records.lookupRoleUuid(observedId)).length)
-            throw new ServiceError({ code: "IDENTITY_CONFLICT", message: "该编号已属于其他角色，不能当作改名。" });
-          await records.confirmUnknownRename(row.newEntity, row.kind === "chat", {
-            id: observedId,
-            generation: 1,
-            confirmed: observedId !== null,
-            origin: "legacy",
-            ...row.kind === "chat" ? { parent: parentId } : {}
-          });
-        } else if (row.kind === "char")
-          await records.renameRole(row.oldEntity, row.newEntity, row.expected);
-        else
-          await records.renameChat(row.oldEntity, row.newEntity, row.expected);
+        if (row.kind === "char") {
+          if (row.expected)
+            await records.renameRole(row.oldEntity, row.newEntity, row.expected);
+        } else {
+          const parent = (await records.referenceInfo(coordinate(row.newEntity, true).avatar, false))?.reference;
+          if (row.expected) {
+            if (!parent?.id || parent.id !== row.expected.parent || row.expected.id !== observedId)
+              throw new ServiceError({
+                code: "IDENTITY_CONFLICT",
+                message: "改名聊天的数据库编号或所属角色登记与原对象不同，未修改引用。"
+              });
+            await records.renameChat(row.oldEntity, row.newEntity, row.expected);
+          } else if (parent?.id && parent.confirmed)
+            await records.confirmUnknownRename(row.newEntity, true, {
+              id: observedId,
+              generation: 1,
+              confirmed: observedId !== null,
+              origin: "legacy",
+              parent: parent.id
+            });
+        }
         this.tasks.delete(key);
         return { ...row, stage: "applied" };
       }));
     }
+  }
+
+  // src/database-path.ts
+  var GLOBAL_DATABASE = "global.sqlite";
+  var CHARACTERS_DIRECTORY = "characters";
+  var CHATS_DIRECTORY = "chats";
+  var CHARACTER_DATABASE = "char.sqlite";
+  var DATABASE_EXTENSION = ".sqlite";
+  function databaseLocation(charDbId, chatDbId) {
+    if (charDbId === undefined)
+      return { directories: [], file: GLOBAL_DATABASE };
+    if (!chatDbId)
+      return { directories: [CHARACTERS_DIRECTORY, charDbId], file: CHARACTER_DATABASE };
+    return {
+      directories: [CHARACTERS_DIRECTORY, charDbId, CHATS_DIRECTORY],
+      file: `${chatDbId}${DATABASE_EXTENSION}`
+    };
+  }
+  function databasePath(charDbId, chatDbId) {
+    const location = databaseLocation(charDbId, chatDbId);
+    return [...location.directories, location.file].join("/");
+  }
+  function parseDatabasePath(relativePath, entry) {
+    const segments = relativePath.toLowerCase().split("/");
+    if (entry === "file") {
+      if (segments.length === 1)
+        return segments[0] === GLOBAL_DATABASE ? { kind: "global" } : undefined;
+      if (segments[0] !== CHARACTERS_DIRECTORY)
+        return;
+      if (segments.length === 3 && segments[2] === CHARACTER_DATABASE)
+        return { kind: "char", charDbId: segments[1] };
+      if (segments.length === 4 && segments[2] === CHATS_DIRECTORY && segments[3].endsWith(DATABASE_EXTENSION))
+        return {
+          kind: "chat",
+          charDbId: segments[1],
+          chatDbId: segments[3].slice(0, -DATABASE_EXTENSION.length)
+        };
+      return;
+    }
+    if (segments[0] !== CHARACTERS_DIRECTORY)
+      return;
+    if (segments.length === 1)
+      return { kind: "characters" };
+    if (segments.length === 2)
+      return { kind: "character", charDbId: segments[1] };
+    if (segments.length === 3 && segments[2] === CHATS_DIRECTORY)
+      return { kind: "chats", charDbId: segments[1] };
+    return;
+  }
+  var isTemporaryFileName = (name) => name.toLowerCase().endsWith(".crswap");
+  function checkRelativePath(relativePath, purpose) {
+    if (typeof relativePath !== "string" || !relativePath || relativePath.length > 4096)
+      return "扫描路径必须是存储目录内的相对路径。";
+    const segments = relativePath.split("/");
+    if (segments.some((s) => !s || s === "." || s === ".." || s.includes("\\") || s.includes("\x00")))
+      return "扫描路径必须是存储目录内的相对路径，不能包含空段、. 或 ..。";
+    if (isTemporaryFileName(segments.at(-1)))
+      return "浏览器写入临时文件不在扫描处理范围内。";
+    if (purpose === "remove") {
+      const lower = relativePath.toLowerCase();
+      if (lower === GLOBAL_DATABASE)
+        return "全局数据库不能通过扫描删除。";
+      if (lower === CHARACTERS_DIRECTORY)
+        return "characters 目录始终保留。";
+    }
+    return segments;
   }
 
   // src/worker/entity-deletions.ts
@@ -946,7 +831,6 @@
       entity: task.entity,
       stage: task.phase === "invalidated" ? "applied" : task.phase === "cancelled" ? "cancelled" : task.phase === "blocked" ? "unconfirmed" : "pending",
       revision: task.revision,
-      ...task.copyTaskIds ? { copyTaskIds: task.copyTaskIds } : {},
       credentials: task.credentials,
       ...task.reference ? { expected: task.reference } : {},
       ...task.deleteChats !== undefined ? { deleteChats: task.deleteChats } : {},
@@ -958,6 +842,7 @@
     storage;
     changed;
     tasks = new Map;
+    cleanups = new Map;
     discoveries = new Map;
     running = new Map;
     scanning = new Map;
@@ -975,17 +860,40 @@
     key(b, taskId) {
       return `${domain3(b)}:${taskId}`;
     }
-    async load(records, binding) {
-      const tasks = await records.listDeletionsExisting();
-      this.revisions.set(domain3(binding), Math.max(this.revisions.get(domain3(binding)) ?? 0, await records.entityRevisionExisting()));
-      for (const key of this.tasks.keys())
-        if (key.startsWith(`${domain3(binding)}:`) && !tasks.some((task) => this.key(binding, task.taskId) === key))
-          this.tasks.delete(key);
-      for (const task of tasks)
-        this.tasks.set(this.key(binding, task.taskId), task);
-    }
     revision(binding) {
       return this.revisions.get(domain3(binding)) ?? 0;
+    }
+    inDomain(binding, key) {
+      return key.startsWith(`${domain3(binding)}:`);
+    }
+    isCleanupWaiting(binding, target) {
+      for (const [key, t] of this.cleanups)
+        if (this.inDomain(binding, key) && t.scope === target.scope && t.charDbId === target.charDbId && t.chatDbId === target.chatDbId && t.phase === "waiting")
+          return true;
+      return false;
+    }
+    updateCleanup(binding, task, phase, reason) {
+      const next = { ...task, phase };
+      delete next.reason;
+      if (reason)
+        next.reason = reason;
+      if (["done", "retained", "blocked"].includes(phase))
+        this.cleanups.delete(this.key(binding, task.taskId));
+      else
+        this.cleanups.set(this.key(binding, task.taskId), next);
+      return next;
+    }
+    forgetCleanups(binding, deletionTaskId) {
+      for (const [key, value] of this.cleanups)
+        if (this.inDomain(binding, key) && value.deletionTaskId === deletionTaskId)
+          this.cleanups.delete(key);
+    }
+    hasDeletedCoordinate(binding, entity, chat, generation) {
+      const c = coordinate(entity, chat);
+      for (const [key, t] of this.tasks)
+        if (this.inDomain(binding, key) && t.phase !== "cancelled" && t.revision > (binding.entityRevision ?? -1) && (t.entity === entity && t.chat === chat || chat && !t.chat && t.entity === c.avatar) && (generation === undefined || t.reference?.generation === generation))
+          return true;
+      return false;
     }
     matches(task, entity, chat) {
       if (task.entity === entity && task.chat === chat)
@@ -1031,9 +939,9 @@
     }
     async verify(binding, entity, chat = false) {
       this.assertEntity(binding, entity, chat);
-      await this.storage.manageEntities(binding, async (records) => {
+      await this.storage.manageEntities(binding, async () => {
         const generation = chat ? binding.chatIdentityGeneration : binding.identityGeneration;
-        if (await records.hasDeletedCoordinate(entity, chat, generation, binding.entityRevision))
+        if (this.hasDeletedCoordinate(binding, entity, chat, generation))
           throw stale();
       });
     }
@@ -1046,19 +954,37 @@
       const discovery = this.key(binding, operationId);
       this.discoveries.set(discovery, { entity, chat: kind === "chat" });
       return this.serialize(() => this.storage.manageEntities(binding, async (records) => {
-        records.ensureRevision(this.revision(binding));
-        const task = await records.beginDeletion({
+        const task = await this.beginDeletion(binding, records, {
           entity,
           chat: kind === "chat",
           operationId,
           ...deleteChats !== undefined ? { deleteChats } : {}
         });
-        this.revisions.set(domain3(binding), task.revision);
+        this.revisions.set(domain3(binding), Math.max(this.revision(binding), task.revision));
         this.tasks.set(this.key(binding, task.taskId), task);
         const ticket = deletionTicket(task);
         this.changed(binding, ticket);
         return ticket;
       })).finally(() => this.discoveries.delete(discovery));
+    }
+    async beginDeletion(binding, records, input) {
+      await records.ready();
+      const previous = this.tasks.get(this.key(binding, input.operationId));
+      if (previous)
+        return structuredClone(previous);
+      const found = await records.deletions.readDeletion(input);
+      return {
+        ...input,
+        taskId: input.operationId,
+        revision: this.revision(binding) + 1,
+        entity: found.entity,
+        ...found.reference ? { reference: found.reference } : {},
+        ...!input.chat ? { roleRecordId: found.roleRecordId } : {},
+        children: found.children,
+        credentials: found.credentials,
+        phase: "observed",
+        version: 1
+      };
     }
     pending(binding) {
       return Promise.resolve([...this.tasks].filter(([key, t]) => key.startsWith(`${domain3(binding)}:`) && t.phase === "observed").map(([, t]) => deletionTicket(t)));
@@ -1075,36 +1001,47 @@
               message: "酒馆删除结果无法确认，未清理数据库；请稍后扫描核对。"
             });
           if (!input.absent) {
-            if (input.observedId !== (task.reference?.id ?? null))
+            if (task.chat ? input.observedId !== (task.reference?.id ?? null) : input.nativeResult !== "failed")
               throw stale();
             const ticket = { ...deletionTicket(task), stage: "cancelled" };
             this.changed(binding, ticket);
             return ticket;
           }
-          const result = await this.storage.manageEntities(binding, (records) => records.settleDeletion(task, {
-            childrenDeleted: task.deleteChats === true && input.remainingChatNames?.length === 0
-          }));
-          this.tasks.set(key, result.deletion);
-          const ticket = deletionTicket(result.deletion);
+          const deletion = await this.storage.manageEntities(binding, async (records) => {
+            const cleanups = await records.deletions.settleDeletion(task, {
+              childrenDeleted: task.deleteChats === true && input.remainingChatNames?.length === 0
+            });
+            if (!cleanups)
+              return task;
+            const invalidated = { ...task, phase: "invalidated", version: task.version + 1 };
+            delete invalidated.reason;
+            for (const t of cleanups)
+              this.cleanups.set(this.key(binding, t.taskId), t);
+            return invalidated;
+          });
+          this.tasks.set(key, deletion);
+          const ticket = deletionTicket(deletion);
           this.changed(binding, ticket);
           const outcomes = await this.cleanup(binding);
           if (outcomes.every((t) => t.phase === "done" || t.phase === "retained"))
-            await this.storage.manageEntities(binding, (records) => records.finishDeletion(result.deletion));
+            await this.storage.manageEntities(binding, (records) => records.deletions.finishDeletion(deletion));
           return ticket;
         } finally {
-          this.tasks.delete(key);
-          await this.storage.manageEntities(binding, (records) => records.forgetDeletion(task.taskId)).catch(() => {});
+          await this.storage.manageEntities(binding, async () => {
+            this.tasks.delete(key);
+            this.forgetCleanups(binding, task.taskId);
+          }).catch(() => {});
         }
       });
     }
     cleanScan(input, binding) {
-      if (!input || !isUuid(input.operationId) || !input.expected || typeof input.removeRecord !== "boolean" || typeof input.removeFile !== "boolean" || !["char", "chat"].includes(input.expected.scope) || !Number.isSafeInteger(input.expected.referenceId) || input.expected.referenceId < 1 || !input.observation || !["deleted", "same", "unknown"].includes(input.observation.status))
+      if (!input || !isUuid(input.operationId) || !input.expected || typeof input.removeRecord !== "boolean" || typeof input.removeFile !== "boolean" || !["char", "chat"].includes(input.expected.scope) || !Number.isSafeInteger(input.expected.referenceId) || input.expected.referenceId < 1 || !input.observation || !["deleted", "same", "unknown"].includes(input.observation.status) || input.parentDeleted !== undefined && input.parentDeleted !== true)
         return Promise.reject(new ServiceError({ code: "INVALID_REQUEST", message: "扫描清理必须提供原记录、核对结果和确认范围。" }));
       const request = structuredClone(input);
       const work = this.serialize(async () => {
         await this.running.get(domain3(binding));
         const expected = request.expected;
-        const relativePath = expected.id ? `characters/${expected.scope === "char" ? expected.id : expected.parent}/${expected.scope === "chat" ? `chats/${expected.id}.sqlite` : "char.sqlite"}` : undefined;
+        const relativePath = expected.id ? databasePath(expected.scope === "char" ? expected.id : String(expected.parent), expected.scope === "chat" ? expected.id : undefined) : undefined;
         const result = {
           scope: expected.scope,
           referenceId: expected.referenceId,
@@ -1117,14 +1054,15 @@
           record: { status: "blocked", message: "原管理记录尚未删除。" }
         };
         const blocked = (message) => {
-          result.record.message = message;
+          result.record.message = result.marked ? `${expected.scope === "char" ? "角色已标记为删除，其下聊天改为保留状态" : "聊天已标记为删除"}，这一修改已保存；${message}` : message;
           if (result.file.status === "blocked")
             result.file.message = message;
           return result;
         };
+        const parentDeleted = request.parentDeleted === true;
         let current;
         try {
-          current = await this.storage.manageEntities(binding, (records) => records.assertScanRecord(expected, true));
+          current = await this.storage.manageEntities(binding, (records) => records.deletions.assertScanRecord(expected, true, parentDeleted));
         } catch (error) {
           if (errorData(error).code !== "STALE_IDENTITY")
             throw error;
@@ -1133,7 +1071,11 @@
           result.partial = false;
           return result;
         }
-        if (current.state !== "deleted" && request.observation.status !== "deleted")
+        if (parentDeleted) {
+          const parent = expected.scope === "chat" && current.state !== "active" ? await this.storage.manageEntities(binding, (records) => records.deletions.scanRecord({ scope: "char", referenceId: expected.parentReferenceId })) : undefined;
+          if (parent?.state !== "deleted")
+            return blocked("所属角色尚未确认删除，未处理这个聊天。");
+        } else if (current.state !== "deleted" && request.observation.status !== "deleted")
           return blocked("原酒馆文件没有确认不存在，请重新扫描核对。");
         if (current.taskReasons.some((reason) => !reason.includes("数据库文件清理")))
           return blocked(current.taskReasons.join("；"));
@@ -1148,20 +1090,31 @@
           });
           if (local.status === "unknown")
             return blocked(local.reason ?? "无法确认原数据库文件。");
-          const protection = await this.storage.manageEntities(binding, (records) => records.protectionReferences({ scope: expected.scope, charDbId: local.charDbId, chatDbId: local.chatDbId }));
+          if (current.initialization === "never" && local.status === "exists")
+            return blocked("管理记录显示数据库从未创建，但本地已有文件，请核对来源；未删除文件和记录。");
+          if (parentDeleted && current.state !== "deleted" && current.initialization === "ready" && local.status === "missing")
+            return blocked("管理记录显示聊天数据库已创建，但本地文件不存在；保留这个聊天的记录。");
+          const protection = await this.storage.manageEntities(binding, (records) => records.deletions.protectionReferences({
+            scope: expected.scope,
+            charDbId: local.charDbId,
+            chatDbId: local.chatDbId
+          }));
           const ownActive = current.state === "active" && current.confirmed ? 1 : 0, ownRetained = current.state === "retained" ? 1 : 0;
           const shared = protection.active > ownActive || protection.retained > ownRetained || protection.unconfirmed > (current.state !== "deleted" && !current.confirmed ? 1 : 0);
           if (local.status === "exists" && !request.removeFile && !shared)
             return blocked("这个数据库文件目前没有共享引用，但本次确认范围没有允许删除文件，请重新扫描选择。");
         }
         const prepared = await this.storage.manageEntities(binding, async (records) => {
-          records.ensureRevision(this.revision(binding));
-          const result = await records.prepareScanDeletion(expected, request.operationId);
+          const result = await records.deletions.prepareScanDeletion(expected, request.operationId, parentDeleted, this.revision(binding) + 1);
+          if (result.cleanup)
+            this.cleanups.set(this.key(binding, result.cleanup.taskId), result.cleanup);
           this.revisions.set(domain3(binding), result.deletion.revision);
           return result;
         });
         this.tasks.set(this.key(binding, prepared.deletion.taskId), prepared.deletion);
         this.changed(binding, deletionTicket(prepared.deletion));
+        if (current.state !== "deleted")
+          result.marked = true;
         if (prepared.cleanup) {
           const task = prepared.cleanup;
           const target = {
@@ -1171,14 +1124,14 @@
             charDbId: task.charDbId,
             ...task.chatDbId ? { chatDbId: task.chatDbId } : {}
           };
-          const protection = await this.storage.manageEntities(binding, (records) => records.protectionReferences(target));
+          const protection = await this.storage.manageEntities(binding, (records) => records.deletions.protectionReferences(target));
           if (protection.active || protection.retained || protection.unconfirmed) {
             result.file = {
               ...result.file,
               status: "shared",
               message: "数据库文件仍被其他有效或保留对象使用，继续保留。"
             };
-            await this.storage.manageEntities(binding, (records) => records.updateCleanup(task, "retained", "remaining-reference"));
+            await this.storage.manageEntities(binding, async () => this.updateCleanup(binding, task, "retained", "remaining-reference"));
           } else if (!request.removeFile && local?.status === "exists")
             return blocked("文件引用已改变，本次确认范围没有允许删除文件，请重新扫描。");
           else {
@@ -1193,7 +1146,7 @@
             };
           }
         }
-        const after = await this.storage.manageEntities(binding, (records) => records.assertScanRecord(expected, true));
+        const after = await this.storage.manageEntities(binding, (records) => records.deletions.assertScanRecord(expected, true));
         if (!request.removeRecord || after.parentDependency) {
           result.record = {
             status: "retained",
@@ -1201,10 +1154,10 @@
           };
           return result;
         }
-        if (expected.scope === "char" && await this.storage.manageEntities(binding, (records) => records.hasScanChildren(expected.referenceId)))
+        if (expected.scope === "char" && await this.storage.manageEntities(binding, (records) => records.deletions.hasScanChildren(expected.referenceId)))
           return blocked("父角色下仍有未清理的聊天记录，请先清理所选聊天再处理角色记录。");
-        await this.storage.manageEntities(binding, (records) => records.purgeScanRecord(expected));
-        await this.storage.manageEntities(binding, (records) => this.load(records, binding));
+        await this.storage.manageEntities(binding, (records) => records.deletions.purgeScanRecord(expected));
+        await this.storage.manageEntities(binding, async () => {});
         result.record = { status: "removed", message: "原管理记录已删除并确认保存。" };
         result.partial = false;
         return result;
@@ -1214,8 +1167,10 @@
       work.finally(async () => {
         if (this.scanning.get(id) === work)
           this.scanning.delete(id);
-        this.tasks.delete(this.key(binding, request.operationId));
-        await this.storage.manageEntities(binding, (records) => records.forgetDeletion(request.operationId));
+        await this.storage.manageEntities(binding, async () => {
+          this.tasks.delete(this.key(binding, request.operationId));
+          this.forgetCleanups(binding, request.operationId);
+        });
       }).catch(() => {});
       return work;
     }
@@ -1235,7 +1190,7 @@
       return work;
     }
     async cleanup(binding, selectedTaskId) {
-      const tasks = await this.storage.manageEntities(binding, (records) => records.listCleanupsExisting());
+      const tasks = await this.storage.manageEntities(binding, async () => structuredClone([...this.cleanups].filter(([key]) => this.inDomain(binding, key)).map(([, task]) => task)));
       const results = [];
       for (let task of tasks) {
         if (selectedTaskId && task.taskId !== selectedTaskId)
@@ -1252,7 +1207,7 @@
           ...task.chatDbId ? { chatDbId: task.chatDbId } : {}
         };
         const update = async (phase, reason) => {
-          task = await this.storage.manageEntities(binding, (records) => records.updateCleanup(task, phase, reason));
+          task = await this.storage.manageEntities(binding, async () => this.updateCleanup(binding, task, phase, reason));
         };
         try {
           const deletion = this.tasks.get(this.key(binding, task.deletionTaskId));
@@ -1262,11 +1217,11 @@
             continue;
           }
           const check = async (records) => {
-            const protection = await records.protectionReferences(target);
+            const protection = await records.deletions.protectionReferences(target);
             if (protection.active || protection.retained || protection.unconfirmed)
               throw new ServiceError({ code: "IDENTITY_CONFLICT", message: "数据库仍有有效、保留或未确认引用。" });
           };
-          const protection = await this.storage.manageEntities(binding, (records) => records.protectionReferences(target));
+          const protection = await this.storage.manageEntities(binding, (records) => records.deletions.protectionReferences(target));
           if (protection.active || protection.retained || protection.unconfirmed) {
             await update("retained", "remaining-reference");
             results.push(task);
@@ -1276,7 +1231,7 @@
           await this.storage.drainCleanup(target);
           await this.storage.removeCleanupFile(target, check);
           if (!selectedTaskId)
-            await this.storage.manageEntities(binding, (records) => records.finishCleanup(task));
+            await this.storage.manageEntities(binding, (records) => records.deletions.finishCleanup(task));
           await update("done");
         } catch (error) {
           await update("blocked", errorData(error).code === "PERMISSION_REQUIRED" ? "permission-required" : "file-remove-failed").catch(() => {});
@@ -1595,6 +1550,7 @@
     }
   }
   var META2 = "__stsh_meta";
+  var SCOPED_META_TABLE_SQL = `CREATE TABLE IF NOT EXISTS ${META2} (key TEXT PRIMARY KEY, value TEXT NOT NULL)`;
 
   class SingleDatabase {
     SQL;
@@ -1948,7 +1904,7 @@
       if (identity && (!["char", "chat"].includes(identity.scope) || !identity.charDbId || identity.scope === "chat" && !identity.chatDbId))
         throw new Error("数据库身份字段无效。");
       if (identity) {
-        db.run(`CREATE TABLE IF NOT EXISTS ${META2} (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+        db.run(SCOPED_META_TABLE_SQL);
         db.run(`INSERT OR REPLACE INTO ${META2} VALUES ('identity', ?)`, [JSON.stringify(identity)]);
       }
     }
@@ -2256,6 +2212,26 @@
       return "granted";
     return directory.queryPermission({ mode: "readwrite" });
   }
+  async function opfsDirectory() {
+    if (typeof navigator === "undefined" || typeof navigator.storage?.getDirectory !== "function")
+      throw new ServiceError({
+        code: "UNSUPPORTED_ENVIRONMENT",
+        message: "当前浏览器没有可用的 OPFS，游玩模式无法启动。"
+      });
+    if (typeof FileSystemFileHandle === "undefined" || typeof FileSystemFileHandle.prototype.createWritable !== "function")
+      throw new ServiceError({
+        code: "UNSUPPORTED_ENVIRONMENT",
+        message: "当前浏览器未提供 OPFS 异步文件写入接口，游玩模式无法启动。"
+      });
+    try {
+      return await (await navigator.storage.getDirectory()).getDirectoryHandle("st-sqlite-helper", { create: true });
+    } catch (error) {
+      throw new ServiceError({
+        code: "LOAD_FAILED",
+        message: `无法取得游玩模式的浏览器存储：${errorData(error).message}`
+      });
+    }
+  }
 
   class DirectoryStorage {
     directory;
@@ -2269,14 +2245,13 @@
       this.opfs = opfs;
     }
     async target(create) {
-      if (!this.charDbId)
-        return this.directory;
-      const characters = await this.directory.getDirectoryHandle("characters", { create });
-      const character = await characters.getDirectoryHandle(this.charDbId, { create });
-      return this.chatDbId ? character.getDirectoryHandle("chats", { create }) : character;
+      let directory = this.directory;
+      for (const name of databaseLocation(this.charDbId, this.chatDbId).directories)
+        directory = await directory.getDirectoryHandle(name, { create });
+      return directory;
     }
     filename() {
-      return this.chatDbId ? `${this.chatDbId}.sqlite` : this.charDbId ? "char.sqlite" : "global.sqlite";
+      return databaseLocation(this.charDbId, this.chatDbId).file;
     }
     async metadata() {
       await this.permission();
@@ -2286,7 +2261,7 @@
         name: file.name,
         size: file.size,
         lastModified: file.lastModified,
-        relativePath: this.charDbId ? `characters/${this.charDbId}/${this.chatDbId ? `chats/${this.chatDbId}.sqlite` : "char.sqlite"}` : "global.sqlite"
+        relativePath: databasePath(this.charDbId, this.chatDbId)
       };
     }
     async remove() {
@@ -2350,7 +2325,7 @@
           name: current.name,
           size: current.size,
           lastModified: current.lastModified,
-          relativePath: this.charDbId ? `characters/${this.charDbId}/${this.chatDbId ? `chats/${this.chatDbId}.sqlite` : "char.sqlite"}` : "global.sqlite"
+          relativePath: databasePath(this.charDbId, this.chatDbId)
         }
       };
     }
@@ -2376,8 +2351,57 @@
       }
     }
   }
+  var domError = (error, name) => error instanceof DOMException && error.name === name;
+  async function removeStorageEntry(directory, segments, kind) {
+    let parent = directory;
+    try {
+      for (const segment of segments.slice(0, -1))
+        parent = await parent.getDirectoryHandle(segment, { create: false });
+    } catch (error) {
+      if (domError(error, "NotFoundError"))
+        return "missing";
+      throw error;
+    }
+    const name = segments.at(-1);
+    const open = () => kind === "file" ? parent.getFileHandle(name, { create: false }) : parent.getDirectoryHandle(name, { create: false });
+    try {
+      await open();
+    } catch (error) {
+      if (domError(error, "NotFoundError"))
+        return "missing";
+      if (domError(error, "TypeMismatchError"))
+        throw new ServiceError({ code: "INVALID_REQUEST", message: "这个位置的条目类型已与扫描结果不同，未删除。" });
+      throw error;
+    }
+    try {
+      await parent.removeEntry(name);
+    } catch (error) {
+      if (domError(error, "InvalidModificationError"))
+        return "not-empty";
+      if (!domError(error, "NotFoundError"))
+        throw error;
+    }
+    try {
+      await open();
+    } catch (error) {
+      if (domError(error, "NotFoundError"))
+        return "removed";
+      throw error;
+    }
+    throw new ServiceError({
+      code: "RESULT_UNCONFIRMED",
+      resultState: "unconfirmed",
+      message: "条目删除后仍存在，删除结果尚未确认。"
+    });
+  }
 
   // src/worker/configuration-repository.ts
+  function validateConfiguration(value) {
+    const handle = (h) => h?.kind === "directory" && typeof h.getFileHandle === "function" && typeof h.isSameEntry === "function";
+    if (!value || !handle(value.directory) || typeof value.storageId !== "string" || !value.storageId || !Number.isSafeInteger(value.configGeneration) || value.configGeneration < 1 || !Array.isArray(value.spaces) || value.spaces.length === 0 || value.mode !== undefined && !["opfs", "directory"].includes(value.mode) || value.autoReloadEnabled !== undefined && typeof value.autoReloadEnabled !== "boolean" || value.spaces.some((s) => !s || typeof s.storageId !== "string" || !s.storageId || !handle(s.directory) || s.mode !== undefined && !["opfs", "directory"].includes(s.mode)) || value.savedDirectory !== undefined && (!handle(value.savedDirectory.directory) || (value.savedDirectory.mode ?? "directory") !== "directory" || !value.spaces.some((s) => s.storageId === value.savedDirectory.storageId && (s.mode ?? "directory") === "directory")) || new Set(value.spaces.map((s) => s.storageId)).size !== value.spaces.length || !value.spaces.some((s) => s.storageId === value.storageId)) {
+      throw new ServiceError({ code: "CONFIG_FAILED", message: "已保存目录配置无效，拒绝静默替换存储身份。" });
+    }
+  }
   var failed = (error) => new ServiceError({
     code: "CONFIG_FAILED",
     message: `读取或保存 IndexedDB 目录配置失败：${detail(error).message}`,
@@ -2454,6 +2478,13 @@
   }
 
   // src/worker/write-errors.ts
+  var invalidRequest = () => {
+    throw new ServiceError({
+      code: "INVALID_REQUEST",
+      failureKind: "request-rejected",
+      message: "请求字段或操作类型无效。"
+    });
+  };
   function beforeBusinessSqlError(error) {
     const data = errorData(error);
     return new ServiceError({
@@ -2497,6 +2528,16 @@
         throw failed2("数据库包含已停止支持的旧管理结构，请使用当前结构的数据文件。");
       if (names.length)
         await assertSchema6(this.root);
+    }
+    async hasManagement() {
+      if (this.root.availability !== "ready") {
+        this.initialized = false;
+        await this.root.refresh();
+      }
+      await this.root.assertFileExisting();
+      return (await this.root.query({
+        sql: "SELECT 1 FROM sqlite_master WHERE name GLOB '__stsh_*' OR name GLOB '__st_sle_helper_*' LIMIT 1"
+      })).rows.length > 0;
     }
     async ready() {
       if (this.root.availability !== "ready") {
@@ -2720,32 +2761,157 @@
     }
   }
 
+  // src/core/binds.ts
+  var invalid3 = (reason) => {
+    throw new ServiceError({
+      code: "INVALID_REQUEST",
+      message: `绑定参数无效：${reason}`,
+      failureKind: "request-rejected"
+    });
+  };
+  function nativePrototype(prototype, constructor) {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "constructor");
+    return !!descriptor && "value" in descriptor && typeof descriptor.value === "function" && Object.getOwnPropertyDescriptor(descriptor.value, "prototype")?.value === prototype && Function.prototype.toString.call(descriptor.value) === Function.prototype.toString.call(constructor);
+  }
+  function plain(value) {
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === null || Object.getPrototypeOf(prototype) === null && nativePrototype(prototype, Object);
+  }
+  function ordinaryArray(value) {
+    const prototype = Object.getPrototypeOf(value);
+    return prototype !== null && Array.isArray(prototype) && plain(prototype) && nativePrototype(prototype, Array);
+  }
+  var typedArrayName = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), Symbol.toStringTag).get;
+  function entries(value) {
+    if (!Array.isArray(value) && !plain(value))
+      return invalid3("只接受数组和普通对象。");
+    if (Array.isArray(value) && !ordinaryArray(value))
+      return invalid3("不接受数组类实例或自定义原型。");
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Object.getOwnPropertySymbols(value).length)
+      return invalid3("不接受 symbol 属性。");
+    const result = [];
+    for (const [key, descriptor] of Object.entries(descriptors)) {
+      if (Array.isArray(value) && key === "length")
+        continue;
+      if (!("value" in descriptor) || !descriptor.enumerable)
+        return invalid3("不接受访问器或隐藏属性。");
+      if (Array.isArray(value) && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length))
+        return invalid3("数组不能包含额外属性。");
+      result.push([key, descriptor.value]);
+    }
+    if (Array.isArray(value) && result.length !== value.length)
+      return invalid3("数组不能包含空位。");
+    return result;
+  }
+  function jsonSnapshot(value, ancestors) {
+    if (value === null || typeof value === "string" || typeof value === "boolean")
+      return value;
+    if (typeof value === "number")
+      return Number.isFinite(value) ? value : invalid3("数值必须有限。");
+    if (typeof value !== "object")
+      return invalid3("JSON 中包含不支持的值。");
+    if (ancestors.has(value))
+      return invalid3("JSON 不能循环引用。");
+    ancestors.add(value);
+    try {
+      const properties = entries(value);
+      if (Array.isArray(value))
+        return properties.map(([, item]) => jsonSnapshot(item, ancestors));
+      const result = Object.create(null);
+      for (const [key, item] of properties)
+        result[key] = jsonSnapshot(item, ancestors);
+      return result;
+    } finally {
+      ancestors.delete(value);
+    }
+  }
+  function scalar(value, allowJson) {
+    if (value === null || typeof value === "string")
+      return value;
+    if (typeof value === "number")
+      return Number.isFinite(value) ? value : invalid3("数值必须有限。");
+    if (ArrayBuffer.isView(value) && typedArrayName.call(value) === "Uint8Array")
+      return new Uint8Array(value);
+    if (allowJson && typeof value === "object")
+      return JSON.stringify(jsonSnapshot(value, new Set));
+    return invalid3(allowJson ? "顶层值只接受 NULL、字符串、有限数值、BLOB 或 JSON 数组/对象。" : "Worker 只接受已序列化的原生值。");
+  }
+  function capture(input, allowJson) {
+    if (input === undefined)
+      return;
+    if (input === null || typeof input !== "object")
+      return invalid3("最外层必须是参数数组或命名参数对象。");
+    const properties = entries(input);
+    if (Array.isArray(input))
+      return properties.map(([, value]) => scalar(value, allowJson));
+    const result = Object.create(null);
+    for (const [key, value] of properties) {
+      if (!/^[:@$].+$/s.test(key))
+        return invalid3("命名参数键必须保留 :、@ 或 $ 前缀及参数名。");
+      result[key] = scalar(value, allowJson);
+    }
+    return result;
+  }
+  function validateSerializedBinds(input) {
+    return capture(input, false);
+  }
+
+  // src/dvs/sql.ts
+  function quoteIdentifier(value) {
+    return `"${value.replaceAll('"', '""')}"`;
+  }
+
+  // src/dvs/schema.ts
+  var DVS_VERSION_TABLE_SQL = 'CREATE TABLE IF NOT EXISTS "_dvs_version" (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version TEXT NOT NULL)';
+  var DVS_GC_COUNTER_TABLE_SQL = `CREATE TABLE "_dvs_gc_counter" (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), successful_updates INTEGER NOT NULL CHECK (typeof(successful_updates) = 'integer' AND successful_updates >= 0))`;
+  function indexTableName(name) {
+    return `_dvs_index_${name}`;
+  }
+  function createIndexSql(name) {
+    return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(indexTableName(name))} (fid BLOB NOT NULL CHECK (typeof(fid) = 'blob' AND length(fid) = 16), rid BLOB NOT NULL CHECK (typeof(rid) = 'blob' AND length(rid) = 16), PRIMARY KEY (fid,rid)) WITHOUT ROWID`;
+  }
+
   // src/worker/scan.ts
   var missing = (error) => error instanceof DOMException && error.name === "NotFoundError";
-  var path = (charDbId, chatDbId) => `characters/${charDbId}/${chatDbId ? `chats/${chatDbId}.sqlite` : "char.sqlite"}`;
   var targetKey = (scope, char, chat) => JSON.stringify([scope, char, chat ?? ""]);
   function assertTarget(charDbId, chatDbId) {
     if (!isUuid(charDbId) || chatDbId !== undefined && !isUuid(chatDbId))
       throw new ServiceError({ code: "INVALID_REQUEST", message: "扫描文件必须指定有效的角色或聊天数据库编号。" });
   }
   async function scanRecords(root, directoryName) {
-    const snapshot = { directoryName, rootReadable: false, records: [], targets: [], issues: [] };
+    const snapshot = {
+      directoryName,
+      management: "unreadable",
+      differences: [],
+      rootReadable: false,
+      records: [],
+      targets: [],
+      issues: []
+    };
     try {
       if (root.availability !== "ready")
         throw new Error("管理数据库尚未恢复，请先完成现有恢复操作。");
-      await new RootTargets(root, true).ready();
+      await root.assertFileExisting();
+      const inspection = await inspectSchema6(root);
+      if (inspection.state !== "valid") {
+        snapshot.management = inspection.state;
+        snapshot.differences = inspection.differences;
+        return snapshot;
+      }
       const query = async (sql) => (await root.query({ sql })).rows;
       const version = Number(JSON.parse(String((await query(`SELECT value FROM ${META} WHERE key='schema_version'`))[0]?.[0])));
       snapshot.schemaVersion = version;
-      const targets = await query(`SELECT scope,char_dbid,chat_dbid,state FROM ${TARGETS}`);
+      const targets = await query(`SELECT scope,char_dbid,chat_dbid,origin,state FROM ${TARGETS}`);
       for (const row of targets) {
-        const scope = String(row[0]), charDbId = String(row[1]), chatDbId = String(row[2]), state = String(row[3]);
-        if (!["char", "chat"].includes(scope) || !isUuid(charDbId) || (scope === "chat" ? !isUuid(chatDbId) : chatDbId !== "") || !["never", "creating", "ready"].includes(state))
+        const scope = String(row[0]), charDbId = String(row[1]), chatDbId = String(row[2]), origin = String(row[3]), state = String(row[4]);
+        if (!["char", "chat"].includes(scope) || !isUuid(charDbId) || (scope === "chat" ? !isUuid(chatDbId) : chatDbId !== "") || !["generated", "legacy"].includes(origin) || !["never", "creating", "ready"].includes(state))
           throw new Error("数据库初始化记录字段无效。");
         snapshot.targets.push({
           scope,
           charDbId,
           ...chatDbId ? { chatDbId } : {},
+          origin,
           state
         });
       }
@@ -2795,19 +2961,36 @@
         record.shared = record.id !== null && snapshot.records.some((other) => other !== record && other.scope === record.scope && other.state !== "deleted" && other.id === record.id && other.parent === record.parent);
       }
       snapshot.rootReadable = true;
+      snapshot.management = "valid";
     } catch (error) {
+      snapshot.management = "unreadable";
+      snapshot.rootReadable = false;
       snapshot.records = [];
       snapshot.targets = [];
-      snapshot.issues.push({ relativePath: "global.sqlite", reason: detail(error).message });
+      snapshot.issues.push({ relativePath: GLOBAL_DATABASE, reason: detail(error).message });
     }
     return snapshot;
+  }
+  async function readScanBasis(root) {
+    const rows = async (sql) => (await root.query({ sql })).rows.map((row) => row.map(String));
+    const chats = await rows(`SELECT parent_char_dbid,coalesce(chat_dbid,'') FROM ${CHATS}`);
+    return {
+      roles: (await rows(`SELECT char_dbid FROM ${ROLES} WHERE char_dbid IS NOT NULL`)).map((row) => row[0]),
+      chats: chats.filter((row) => row[1]).map((row) => [row[0], row[1]]),
+      chatParents: chats.map((row) => row[0]),
+      targets: (await rows(`SELECT scope,char_dbid,chat_dbid FROM ${TARGETS}`)).map(([scope, charDbId, chatDbId]) => ({
+        scope,
+        charDbId,
+        ...chatDbId ? { chatDbId } : {}
+      }))
+    };
   }
   async function scanFile(directory, charDbId, chatDbId) {
     assertTarget(charDbId, chatDbId);
     const file = {
       charDbId,
       ...chatDbId ? { chatDbId } : {},
-      relativePath: path(charDbId, chatDbId),
+      relativePath: databasePath(charDbId, chatDbId),
       status: "unknown"
     };
     try {
@@ -2821,199 +3004,148 @@
       };
     }
   }
-  async function entries(directory) {
+  async function entries2(directory) {
     const result = [];
     for await (const item of directory.entries())
       result.push(item);
     return result;
   }
-  async function scanDirectory(directory, charDbId) {
-    if (charDbId !== undefined)
-      assertTarget(charDbId);
-    const result = { characters: [], files: [], issues: [] };
-    let characters;
-    try {
-      characters = await directory.getDirectoryHandle("characters", { create: false });
-    } catch (error) {
-      if (!missing(error))
-        result.issues.push({ relativePath: "characters", reason: detail(error).message });
-      return result;
-    }
-    if (!charDbId) {
+  var SQLITE_HEADER = "SQLite format 3\x00";
+  async function scanInventory(directory) {
+    const result = { entries: [], issues: [] };
+    const walk = async (handle, prefix, entry) => {
+      let children;
       try {
-        for (const [name, handle] of await entries(characters))
-          if (handle.kind === "directory" && isUuid(name))
-            result.characters.push(name);
-        result.characters.sort();
+        children = await entries2(handle);
       } catch (error) {
-        result.issues.push({ relativePath: "characters", reason: detail(error).message });
+        const reason = detail(error).message;
+        if (entry)
+          entry.reason = reason;
+        result.issues.push({ relativePath: prefix, reason });
+        return;
       }
-      return result;
-    }
-    let character;
-    try {
-      character = await characters.getDirectoryHandle(charDbId, { create: false });
-    } catch (error) {
-      if (!missing(error))
-        result.issues.push({ relativePath: `characters/${charDbId}`, reason: detail(error).message });
-      return result;
-    }
-    const charFile = await scanFile(directory, charDbId);
-    if (charFile.status !== "missing")
-      result.files.push(charFile);
-    try {
-      const chats = await character.getDirectoryHandle("chats", { create: false });
-      for (const [name, handle] of await entries(chats)) {
-        if (handle.kind !== "file" || !name.endsWith(".sqlite") || !isUuid(name.slice(0, -7)))
+      children.sort((a, b) => a[0].localeCompare(b[0]));
+      for (const [name, child] of children) {
+        const relativePath = prefix ? `${prefix}/${name}` : name;
+        if (child.kind === "file" && isTemporaryFileName(name)) {
+          if (entry)
+            entry.temporary = true;
           continue;
-        result.files.push(await scanFile(directory, charDbId, name.slice(0, -7)));
-      }
-    } catch (error) {
-      if (!missing(error))
-        result.issues.push({ relativePath: `characters/${charDbId}/chats`, reason: detail(error).message });
-    }
-    result.files.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
-    return result;
-  }
-
-  // src/worker/entity-records.ts
-  var invalid3 = (message) => new ServiceError({ code: "INVALID_REQUEST", message });
-  var damaged2 = (message) => new ServiceError({ code: "LOAD_FAILED", message });
-  function assertKey(key) {
-    if (typeof key !== "string" || !key.trim() || key.length > 4096 || key.includes("\x00"))
-      throw invalid3("实体记录键必须是 1—4096 字符的非空字符串，不能包含空字符。");
-  }
-  function encode(record) {
-    const visiting = new Set;
-    const encodeValue = (value) => {
-      if (value === null || typeof value === "boolean" || typeof value === "string")
-        return JSON.stringify(value);
-      if (typeof value === "number" && Number.isFinite(value))
-        return JSON.stringify(value);
-      if (typeof value !== "object" || value === null || visiting.has(value))
-        throw invalid3("实体记录必须是有限、无循环的 JSON 数据。");
-      const prototype = Object.getPrototypeOf(value);
-      if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null)
-        throw invalid3("实体记录不能包含类实例或特殊对象。");
-      visiting.add(value);
-      try {
-        const properties = Object.getOwnPropertyDescriptors(value);
-        if (Object.getOwnPropertySymbols(value).length || Object.values(properties).some((property) => !("value" in property)))
-          throw invalid3("实体记录不能包含符号字段或属性读取函数。");
-        if (Array.isArray(value)) {
-          const entries = [];
-          for (let i = 0;i < value.length; i++) {
-            if (!properties[String(i)])
-              throw invalid3("实体记录不能包含稀疏数组。");
-            entries.push(encodeValue(properties[String(i)].value));
-          }
-          if (Object.keys(properties).some((key) => key !== "length" && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length)))
-            throw invalid3("JSON 数组不能包含额外字段。");
-          return `[${entries.join(",")}]`;
         }
-        return `{${Object.keys(properties).sort().map((key) => {
-          const property = properties[key];
-          if (!property.enumerable)
-            throw invalid3("实体记录不能包含不可枚举字段。");
-          return `${JSON.stringify(key)}:${encodeValue(property.value)}`;
-        }).join(",")}}`;
-      } finally {
-        visiting.delete(value);
+        if (child.kind === "directory") {
+          const item = { relativePath, kind: "directory" };
+          result.entries.push(item);
+          await walk(child, relativePath, item);
+          continue;
+        }
+        const item = { relativePath, kind: "file" };
+        result.entries.push(item);
+        try {
+          const file = await child.getFile();
+          item.size = file.size;
+          const header = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+          item.sqlite = header.length === 16 && String.fromCharCode(...header) === SQLITE_HEADER;
+        } catch (error) {
+          item.reason = detail(error).message;
+        }
       }
     };
-    if (!record || typeof record !== "object" || Array.isArray(record))
-      throw invalid3("实体记录必须是 JSON 对象。");
-    return encodeValue(record);
+    await walk(directory, "");
+    return result;
   }
-  var contexts = new WeakMap;
+  async function scanDatabase(db, directory, charDbId, chatDbId) {
+    const file = await scanFile(directory, charDbId, chatDbId);
+    const result = {
+      charDbId,
+      ...chatDbId ? { chatDbId } : {},
+      relativePath: file.relativePath,
+      status: file.status === "exists" ? "checked" : file.status,
+      ...file.reason ? { reason: file.reason } : {},
+      meta: "absent",
+      dvs: []
+    };
+    if (result.status !== "checked")
+      return result;
+    try {
+      await db.openExisting();
+      const rows = async (sql, binds = []) => (await db.query({ sql, binds })).rows;
+      const tables = new Map((await rows("SELECT name,sql FROM sqlite_master WHERE type='table'")).map((row) => [
+        String(row[0]),
+        String(row[1])
+      ]));
+      const meta = tables.get("__stsh_meta");
+      if (meta !== undefined) {
+        result.meta = sameDefinition(meta, SCOPED_META_TABLE_SQL) ? "valid" : "invalid";
+        try {
+          const identity = (await rows("SELECT value FROM __stsh_meta WHERE key='identity'"))[0];
+          if (identity) {
+            const value = JSON.parse(String(identity[0]));
+            result.identity = value && typeof value === "object" && typeof value.scope === "string" && typeof value.charDbId === "string" && (value.chatDbId === undefined || typeof value.chatDbId === "string") ? {
+              scope: value.scope,
+              charDbId: value.charDbId,
+              ...value.chatDbId !== undefined ? { chatDbId: value.chatDbId } : {}
+            } : "invalid";
+          }
+        } catch {
+          result.identity = "invalid";
+        }
+      }
+      if ([...tables.keys()].some((name) => name.startsWith("_dvs_"))) {
+        for (const [name, sql] of [
+          ["_dvs_version", DVS_VERSION_TABLE_SQL],
+          ["_dvs_gc_counter", DVS_GC_COUNTER_TABLE_SQL]
+        ]) {
+          const stored = tables.get(name);
+          if (stored === undefined)
+            result.dvs.push(`缺少 DVS 系统表 ${name}。`);
+          else if (!sameDefinition(stored, sql))
+            result.dvs.push(`DVS 系统表 ${name} 的定义与当前版本不同。`);
+        }
+        for (const [name, sql] of tables)
+          if (name.startsWith("_dvs_index_") && !sameDefinition(sql, createIndexSql(name.slice("_dvs_index_".length))))
+            result.dvs.push(`DVS 索引表 ${name} 的定义与当前版本不同。`);
+      }
+    } catch (error) {
+      result.status = "unknown";
+      result.reason = detail(error).message;
+    }
+    return result;
+  }
+  async function readScanFile(directory, relativePath) {
+    const segments = checkRelativePath(relativePath, "read");
+    if (typeof segments === "string")
+      throw new ServiceError({ code: "INVALID_REQUEST", message: segments });
+    let parent = directory;
+    for (const segment of segments.slice(0, -1))
+      parent = await parent.getDirectoryHandle(segment, { create: false });
+    const file = await (await parent.getFileHandle(segments.at(-1), { create: false })).getFile();
+    return {
+      relativePath,
+      size: file.size,
+      lastModified: file.lastModified,
+      bytes: new Uint8Array(await file.arrayBuffer())
+    };
+  }
 
-  class RootEntities {
+  // src/worker/entity-deletion-records.ts
+  var damaged2 = (message) => new ServiceError({ code: "LOAD_FAILED", message });
+
+  class DeletionRecords {
     root;
     targets;
-    context;
-    get processes() {
-      return this.context.processes;
-    }
-    get deletions() {
-      return this.context.deletions;
-    }
-    get cleanups() {
-      return this.context.cleanups;
-    }
-    get revision() {
-      return this.context.revision;
-    }
-    set revision(value) {
-      this.context.revision = value;
-    }
-    constructor(root, targets) {
+    entities;
+    constructor(root, targets, entities) {
       this.root = root;
-      this.targets = targets ?? new RootTargets(root);
-      let context = contexts.get(root);
-      if (!context) {
-        context = { processes: new Map, deletions: new Map, cleanups: new Map, revision: 0 };
-        contexts.set(root, context);
-      }
-      this.context = context;
-    }
-    async ready() {
-      await this.targets.ready();
-    }
-    activeSql(sql) {
-      return sql.replaceAll(ROLES, ACTIVE_ROLES).replaceAll(CHATS, ACTIVE_CHATS);
-    }
-    async readRows(sql, binds) {
-      try {
-        return (await this.root.query({ sql: this.activeSql(sql), binds })).rows;
-      } catch (error) {
-        if (errorData(error).code !== "SQL_FAILED")
-          throw error;
-        throw damaged2(`root 实体记录无法读取：${detail(error).message}`);
-      }
-    }
-    roleRow(row) {
-      if (row[4] !== 0 && row[4] !== 1)
-        throw damaged2("角色 confirmed 字段无效。");
-      return validateReference({ referenceId: row[0], id: row[2], generation: row[3], confirmed: row[4] === 1, origin: row[5] }, false);
-    }
-    chatRow(row) {
-      if (row[6] !== 0 && row[6] !== 1)
-        throw damaged2("聊天 confirmed 字段无效。");
-      return validateReference({ referenceId: row[0], id: row[3], parent: row[4], generation: row[5], confirmed: row[6] === 1, origin: row[7] }, true);
-    }
-    async current(c) {
-      const rows = c.chat ? await this.readRows(`SELECT c.chat_id,r.avatar_name,c.file_name,c.chat_dbid,c.parent_char_dbid,c.generation,c.confirmed,c.origin FROM ${CHATS} c JOIN ${ROLES} r USING(role_id) WHERE r.avatar_name=? AND c.file_name=?`, [c.avatar, c.file]) : await this.readRows(`SELECT role_id,avatar_name,char_dbid,generation,confirmed,origin FROM ${ROLES} WHERE avatar_name=? AND generation>0`, [c.avatar]);
-      if (rows.length > 1)
-        throw damaged2("root 当前文件坐标不唯一。");
-      return rows[0] ? c.chat ? this.chatRow(rows[0]) : this.roleRow(rows[0]) : undefined;
-    }
-    async roleIdFor(avatar) {
-      await this.ready();
-      const rows = await this.readRows(`SELECT role_id FROM ${ROLES} WHERE avatar_name=?`, [avatar]);
-      if (rows.length > 1)
-        throw damaged2("当前角色文件名对应多个有效记录。");
-      return rows[0] ? Number(rows[0][0]) : undefined;
-    }
-    async lookupRoleUuid(id) {
-      await this.ready();
-      const rows = await this.readRows(`SELECT role_id,avatar_name,char_dbid,generation,confirmed,origin FROM ${ROLES} WHERE char_dbid=? AND generation>0 ORDER BY avatar_name`, [id]);
-      return rows.map((row) => ({ key: entityKey({ chat: false, avatar: String(row[1]) }), value: this.roleRow(row) }));
-    }
-    async referenceInfo(entity, chat) {
-      await this.ready();
-      const reference = await this.current(coordinate(entity, chat));
-      return reference ? { referenceId: reference.referenceId, entity, reference } : undefined;
-    }
-    sameReference(a, b) {
-      return a.id === b.id && a.generation === b.generation && a.confirmed === b.confirmed && a.origin === b.origin && a.parent === b.parent && (b.referenceId === undefined || a.referenceId === b.referenceId);
+      this.targets = targets;
+      this.entities = entities;
     }
     async scanRecord(expected) {
       const snapshot = await scanRecords(this.root, "");
       if (!snapshot.rootReadable)
-        throw damaged2(snapshot.issues[0]?.reason ?? "管理记录无法读取。");
+        throw damaged2(snapshot.issues[0]?.reason ?? snapshot.differences[0]?.message ?? (snapshot.management === "uninitialized" ? "管理库尚未初始化，没有管理记录。" : "管理记录无法读取。"));
       return snapshot.records.find((row) => row.scope === expected.scope && row.referenceId === expected.referenceId);
     }
-    async assertScanRecord(expected, allowDeleted = false) {
+    async assertScanRecord(expected, allowDeleted = false, allowRetained = false) {
       const current = await this.scanRecord(expected);
       const keys = [
         "referenceId",
@@ -3027,7 +3159,7 @@
         "confirmed",
         "origin"
       ];
-      if (!current || expected.generation === undefined || expected.confirmed === undefined || expected.origin === undefined || keys.some((key) => current[key] !== expected[key]) || current.state !== expected.state && !(allowDeleted && current.state === "deleted")) {
+      if (!current || expected.generation === undefined || expected.confirmed === undefined || expected.origin === undefined || keys.some((key) => current[key] !== expected[key]) || current.state !== expected.state && !(allowDeleted && current.state === "deleted") && !(allowRetained && expected.state === "active" && current.state === "retained")) {
         throw new ServiceError({
           code: "STALE_IDENTITY",
           resultKind: "identity",
@@ -3038,7 +3170,7 @@
       return current;
     }
     scanGuard(expected, state) {
-      return this.rawGuard(expected.scope === "chat" ? `SELECT 1 FROM ${CHATS} c JOIN ${ROLES} r USING(role_id) WHERE c.chat_id=? AND c.role_id=? AND r.avatar_name=? AND c.file_name=? AND c.chat_dbid IS ? AND c.parent_char_dbid=? AND c.generation=? AND c.confirmed=? AND c.origin=? AND c.state=?` : `SELECT 1 FROM ${ROLES} WHERE role_id=? AND avatar_name=? AND char_dbid IS ? AND generation=? AND confirmed=? AND origin=? AND state=?`, expected.scope === "chat" ? [
+      return rawGuard(expected.scope === "chat" ? `SELECT 1 FROM ${CHATS} c JOIN ${ROLES} r USING(role_id) WHERE c.chat_id=? AND c.role_id=? AND r.avatar_name=? AND c.file_name=? AND c.chat_dbid IS ? AND c.parent_char_dbid=? AND c.generation=? AND c.confirmed=? AND c.origin=? AND c.state=?` : `SELECT 1 FROM ${ROLES} WHERE role_id=? AND avatar_name=? AND char_dbid IS ? AND generation=? AND confirmed=? AND origin=? AND state=?`, expected.scope === "chat" ? [
         expected.referenceId,
         expected.parentReferenceId,
         expected.avatar,
@@ -3063,89 +3195,304 @@
       return (await this.root.query({ sql: `SELECT 1 FROM ${CHATS} WHERE role_id=? LIMIT 1`, binds: [referenceId] })).rows.length > 0;
     }
     async protectionReferences(target) {
+      await this.entities.ready();
+      return protectionReferences(this.root, target);
+    }
+    async readDeletion(input) {
+      const known = input.expected ? await this.entities.readReference(input.entity, input.chat, input.expected.generation, input.expected.id, input.expected.referenceId) : undefined;
+      if (input.expected && !known)
+        throw new ServiceError({ code: "STALE_IDENTITY", message: "原删除对象已失效。" });
+      const entity = known?.currentEntity ?? input.entity, c = coordinate(entity, input.chat), reference = known?.reference ?? await currentReference(this.root, c), children = [];
+      if (!input.chat)
+        for (const row of await readEntityRows(this.root, `SELECT c.chat_id,r.avatar_name,c.file_name,c.chat_dbid,c.parent_char_dbid,c.generation,c.confirmed,c.origin FROM ${CHATS} c JOIN ${ROLES} r USING(role_id) WHERE r.avatar_name=?`, [c.avatar]))
+          children.push({ entity: JSON.stringify([row[1], row[2]]), reference: chatRow(row) });
+      const credentials = [
+        ...reference ? [{ entity, chat: input.chat, reference }] : [],
+        ...children.map((c) => ({ ...c, chat: true }))
+      ].map((v) => ({
+        entity: v.entity,
+        chat: v.chat,
+        generation: v.reference.generation,
+        id: v.reference.id,
+        referenceId: v.reference.referenceId,
+        ...v.reference.parent ? { parent: v.reference.parent } : {}
+      }));
+      return {
+        entity,
+        ...reference ? { reference } : {},
+        ...!input.chat ? { roleRecordId: await this.entities.roleIdFor(c.avatar) } : {},
+        children,
+        credentials
+      };
+    }
+    async settleDeletion(task, options = {}) {
+      await this.entities.ready();
+      if (task.phase === "invalidated")
+        return;
+      const commands = [], cleanups = [];
+      const candidate = (r, chat) => {
+        if (!r.id)
+          return;
+        const charDbId = chat ? r.parent : r.id, chatDbId = chat ? r.id : undefined;
+        if (cleanups.some((t) => t.scope === (chat ? "chat" : "char") && t.charDbId === charDbId && t.chatDbId === chatDbId))
+          return;
+        cleanups.push({
+          taskId: `${task.taskId}:${chat ? "chat" : "char"}:${charDbId}:${chatDbId ?? ""}`,
+          deletionTaskId: task.taskId,
+          scope: chat ? "chat" : "char",
+          charDbId,
+          ...chatDbId ? { chatDbId } : {},
+          phase: "waiting"
+        });
+      };
+      if (task.reference)
+        commands.push(referenceGuard(coordinate(task.entity, task.chat), task.reference));
+      if (!task.chat)
+        for (const child of task.children)
+          commands.push(referenceGuard(coordinate(child.entity, true), child.reference));
+      if (task.reference) {
+        commands.push({
+          sql: `UPDATE ${task.chat ? CHATS : ROLES} SET state='deleted' WHERE ${task.chat ? "chat_id" : "role_id"}=?`,
+          binds: [task.reference.referenceId]
+        });
+        candidate(task.reference, task.chat);
+      } else if (task.roleRecordId)
+        commands.push({ sql: `UPDATE ${ROLES} SET state='deleted' WHERE role_id=?`, binds: [task.roleRecordId] });
+      if (!task.chat)
+        for (const child of task.children) {
+          commands.push({
+            sql: `UPDATE ${CHATS} SET state=? WHERE chat_id=?`,
+            binds: [
+              task.deleteChats === true && options.childrenDeleted === true ? "deleted" : "retained",
+              child.reference.referenceId
+            ]
+          });
+          candidate(child.reference, true);
+        }
+      if (commands.length)
+        await saveEntities(this.root, commands);
+      return cleanups;
+    }
+    async finishCleanup(task) {
+      const refs = await this.protectionReferences(task);
+      if (refs.active || refs.retained || refs.unconfirmed)
+        throw entityConflict("数据库仍有引用，不能移除记录。");
+      const commands = [];
+      if (task.scope === "chat")
+        commands.push({
+          sql: `DELETE FROM ${CHATS} WHERE parent_char_dbid=? AND chat_dbid=? AND state='deleted'`,
+          binds: [task.charDbId, task.chatDbId]
+        });
+      else
+        commands.push({
+          sql: `DELETE FROM ${ROLES} WHERE char_dbid=? AND state='deleted' AND NOT EXISTS(SELECT 1 FROM ${CHATS} WHERE role_id=${ROLES}.role_id)`,
+          binds: [task.charDbId]
+        });
+      commands.push({
+        sql: `DELETE FROM ${TARGETS} WHERE scope=? AND char_dbid=? AND chat_dbid=?`,
+        binds: [task.scope, task.charDbId, task.chatDbId ?? ""]
+      });
+      if (task.scope === "chat")
+        commands.push({
+          sql: `DELETE FROM ${ROLES} WHERE char_dbid=? AND state='deleted' AND NOT EXISTS(SELECT 1 FROM ${CHATS} WHERE role_id=${ROLES}.role_id) AND (NOT EXISTS(SELECT 1 FROM ${TARGETS} WHERE scope='char' AND char_dbid=?) OR EXISTS(SELECT 1 FROM ${ROLES} other WHERE other.char_dbid=? AND other.state='active'))`,
+          binds: [task.charDbId, task.charDbId, task.charDbId]
+        });
+      await saveEntities(this.root, commands);
+    }
+    async finishDeletion(task) {
+      await this.entities.ready();
+      const rows = [
+        ...task.reference ? [{ reference: task.reference, chat: task.chat }] : [],
+        ...task.children.map((child) => ({ reference: child.reference, chat: true }))
+      ];
+      const commands = [];
+      for (const { reference: r, chat } of rows) {
+        if (!r.id)
+          continue;
+        const refs = await this.protectionReferences({
+          scope: chat ? "chat" : "char",
+          charDbId: chat ? r.parent : r.id,
+          chatDbId: chat ? r.id : undefined
+        });
+        const target = await this.targets.read({
+          scope: chat ? "chat" : "char",
+          charDbId: chat ? r.parent : r.id,
+          ...chat ? { chatDbId: r.id } : {}
+        });
+        if (!target || refs.active || refs.retained)
+          commands.push({
+            sql: chat ? `DELETE FROM ${CHATS} WHERE chat_id=? AND state='deleted'` : `DELETE FROM ${ROLES} WHERE role_id=? AND state='deleted' AND NOT EXISTS(SELECT 1 FROM ${CHATS} WHERE role_id=?)`,
+            binds: chat ? [r.referenceId] : [r.referenceId, r.referenceId]
+          });
+      }
+      if (!task.chat && task.roleRecordId && task.reference?.id) {
+        const refs = await this.protectionReferences({ scope: "char", charDbId: task.reference.id });
+        const target = await this.targets.read({ scope: "char", charDbId: task.reference.id });
+        if (!target || refs.active)
+          commands.push({
+            sql: `DELETE FROM ${ROLES} WHERE role_id=? AND state='deleted' AND NOT EXISTS(SELECT 1 FROM ${CHATS} WHERE role_id=?)`,
+            binds: [task.roleRecordId, task.roleRecordId]
+          });
+      }
+      if (commands.length)
+        await saveEntities(this.root, commands);
+    }
+    async prepareScanDeletion(expected, id, allowRetained, revision) {
+      await this.entities.ready();
+      const current = await this.assertScanRecord(expected, true, allowRetained), entity = expected.scope === "char" ? expected.avatar : JSON.stringify([expected.avatar, expected.file]);
+      const reference = expected.generation > 0 ? {
+        id: expected.id,
+        generation: expected.generation,
+        confirmed: expected.confirmed,
+        origin: expected.origin,
+        referenceId: expected.referenceId,
+        ...expected.scope === "chat" ? { parent: expected.parent } : {}
+      } : undefined;
+      const deletion = {
+        taskId: id,
+        operationId: id,
+        revision,
+        entity,
+        chat: expected.scope === "chat",
+        ...reference ? { reference } : { roleRecordId: expected.referenceId },
+        children: [],
+        credentials: [],
+        phase: "invalidated",
+        version: 1,
+        evidence: { source: "scan-absence" }
+      };
+      if (current.state !== "deleted") {
+        const commands = [
+          this.scanGuard(expected, current.state),
+          {
+            sql: `UPDATE ${expected.scope === "chat" ? CHATS : ROLES} SET state='deleted' WHERE ${expected.scope === "chat" ? "chat_id" : "role_id"}=?`,
+            binds: [expected.referenceId]
+          }
+        ];
+        if (expected.scope === "char")
+          commands.push({
+            sql: `UPDATE ${CHATS} SET state='retained' WHERE role_id=? AND state='active'`,
+            binds: [expected.referenceId]
+          });
+        await saveEntities(this.root, commands);
+      }
+      const cleanup = expected.id ? {
+        taskId: `${id}:${expected.scope}:${expected.id}`,
+        deletionTaskId: id,
+        scope: expected.scope,
+        charDbId: expected.scope === "char" ? expected.id : expected.parent,
+        ...expected.scope === "chat" ? { chatDbId: expected.id } : {},
+        phase: "waiting"
+      } : undefined;
+      return { deletion, ...cleanup ? { cleanup } : {} };
+    }
+    async removeOrphanTarget(target) {
+      await this.entities.ready();
+      const key = [target.scope, target.charDbId, target.chatDbId ?? ""];
+      try {
+        await saveEntities(this.root, [
+          rawGuard(`SELECT 1 FROM ${TARGETS} WHERE scope=? AND char_dbid=? AND chat_dbid=? AND origin=? AND state=? AND NOT EXISTS(SELECT 1 FROM ${ROLES} WHERE ?='char' AND lower(char_dbid)=lower(?)) AND NOT EXISTS(SELECT 1 FROM ${CHATS} WHERE ?='chat' AND lower(parent_char_dbid)=lower(?) AND lower(chat_dbid)=lower(?))`, [
+            ...key,
+            target.origin,
+            target.state,
+            target.scope,
+            target.charDbId,
+            target.scope,
+            target.charDbId,
+            target.chatDbId ?? ""
+          ]),
+          { sql: `DELETE FROM ${TARGETS} WHERE scope=? AND char_dbid=? AND chat_dbid=?`, binds: key }
+        ]);
+        return true;
+      } catch (error) {
+        if (errorData(error).code === "IDENTITY_CONFLICT")
+          return false;
+        throw error;
+      }
+    }
+    async purgeScanRecord(expected) {
+      await this.entities.ready();
+      if (!await this.scanRecord(expected))
+        return;
+      const commands = [this.scanGuard(expected, "deleted")];
+      if (expected.scope === "char")
+        commands.push(rawGuard(`SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM ${CHATS} WHERE role_id=?)`, [expected.referenceId]));
+      commands.push({
+        sql: `DELETE FROM ${expected.scope === "chat" ? CHATS : ROLES} WHERE ${expected.scope === "chat" ? "chat_id" : "role_id"}=?`,
+        binds: [expected.referenceId]
+      });
+      if (expected.id)
+        commands.push({
+          sql: expected.scope === "chat" ? `DELETE FROM ${TARGETS} WHERE scope='chat' AND char_dbid=? AND chat_dbid=? AND NOT EXISTS(SELECT 1 FROM ${CHATS} WHERE parent_char_dbid=? AND chat_dbid=?)` : `DELETE FROM ${TARGETS} WHERE scope='char' AND char_dbid=? AND NOT EXISTS(SELECT 1 FROM ${ROLES} WHERE char_dbid=?)`,
+          binds: expected.scope === "chat" ? [expected.parent, expected.id, expected.parent, expected.id] : [expected.id, expected.id]
+        });
+      await saveEntities(this.root, commands);
+    }
+  }
+
+  // src/worker/entity-records.ts
+  var invalid4 = (message) => new ServiceError({ code: "INVALID_REQUEST", message });
+  var damaged3 = (message) => new ServiceError({ code: "LOAD_FAILED", message });
+  function assertKey(key) {
+    if (typeof key !== "string" || !key.trim() || key.length > 4096 || key.includes("\x00"))
+      throw invalid4("实体记录键必须是 1—4096 字符的非空字符串，不能包含空字符。");
+  }
+
+  class RootEntities {
+    root;
+    cleanupWaiting;
+    targets;
+    deletions;
+    constructor(root, targets, cleanupWaiting = () => false) {
+      this.root = root;
+      this.cleanupWaiting = cleanupWaiting;
+      this.targets = targets ?? new RootTargets(root);
+      this.deletions = new DeletionRecords(root, this.targets, this);
+    }
+    async ready() {
+      await this.targets.ready();
+    }
+    hasManagement() {
+      return this.targets.hasManagement();
+    }
+    async roleIdFor(avatar) {
       await this.ready();
-      const chat = target.scope === "chat";
-      const rows = (await this.root.query({
-        sql: chat ? `SELECT SUM(CASE WHEN state='active' AND confirmed=1 THEN 1 ELSE 0 END),SUM(CASE WHEN state='retained' THEN 1 ELSE 0 END),SUM(CASE WHEN state<>'deleted' AND confirmed=0 THEN 1 ELSE 0 END) FROM ${CHATS} WHERE parent_char_dbid=? AND chat_dbid=?` : `SELECT SUM(CASE WHEN state='active' AND confirmed=1 THEN 1 ELSE 0 END),0,SUM(CASE WHEN state='active' AND confirmed=0 THEN 1 ELSE 0 END) FROM ${ROLES} WHERE char_dbid=?`,
-        binds: chat ? [target.charDbId, target.chatDbId] : [target.charDbId]
-      })).rows[0];
-      return { active: Number(rows?.[0] ?? 0), retained: Number(rows?.[1] ?? 0), unconfirmed: Number(rows?.[2] ?? 0) };
+      const rows = await readEntityRows(this.root, `SELECT role_id FROM ${ROLES} WHERE avatar_name=?`, [avatar]);
+      if (rows.length > 1)
+        throw damaged3("当前角色文件名对应多个有效记录。");
+      return rows[0] ? Number(rows[0][0]) : undefined;
+    }
+    async referenceInfo(entity, chat) {
+      await this.ready();
+      const reference = await currentReference(this.root, coordinate(entity, chat));
+      return reference ? { referenceId: reference.referenceId, entity, reference } : undefined;
+    }
+    sameReference(a, b) {
+      return a.id === b.id && a.generation === b.generation && a.confirmed === b.confirmed && a.origin === b.origin && a.parent === b.parent && (b.referenceId === undefined || a.referenceId === b.referenceId);
     }
     async get(key) {
       assertKey(key);
       await this.ready();
       const c = parseEntityKey(key);
-      return c ? await this.current(c) : structuredClone(this.processes.get(key));
-    }
-    async listExisting(prefix) {
-      return this.jsonPrefixRows(prefix);
-    }
-    async list(prefix) {
-      await this.ready();
-      const result = await this.jsonPrefixRows(prefix);
-      if ("role:".startsWith(prefix) || prefix.startsWith("role:"))
-        for (const row of await this.readRows(`SELECT role_id,avatar_name,char_dbid,generation,confirmed,origin FROM ${ROLES} WHERE generation>0`, [])) {
-          const key = entityKey({ chat: false, avatar: String(row[1]) });
-          if (key.startsWith(prefix))
-            result.push({ key, value: this.roleRow(row) });
-        }
-      if ("chat:".startsWith(prefix) || prefix.startsWith("chat:"))
-        for (const row of await this.readRows(`SELECT c.chat_id,r.avatar_name,c.file_name,c.chat_dbid,c.parent_char_dbid,c.generation,c.confirmed,c.origin FROM ${CHATS} c JOIN ${ROLES} r USING(role_id)`, [])) {
-          const key = entityKey({ chat: true, avatar: String(row[1]), file: String(row[2]) });
-          if (key.startsWith(prefix))
-            result.push({ key, value: this.chatRow(row) });
-        }
-      return result.sort((a, b) => a.key.localeCompare(b.key));
-    }
-    async jsonPrefixRows(prefix) {
-      return Array.from(this.processes).filter(([key]) => key.startsWith(prefix)).map(([key, value]) => ({ key, value: structuredClone(value) }));
-    }
-    async currentCopy(avatar) {
-      const id = await this.roleIdFor(avatar);
-      return (await this.jsonPrefixRows("copy:")).find(({ value }) => value.state === "active" && (id !== undefined ? value.newReferenceId === id : value.newReferenceId === undefined && (value.currentNewAvatar ?? value.newAvatar) === avatar))?.value;
-    }
-    async copyIsCurrent(task) {
-      if (task.state === "deleted")
-        return false;
-      return task.newReferenceId === undefined ? task.state === "active" : await this.roleIdFor(task.currentNewAvatar ?? task.newAvatar) === task.newReferenceId;
+      if (!c)
+        throw invalid4("只支持角色或聊天引用记录。");
+      return await currentReference(this.root, c);
     }
     async readReference(entity, chat, generation, id, referenceId) {
       await this.ready();
       let reference, currentEntity = entity;
       if (referenceId !== undefined) {
-        const rows = chat ? await this.readRows(`SELECT c.chat_id,r.avatar_name,c.file_name,c.chat_dbid,c.parent_char_dbid,c.generation,c.confirmed,c.origin FROM ${CHATS} c JOIN ${ROLES} r USING(role_id) WHERE c.chat_id=?`, [referenceId]) : await this.readRows(`SELECT role_id,avatar_name,char_dbid,generation,confirmed,origin FROM ${ROLES} WHERE role_id=? AND generation>0`, [referenceId]);
+        const rows = chat ? await readEntityRows(this.root, `SELECT c.chat_id,r.avatar_name,c.file_name,c.chat_dbid,c.parent_char_dbid,c.generation,c.confirmed,c.origin FROM ${CHATS} c JOIN ${ROLES} r USING(role_id) WHERE c.chat_id=?`, [referenceId]) : await readEntityRows(this.root, `SELECT role_id,avatar_name,char_dbid,generation,confirmed,origin FROM ${ROLES} WHERE role_id=? AND generation>0`, [referenceId]);
         const row = rows[0];
         if (!row)
           return;
-        reference = chat ? this.chatRow(row) : this.roleRow(row);
+        reference = chat ? chatRow(row) : roleRow(row);
         currentEntity = chat ? JSON.stringify([row[1], row[2]]) : String(row[1]);
       } else
-        reference = await this.current(coordinate(entity, chat));
+        reference = await currentReference(this.root, coordinate(entity, chat));
       if (!reference || generation !== undefined && reference.generation !== generation || id !== undefined && reference.id !== id)
         return;
       return { reference, currentEntity };
-    }
-    conflict(message) {
-      return new ServiceError({ code: "IDENTITY_CONFLICT", message });
-    }
-    rawGuard(sql, binds) {
-      return { sql: `INSERT INTO ${META}(key,value) SELECT NULL,'null' WHERE NOT EXISTS(${sql})`, binds };
-    }
-    guard(sql, binds) {
-      return this.rawGuard(this.activeSql(sql), binds);
-    }
-    referenceGuard(c, r) {
-      return this.guard(c.chat ? `SELECT 1 FROM ${CHATS} c JOIN ${ROLES} r USING(role_id) WHERE c.chat_id=? AND c.chat_dbid IS ? AND c.parent_char_dbid=? AND c.generation=? AND c.confirmed=? AND c.origin=?` : `SELECT 1 FROM ${ROLES} WHERE role_id=? AND char_dbid IS ? AND generation=? AND confirmed=? AND origin=?`, c.chat ? [r.referenceId, r.id, r.parent, r.generation, Number(r.confirmed), r.origin] : [r.referenceId, r.id, r.generation, Number(r.confirmed), r.origin]);
-    }
-    async save(commands) {
-      try {
-        await this.root.transaction(commands, undefined, { management: true });
-      } catch (error) {
-        const data = errorData(error);
-        if (data.code === "SQL_FAILED" && (data.sqlError?.message?.includes(`${META}.key`) || data.sqlError?.message?.startsWith("UNIQUE constraint failed:")))
-          throw this.conflict("对象记录已改变，拒绝覆盖当前事实。");
-        throw error;
-      }
     }
     async put(key, value, expected = null) {
       assertKey(key);
@@ -3153,37 +3500,23 @@
       const c = parseEntityKey(key);
       if (c)
         return this.putReference(c, validateReference(value, c.chat), expected === null ? null : validateReference(expected, c.chat));
-      const next = encode(value), old = this.processes.get(key);
-      if (old && encode(old) === next)
-        return;
-      if (expected === null ? old !== undefined : old === undefined || encode(old) !== encode(expected))
-        throw this.conflict("当前事件信息已改变。");
-      this.processes.set(key, JSON.parse(next));
-    }
-    async forgetRecord(key) {
-      this.processes.delete(key);
-    }
-    async forgetDeletion(taskId) {
-      this.deletions.delete(taskId);
-      for (const [key, value] of this.cleanups)
-        if (value.deletionTaskId === taskId)
-          this.cleanups.delete(key);
+      throw invalid4("只支持角色或聊天引用记录。");
     }
     async putReference(c, value, expected) {
-      const old = await this.current(c);
+      const old = await currentReference(this.root, c);
       if (old && this.sameReference(old, value))
         return;
       if (expected ? !old || !this.sameReference(old, expected) : !!old)
-        throw this.conflict("当前文件引用已改变。");
+        throw entityConflict("当前文件引用已改变。");
       if (value.referenceId !== undefined && value.referenceId !== old?.referenceId || old && value.generation < old.generation)
-        throw this.conflict("对象编号或身份版本不匹配。");
-      if (value.id && await this.isTargetReserved({
+        throw entityConflict("对象编号或身份版本不匹配。");
+      if (value.id && this.cleanupWaiting({
         scope: c.chat ? "chat" : "char",
         charDbId: c.chat ? value.parent : value.id,
         chatDbId: c.chat ? value.id : undefined
       }))
-        throw this.conflict("数据库正在清理。");
-      const commands = old ? [this.referenceGuard(c, old)] : [];
+        throw entityConflict("数据库正在清理。");
+      const commands = old ? [referenceGuard(c, old)] : [];
       if (c.chat) {
         commands.push({
           sql: `INSERT INTO ${ROLES}(avatar_name,char_dbid,generation,confirmed,origin) SELECT ?,NULL,0,0,'legacy' WHERE NOT EXISTS(SELECT 1 FROM ${ACTIVE_ROLES} WHERE avatar_name=?)`,
@@ -3219,20 +3552,15 @@
           sql: `INSERT INTO ${ROLES}(avatar_name,char_dbid,generation,confirmed,origin) VALUES(?,?,?,?,?) ON CONFLICT(avatar_name) WHERE state='active' DO UPDATE SET char_dbid=excluded.char_dbid,generation=excluded.generation,confirmed=excluded.confirmed,origin=excluded.origin WHERE generation=0`,
           binds: [c.avatar, value.id, value.generation, Number(value.confirmed), value.origin]
         });
-      await this.save(commands);
-      const actual = await this.current(c);
+      await saveEntities(this.root, commands);
+      const actual = await currentReference(this.root, c);
       if (!actual || !this.sameReference(actual, value))
-        throw damaged2("对象保存后读回不一致。");
-      if (!c.chat) {
-        for (const [key, task] of this.processes)
-          if (key.startsWith("copy:") && task.state === "active" && task.newReferenceId === undefined && (task.currentNewAvatar ?? task.newAvatar) === c.avatar)
-            this.processes.set(key, { ...task, newReferenceId: actual.referenceId });
-      }
+        throw damaged3("对象保存后读回不一致。");
     }
     async confirmUnknownRename(next, chat, observed) {
       await this.ready();
       await this.putReference(coordinate(next, chat), validateReference(observed, chat), null);
-      return await this.current(coordinate(next, chat));
+      return await currentReference(this.root, coordinate(next, chat));
     }
     async renameRole(old, next, expected) {
       return this.rename(old, next, false, expected);
@@ -3243,318 +3571,74 @@
     async rename(old, next, chat, expected) {
       await this.ready();
       if (!expected.referenceId)
-        throw invalid3("改名需要固定对象编号。");
+        throw invalid4("改名需要固定对象编号。");
       const c = coordinate(old, chat), n = coordinate(next, chat);
       if (chat && c.avatar !== n.avatar)
-        throw invalid3("聊天改名不能改变角色。");
+        throw invalid4("聊天改名不能改变角色。");
       const known = await this.readReference(old, chat, expected.generation, expected.id, expected.referenceId);
       if (!known)
-        throw this.conflict("原对象已失效。");
+        throw entityConflict("原对象已失效。");
       if (known.currentEntity === next)
         return known.reference;
       if (known.currentEntity !== old)
-        throw this.conflict("对象已改为其他名称。");
-      await this.save([
-        this.referenceGuard(c, expected),
+        throw entityConflict("对象已改为其他名称。");
+      await saveEntities(this.root, [
+        referenceGuard(c, expected),
         {
           sql: chat ? `UPDATE ${CHATS} SET file_name=? WHERE chat_id=?` : `UPDATE ${ROLES} SET avatar_name=? WHERE role_id=?`,
           binds: [chat ? n.file : n.avatar, expected.referenceId]
         }
       ]);
-      if (!chat) {
-        for (const [key, task] of this.processes)
-          if (key.startsWith("copy:")) {
-            const value = { ...task };
-            for (const side of ["Old", "New"])
-              if (task[`${side.toLowerCase()}ReferenceId`] === expected.referenceId)
-                value[`current${side}Avatar`] = next;
-            this.processes.set(key, value);
-          }
-      }
-      return await this.current(n);
-    }
-    async entityRevisionExisting() {
-      return this.revision;
-    }
-    ensureRevision(minimum) {
-      this.revision = Math.max(this.revision, minimum);
-    }
-    async listDeletionsExisting() {
-      return structuredClone(Array.from(this.deletions.values()));
-    }
-    async listCleanupsExisting() {
-      return structuredClone(Array.from(this.cleanups.values()));
-    }
-    async listCleanupsForDeletion(id) {
-      return (await this.listCleanupsExisting()).filter((t) => t.deletionTaskId === id);
-    }
-    async hasDeletedCoordinate(entity, chat, generation, capturedRevision) {
-      const c = coordinate(entity, chat);
-      return Array.from(this.deletions.values()).some((t) => t.phase !== "cancelled" && t.revision > (capturedRevision ?? -1) && (t.entity === entity && t.chat === chat || chat && !t.chat && t.entity === c.avatar) && (generation === undefined || t.reference?.generation === generation));
-    }
-    async isTargetReserved(target) {
-      return Array.from(this.cleanups.values()).some((t) => t.scope === target.scope && t.charDbId === target.charDbId && t.chatDbId === target.chatDbId && t.phase === "waiting");
-    }
-    async beginDeletion(input) {
-      await this.ready();
-      const previous = this.deletions.get(input.operationId);
-      if (previous)
-        return structuredClone(previous);
-      const known = input.expected ? await this.readReference(input.entity, input.chat, input.expected.generation, input.expected.id, input.expected.referenceId) : undefined;
-      if (input.expected && !known)
-        throw new ServiceError({ code: "STALE_IDENTITY", message: "原删除对象已失效。" });
-      const entity = known?.currentEntity ?? input.entity, c = coordinate(entity, input.chat), reference = known?.reference ?? await this.current(c), children = [];
-      if (!input.chat)
-        for (const row of await this.readRows(`SELECT c.chat_id,r.avatar_name,c.file_name,c.chat_dbid,c.parent_char_dbid,c.generation,c.confirmed,c.origin FROM ${CHATS} c JOIN ${ROLES} r USING(role_id) WHERE r.avatar_name=?`, [c.avatar]))
-          children.push({ entity: JSON.stringify([row[1], row[2]]), reference: this.chatRow(row) });
-      const credentials = [
-        ...reference ? [{ entity, chat: input.chat, reference }] : [],
-        ...children.map((c) => ({ ...c, chat: true }))
-      ].map((v) => ({
-        entity: v.entity,
-        chat: v.chat,
-        generation: v.reference.generation,
-        id: v.reference.id,
-        referenceId: v.reference.referenceId,
-        ...v.reference.parent ? { parent: v.reference.parent } : {}
-      }));
-      const copyTaskIds = input.chat ? [] : [...this.processes].filter(([key, value]) => key.startsWith("copy:") && (value.currentNewAvatar ?? value.newAvatar) === c.avatar && (value.newReferenceId === undefined || value.newReferenceId === reference?.referenceId)).map(([key]) => key.slice(5));
-      const task = {
-        ...input,
-        taskId: input.operationId,
-        revision: ++this.revision,
-        entity,
-        ...copyTaskIds.length ? { copyTaskIds } : {},
-        ...reference ? { reference } : {},
-        ...!input.chat ? { roleRecordId: await this.roleIdFor(c.avatar) } : {},
-        children,
-        credentials,
-        phase: "observed",
-        version: 1
-      };
-      delete task.expected;
-      this.deletions.set(task.taskId, task);
-      return structuredClone(task);
-    }
-    async updateDeletion(task, phase, reason, evidence = task.evidence) {
-      const next = { ...task, phase, version: task.version + 1, ...evidence ? { evidence } : {} };
-      delete next.reason;
-      if (reason)
-        next.reason = reason;
-      this.deletions.set(task.taskId, next);
-      return structuredClone(next);
-    }
-    async settleDeletion(task, options = {}) {
-      await this.ready();
-      if (task.phase === "invalidated")
-        return { deletion: task, cleanups: await this.listCleanupsForDeletion(task.taskId) };
-      const commands = [], cleanups = [];
-      const candidate = (r, chat) => {
-        if (!r.id)
-          return;
-        const charDbId = chat ? r.parent : r.id, chatDbId = chat ? r.id : undefined;
-        if (cleanups.some((t) => t.scope === (chat ? "chat" : "char") && t.charDbId === charDbId && t.chatDbId === chatDbId))
-          return;
-        cleanups.push({
-          taskId: `${task.taskId}:${chat ? "chat" : "char"}:${charDbId}:${chatDbId ?? ""}`,
-          deletionTaskId: task.taskId,
-          scope: chat ? "chat" : "char",
-          charDbId,
-          ...chatDbId ? { chatDbId } : {},
-          phase: "waiting"
-        });
-      };
-      if (task.reference)
-        commands.push(this.referenceGuard(coordinate(task.entity, task.chat), task.reference));
-      if (!task.chat)
-        for (const child of task.children)
-          commands.push(this.referenceGuard(coordinate(child.entity, true), child.reference));
-      if (task.reference) {
-        commands.push({
-          sql: `UPDATE ${task.chat ? CHATS : ROLES} SET state='deleted' WHERE ${task.chat ? "chat_id" : "role_id"}=?`,
-          binds: [task.reference.referenceId]
-        });
-        candidate(task.reference, task.chat);
-      } else if (task.roleRecordId)
-        commands.push({ sql: `UPDATE ${ROLES} SET state='deleted' WHERE role_id=?`, binds: [task.roleRecordId] });
-      if (!task.chat)
-        for (const child of task.children) {
-          commands.push({
-            sql: `UPDATE ${CHATS} SET state=? WHERE chat_id=?`,
-            binds: [
-              task.deleteChats === true && options.childrenDeleted === true ? "deleted" : "retained",
-              child.reference.referenceId
-            ]
-          });
-          candidate(child.reference, true);
-        }
-      if (commands.length)
-        await this.save(commands);
-      for (const id of task.copyTaskIds ?? [])
-        this.processes.delete(`copy:${id}`);
-      const deletion = await this.updateDeletion(task, "invalidated", options.reason);
-      for (const t of cleanups)
-        this.cleanups.set(t.taskId, t);
-      return { deletion, cleanups };
-    }
-    async updateCleanup(task, phase, reason) {
-      const next = { ...task, phase };
-      delete next.reason;
-      if (reason)
-        next.reason = reason;
-      if (["done", "retained", "blocked"].includes(phase))
-        this.cleanups.delete(task.taskId);
-      else
-        this.cleanups.set(task.taskId, next);
-      return next;
-    }
-    async finishCleanup(task) {
-      const refs = await this.protectionReferences(task);
-      if (refs.active || refs.retained || refs.unconfirmed)
-        throw this.conflict("数据库仍有引用，不能移除记录。");
-      const commands = [];
-      if (task.scope === "chat")
-        commands.push({
-          sql: `DELETE FROM ${CHATS} WHERE parent_char_dbid=? AND chat_dbid=? AND state='deleted'`,
-          binds: [task.charDbId, task.chatDbId]
-        });
-      else
-        commands.push({
-          sql: `DELETE FROM ${ROLES} WHERE char_dbid=? AND state='deleted' AND NOT EXISTS(SELECT 1 FROM ${CHATS} WHERE role_id=${ROLES}.role_id)`,
-          binds: [task.charDbId]
-        });
-      commands.push({
-        sql: `DELETE FROM ${TARGETS} WHERE scope=? AND char_dbid=? AND chat_dbid=?`,
-        binds: [task.scope, task.charDbId, task.chatDbId ?? ""]
-      });
-      if (task.scope === "chat")
-        commands.push({
-          sql: `DELETE FROM ${ROLES} WHERE char_dbid=? AND state='deleted' AND NOT EXISTS(SELECT 1 FROM ${CHATS} WHERE role_id=${ROLES}.role_id) AND (NOT EXISTS(SELECT 1 FROM ${TARGETS} WHERE scope='char' AND char_dbid=?) OR EXISTS(SELECT 1 FROM ${ROLES} other WHERE other.char_dbid=? AND other.state='active'))`,
-          binds: [task.charDbId, task.charDbId, task.charDbId]
-        });
-      await this.save(commands);
-    }
-    async finishDeletion(task) {
-      await this.ready();
-      const rows = [
-        ...task.reference ? [{ reference: task.reference, chat: task.chat }] : [],
-        ...task.children.map((child) => ({ reference: child.reference, chat: true }))
-      ];
-      const commands = [];
-      for (const { reference: r, chat } of rows) {
-        if (!r.id)
-          continue;
-        const refs = await this.protectionReferences({
-          scope: chat ? "chat" : "char",
-          charDbId: chat ? r.parent : r.id,
-          chatDbId: chat ? r.id : undefined
-        });
-        const target = await this.targets.read({
-          scope: chat ? "chat" : "char",
-          charDbId: chat ? r.parent : r.id,
-          ...chat ? { chatDbId: r.id } : {}
-        });
-        if (!target || refs.active || refs.retained)
-          commands.push({
-            sql: chat ? `DELETE FROM ${CHATS} WHERE chat_id=? AND state='deleted'` : `DELETE FROM ${ROLES} WHERE role_id=? AND state='deleted' AND NOT EXISTS(SELECT 1 FROM ${CHATS} WHERE role_id=?)`,
-            binds: chat ? [r.referenceId] : [r.referenceId, r.referenceId]
-          });
-      }
-      if (!task.chat && task.roleRecordId && task.reference?.id) {
-        const refs = await this.protectionReferences({ scope: "char", charDbId: task.reference.id });
-        const target = await this.targets.read({
-          scope: "char",
-          charDbId: task.reference.id
-        });
-        if (!target || refs.active)
-          commands.push({
-            sql: `DELETE FROM ${ROLES} WHERE role_id=? AND state='deleted' AND NOT EXISTS(SELECT 1 FROM ${CHATS} WHERE role_id=?)`,
-            binds: [task.roleRecordId, task.roleRecordId]
-          });
-      }
-      if (commands.length)
-        await this.save(commands);
-    }
-    async prepareScanDeletion(expected, id) {
-      await this.ready();
-      const current = await this.assertScanRecord(expected, true), entity = expected.scope === "char" ? expected.avatar : JSON.stringify([expected.avatar, expected.file]);
-      const reference = expected.generation > 0 ? {
-        id: expected.id,
-        generation: expected.generation,
-        confirmed: expected.confirmed,
-        origin: expected.origin,
-        referenceId: expected.referenceId,
-        ...expected.scope === "chat" ? { parent: expected.parent } : {}
-      } : undefined;
-      const deletion = {
-        taskId: id,
-        operationId: id,
-        revision: ++this.revision,
-        entity,
-        chat: expected.scope === "chat",
-        ...reference ? { reference } : { roleRecordId: expected.referenceId },
-        children: [],
-        credentials: [],
-        phase: "invalidated",
-        version: 1,
-        evidence: { source: "scan-absence" }
-      };
-      if (current.state !== "deleted") {
-        const commands = [
-          this.scanGuard(expected, current.state),
-          {
-            sql: `UPDATE ${expected.scope === "chat" ? CHATS : ROLES} SET state='deleted' WHERE ${expected.scope === "chat" ? "chat_id" : "role_id"}=?`,
-            binds: [expected.referenceId]
-          }
-        ];
-        if (expected.scope === "char")
-          commands.push({
-            sql: `UPDATE ${CHATS} SET state='retained' WHERE role_id=? AND state='active'`,
-            binds: [expected.referenceId]
-          });
-        await this.save(commands);
-      }
-      this.deletions.set(id, deletion);
-      let cleanup;
-      if (expected.id) {
-        cleanup = {
-          taskId: `${id}:${expected.scope}:${expected.id}`,
-          deletionTaskId: id,
-          scope: expected.scope,
-          charDbId: expected.scope === "char" ? expected.id : expected.parent,
-          ...expected.scope === "chat" ? { chatDbId: expected.id } : {},
-          phase: "waiting"
-        };
-        this.cleanups.set(cleanup.taskId, cleanup);
-      }
-      return { deletion, ...cleanup ? { cleanup } : {} };
-    }
-    async purgeScanRecord(expected) {
-      await this.ready();
-      if (!await this.scanRecord(expected))
-        return;
-      const commands = [this.scanGuard(expected, "deleted")];
-      if (expected.scope === "char")
-        commands.push(this.rawGuard(`SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM ${CHATS} WHERE role_id=?)`, [expected.referenceId]));
-      commands.push({
-        sql: `DELETE FROM ${expected.scope === "chat" ? CHATS : ROLES} WHERE ${expected.scope === "chat" ? "chat_id" : "role_id"}=?`,
-        binds: [expected.referenceId]
-      });
-      if (expected.id)
-        commands.push({
-          sql: expected.scope === "chat" ? `DELETE FROM ${TARGETS} WHERE scope='chat' AND char_dbid=? AND chat_dbid=? AND NOT EXISTS(SELECT 1 FROM ${CHATS} WHERE parent_char_dbid=? AND chat_dbid=?)` : `DELETE FROM ${TARGETS} WHERE scope='char' AND char_dbid=? AND NOT EXISTS(SELECT 1 FROM ${ROLES} WHERE char_dbid=?)`,
-          binds: expected.scope === "chat" ? [expected.parent, expected.id, expected.parent, expected.id] : [expected.id, expected.id]
-        });
-      await this.save(commands);
+      return await currentReference(this.root, n);
     }
   }
 
+  // src/scan-contracts.ts
+  function scanEntryHasBasis(relativePath, kind, facts) {
+    const part = parseDatabasePath(relativePath, kind);
+    if (!part)
+      return false;
+    if (part.kind === "global" || part.kind === "characters")
+      return true;
+    const char = part.charDbId;
+    const roles = new Set(facts.roles.map((id) => id.toLowerCase()));
+    const chats = new Set(facts.chats.map(([parent, id]) => `${parent.toLowerCase()}/${id.toLowerCase()}`));
+    const target = (scope, charDbId, chatDbId) => facts.targets.some((t) => t.scope === scope && t.charDbId.toLowerCase() === charDbId && (scope === "char" || (t.chatDbId ?? "").toLowerCase() === chatDbId));
+    if (part.kind === "character" || part.kind === "chats")
+      return roles.has(char) || facts.chatParents.some((parent) => parent.toLowerCase() === char) || facts.targets.some((t) => t.charDbId.toLowerCase() === char);
+    if (part.kind === "char")
+      return roles.has(char) || target("char", char);
+    return chats.has(`${char}/${part.chatDbId}`) || target("chat", char, part.chatDbId);
+  }
+
   // src/worker/storage-coordinator.ts
-  function validateConfiguration(value) {
-    const handle = (h) => h?.kind === "directory" && typeof h.getFileHandle === "function" && typeof h.isSameEntry === "function";
-    if (!value || !handle(value.directory) || typeof value.storageId !== "string" || !value.storageId || !Number.isSafeInteger(value.configGeneration) || value.configGeneration < 1 || !Array.isArray(value.spaces) || value.spaces.length === 0 || value.mode !== undefined && !["opfs", "directory"].includes(value.mode) || value.autoReloadEnabled !== undefined && typeof value.autoReloadEnabled !== "boolean" || value.spaces.some((s) => !s || typeof s.storageId !== "string" || !s.storageId || !handle(s.directory) || s.mode !== undefined && !["opfs", "directory"].includes(s.mode)) || value.savedDirectory !== undefined && (!handle(value.savedDirectory.directory) || (value.savedDirectory.mode ?? "directory") !== "directory" || !value.spaces.some((s) => s.storageId === value.savedDirectory.storageId && (s.mode ?? "directory") === "directory")) || new Set(value.spaces.map((s) => s.storageId)).size !== value.spaces.length || !value.spaces.some((s) => s.storageId === value.storageId)) {
-      throw new ServiceError({ code: "CONFIG_FAILED", message: "已保存目录配置无效，拒绝静默替换存储身份。" });
-    }
+  function validateScopedTarget(binding) {
+    if (!["char", "chat"].includes(binding.scope ?? ""))
+      throw new ServiceError({
+        code: "INVALID_REQUEST",
+        failureKind: "request-rejected",
+        message: "身份记录需要 char 或 chat 目标。"
+      });
+    if (!isUuid(binding.charDbId))
+      throw new ServiceError({
+        code: "INVALID_REQUEST",
+        failureKind: "request-rejected",
+        message: "角色目标需要有效 UUID。"
+      });
+    if (binding.scope === "chat" ? !isUuid(binding.chatDbId) : binding.chatDbId !== undefined)
+      throw new ServiceError({
+        code: "INVALID_REQUEST",
+        failureKind: "request-rejected",
+        message: "聊天目标需要有效 UUID，char 目标不接受聊天身份。"
+      });
+  }
+  function validateGlobalTarget(binding) {
+    if (binding.charDbId !== undefined || binding.chatDbId !== undefined)
+      throw new ServiceError({
+        code: "INVALID_REQUEST",
+        failureKind: "request-rejected",
+        message: "global 目标不接受角色或聊天身份。"
+      });
   }
 
   class StorageCoordinator {
@@ -3576,33 +3660,14 @@
     targets;
     beforeScopedExecution;
     beforeConfigurationChange;
-    onRootLoaded;
+    cleanupWaiting;
     onBackgroundSaveFailed;
     permission;
     switching = false;
     revision = 0;
     lastError;
     restored;
-    constructor(repository, createDatabase, changed = () => {}, getOpfsDirectory = async () => {
-      if (typeof navigator === "undefined" || typeof navigator.storage?.getDirectory !== "function")
-        throw new ServiceError({
-          code: "UNSUPPORTED_ENVIRONMENT",
-          message: "当前浏览器没有可用的 OPFS，游玩模式无法启动。"
-        });
-      if (typeof FileSystemFileHandle === "undefined" || typeof FileSystemFileHandle.prototype.createWritable !== "function")
-        throw new ServiceError({
-          code: "UNSUPPORTED_ENVIRONMENT",
-          message: "当前浏览器未提供 OPFS 异步文件写入接口，游玩模式无法启动。"
-        });
-      try {
-        return await (await navigator.storage.getDirectory()).getDirectoryHandle("st-sqlite-helper", { create: true });
-      } catch (error) {
-        throw new ServiceError({
-          code: "LOAD_FAILED",
-          message: `无法取得游玩模式的浏览器存储：${errorData(error).message}`
-        });
-      }
-    }) {
+    constructor(repository, createDatabase, changed = () => {}, getOpfsDirectory = opfsDirectory) {
       this.repository = repository;
       this.createDatabase = createDatabase;
       this.changed = changed;
@@ -3686,7 +3751,7 @@
     async loadDatabase() {
       if (this.database) {
         await this.database.refresh();
-        await this.rootLoaded(this.database, this.configuration, this.targets);
+        await this.rootLoaded(this.database, this.targets);
         return;
       }
       const candidate = await this.createDatabase(this.configuration.directory, undefined, this.mode);
@@ -3695,7 +3760,7 @@
         this.bindDatabase(candidate, this.configuration);
         this.database = candidate;
         this.targets = new RootTargets(candidate);
-        await this.rootLoaded(candidate, this.configuration, this.targets);
+        await this.rootLoaded(candidate, this.targets);
       } catch (error) {
         await candidate.close();
         throw error;
@@ -3726,11 +3791,10 @@
       for (const db of databases)
         await db.close();
     }
-    async rootLoaded(db, binding, targets = new RootTargets(db)) {
+    async rootLoaded(db, targets = new RootTargets(db)) {
       try {
         await targets.validateExisting();
         targets.invalidate();
-        await this.onRootLoaded?.(new RootEntities(db, targets), binding);
       } catch (error) {
         await db.close();
         throw error;
@@ -3764,6 +3828,22 @@
     admit() {
       if (this.switching)
         throw new ServiceError({ code: "CONFIG_CHANGING", message: "目录切换正在排空已接收操作，请等待完成。" });
+    }
+    queueChecked(binding, task) {
+      const captured = { ...binding };
+      return this.enqueue(async () => {
+        this.checkBinding(captured);
+        await this.requirePermission();
+        return task(captured);
+      });
+    }
+    admitted(binding, task) {
+      try {
+        this.admit();
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      return this.queueChecked(binding, task);
     }
     getStatus() {
       return this.enqueue(async () => {
@@ -3844,7 +3924,7 @@
               else
                 await candidate.open();
             }
-            await this.rootLoaded(candidate, { storageId, configGeneration }, same ? this.targets : undefined);
+            await this.rootLoaded(candidate, same ? this.targets : undefined);
           }
           if (old && !same)
             this.beforeConfigurationChange?.();
@@ -3889,29 +3969,13 @@
       });
     }
     validateIdentityBinding(binding) {
-      try {
-        this.admit();
-      } catch (error) {
-        return Promise.reject(error);
-      }
-      return this.enqueue(async () => {
-        this.checkBinding(binding);
-        await this.requirePermission();
-      });
+      return this.admitted(binding, async () => {});
     }
     manageEntities(binding, task, readOnly = false) {
-      try {
-        this.admit();
-      } catch (error) {
-        return Promise.reject(error);
-      }
-      const captured = { ...binding };
-      return this.enqueue(async () => {
-        this.checkBinding(captured);
-        await this.requirePermission();
+      return this.admitted(binding, async (captured) => {
         if (!this.database || !this.targets)
           throw new ServiceError({ code: "INSTANCE_DISABLED", message: "root 文件尚未恢复。" });
-        return task(new RootEntities(this.database, readOnly ? new RootTargets(this.database, true) : this.targets));
+        return task(new RootEntities(this.database, readOnly ? new RootTargets(this.database, true) : this.targets, (target) => this.cleanupWaiting?.(captured, target) ?? false));
       });
     }
     scan(binding, request) {
@@ -3920,27 +3984,118 @@
       } catch (error) {
         return Promise.reject(error);
       }
-      const captured = { ...binding }, instruction = structuredClone(request);
-      return this.enqueue(async () => {
-        this.checkBinding(captured);
-        await this.requirePermission();
+      const instruction = structuredClone(request);
+      return this.queueChecked(binding, async (captured) => {
         const directory = this.configuration.directory;
         if (instruction.operation === "records") {
           if (!this.database)
             return {
               directoryName: directory.name,
+              management: "unreadable",
+              differences: [],
               rootReadable: false,
               records: [],
               targets: [],
-              issues: [{ relativePath: "global.sqlite", reason: "管理数据库尚未恢复，请先恢复现有数据库。" }]
+              issues: [{ relativePath: GLOBAL_DATABASE, reason: "管理数据库尚未恢复，请先恢复现有数据库。" }]
             };
           return scanRecords(this.database, directory.name);
         }
-        if (instruction.operation === "directory")
-          return scanDirectory(directory, instruction.charDbId);
+        if (instruction.operation === "inventory")
+          return scanInventory(directory);
+        if (instruction.operation === "read")
+          return readScanFile(directory, instruction.relativePath);
         if (instruction.operation === "file")
           return scanFile(directory, instruction.charDbId, instruction.chatDbId);
+        if (instruction.operation === "database") {
+          const { charDbId, chatDbId } = instruction;
+          const db = await this.createDatabase(directory, {
+            ...captured,
+            scope: chatDbId ? "chat" : "char",
+            charDbId,
+            ...chatDbId ? { chatDbId } : {}
+          }, this.mode);
+          try {
+            return await scanDatabase(db, directory, charDbId, chatDbId);
+          } finally {
+            await db.close();
+          }
+        }
         throw new ServiceError({ code: "INVALID_REQUEST", message: "扫描请求类型无效。" });
+      });
+    }
+    async scanEntryBasis(relativePath, entry) {
+      if (!this.database)
+        throw new ServiceError({ code: "INSTANCE_DISABLED", message: "管理数据库尚未恢复，拒绝删除扫描条目。" });
+      await new RootTargets(this.database, true).ready();
+      return scanEntryHasBasis(relativePath, entry, await readScanBasis(this.database));
+    }
+    removeScanEntry(binding, request) {
+      try {
+        this.admit();
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      const captured = { ...binding }, relativePath = request?.relativePath, kind = request?.entry;
+      const segments = checkRelativePath(relativePath, "remove");
+      if (typeof segments === "string" || !["file", "directory"].includes(kind))
+        return Promise.reject(new ServiceError({
+          code: "INVALID_REQUEST",
+          message: typeof segments === "string" ? segments : "扫描条目类型无效。"
+        }));
+      const skipped = (message) => ({ relativePath, status: "skipped", message });
+      const registered = "已有登记，未删除。";
+      const check = async () => {
+        this.checkBinding(captured);
+        await this.requirePermission();
+        return this.scanEntryBasis(relativePath, kind);
+      };
+      const part = kind === "file" ? parseDatabasePath(relativePath, "file") : undefined;
+      const fixed = part?.kind === "char" && isUuid(part.charDbId) ? { scope: "char", charDbId: part.charDbId } : part?.kind === "chat" && isUuid(part.charDbId) && isUuid(part.chatDbId) ? { scope: "chat", charDbId: part.charDbId, chatDbId: part.chatDbId } : undefined;
+      const target = fixed && {
+        storageId: captured.storageId,
+        configGeneration: captured.configGeneration,
+        ...fixed
+      };
+      return (async () => {
+        if (await this.enqueue(check))
+          return skipped(registered);
+        if (target)
+          this.sealCleanup(target);
+        try {
+          if (target)
+            await this.drainCleanup(target);
+          return await this.enqueue(async () => {
+            if (await check())
+              return skipped(registered);
+            const outcome = await removeStorageEntry(this.configuration.directory, segments, kind);
+            if (outcome === "not-empty")
+              return skipped("目录不为空，未删除。");
+            return {
+              relativePath,
+              status: outcome,
+              message: outcome === "removed" ? "已删除。" : "已不存在。"
+            };
+          });
+        } finally {
+          if (target)
+            this.releaseCleanup(target);
+        }
+      })();
+    }
+    removeScanTarget(binding, target) {
+      try {
+        this.admit();
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      const expected = target && { ...target };
+      if (!expected || !["char", "chat"].includes(expected.scope) || !isUuid(expected.charDbId) || (expected.scope === "chat" ? !isUuid(expected.chatDbId) : expected.chatDbId !== undefined) || !["generated", "legacy"].includes(expected.origin) || !["never", "creating", "ready"].includes(expected.state))
+        return Promise.reject(new ServiceError({ code: "INVALID_REQUEST", message: "初始化登记参数无效。" }));
+      return this.queueChecked(binding, async () => {
+        if (!this.database || !this.targets)
+          throw new ServiceError({ code: "INSTANCE_DISABLED", message: "管理数据库尚未恢复。" });
+        await new RootTargets(this.database, true).ready();
+        return await new RootEntities(this.database, this.targets).deletions.removeOrphanTarget(expected) ? { status: "removed", message: "初始化登记已删除并确认保存。" } : { status: "skipped", message: "登记已变化，未删除。" };
       });
     }
     execute(binding, task) {
@@ -4005,10 +4160,7 @@
         });
     }
     async drainCleanup(binding) {
-      await this.enqueue(async () => {
-        this.checkBinding(binding);
-        await this.requirePermission();
-      });
+      await this.queueChecked(binding, async () => {});
       const entry = this.scopedDatabases.get(bindingKey(binding));
       if (entry) {
         await entry.tail;
@@ -4017,10 +4169,8 @@
       }
     }
     removeCleanupFile(binding, authorize = async () => {}) {
-      return this.enqueue(async () => {
-        this.checkBinding(binding);
-        await this.requirePermission();
-        this.validateScoped(binding);
+      return this.queueChecked(binding, async () => {
+        validateScopedTarget(binding);
         if (!this.cleanupSeals.has(bindingKey(binding)) || this.scopedDatabases.has(bindingKey(binding)))
           throw new ServiceError({
             code: "RESULT_UNCONFIRMED",
@@ -4034,39 +4184,38 @@
       });
     }
     registerGenerated(binding) {
-      try {
-        this.admit();
-      } catch (error) {
-        return Promise.reject(error);
-      }
-      const captured = { ...binding };
-      return this.enqueue(async () => {
-        this.checkBinding(captured);
-        await this.requirePermission();
-        this.validateScoped(captured);
+      return this.admitted(binding, async (captured) => {
+        validateScopedTarget(captured);
         if (!this.database || !this.targets)
           throw new ServiceError({ code: "INSTANCE_DISABLED", message: "root 文件尚未恢复。" });
         await this.targets.registerGenerated(captured);
       });
     }
+    registerPreparedRole(binding) {
+      return this.registerUnrecorded(binding, () => {
+        throw new ServiceError({
+          code: "IDENTITY_CONFLICT",
+          resultKind: "identity",
+          resultState: "not-applied",
+          message: "新角色编号对应的数据库文件已经存在且没有登记，未覆盖或接入该文件。"
+        });
+      });
+    }
     registerObserved(binding) {
-      try {
-        this.admit();
-      } catch (error) {
-        return Promise.reject(error);
-      }
-      const captured = { ...binding };
-      return this.enqueue(async () => {
-        this.checkBinding(captured);
-        await this.requirePermission();
-        this.validateScoped(captured);
+      return this.registerUnrecorded(binding, () => {});
+    }
+    registerUnrecorded(binding, existing) {
+      return this.admitted(binding, async (captured) => {
+        validateScopedTarget(captured);
         if (!this.database || !this.targets)
           throw new ServiceError({ code: "INSTANCE_DISABLED", message: "全局数据库尚未恢复。" });
         if (await this.targets.read(captured))
           return;
         const db = await this.createDatabase(this.configuration.directory, captured, this.mode);
         try {
-          if (!await db.fileExists())
+          if (await db.fileExists())
+            existing();
+          else
             await this.targets.registerGenerated(captured);
         } finally {
           await db.close();
@@ -4079,15 +4228,10 @@
         this.admit();
         this.checkBinding(captured);
         if (!captured.scope || captured.scope === "global") {
-          if (captured.charDbId !== undefined || captured.chatDbId !== undefined)
-            throw new ServiceError({
-              code: "INVALID_REQUEST",
-              failureKind: "request-rejected",
-              message: "global 目标不接受角色或聊天身份。"
-            });
+          validateGlobalTarget(captured);
           this.database?.cancelPendingSaveForReload();
         } else {
-          this.validateScoped(captured);
+          validateScopedTarget(captured);
           this.assertScoped(captured);
           this.scopedDatabases.get(bindingKey(captured))?.db.cancelPendingSaveForReload();
         }
@@ -4099,7 +4243,7 @@
           await lifecycle.refresh();
         else {
           await db.refresh();
-          await this.rootLoaded(db, this.configuration, this.targets);
+          await this.rootLoaded(db, this.targets);
         }
         return { reloaded: true };
       });
@@ -4128,7 +4272,7 @@
         try {
           await this.requirePermission();
           if (this.database?.availability === "ready" && await this.database.refreshIfChanged()) {
-            await this.rootLoaded(this.database, this.configuration, this.targets);
+            await this.rootLoaded(this.database, this.targets);
             changed = true;
           }
           for (const entry of this.scopedDatabases.values())
@@ -4150,26 +4294,6 @@
         this.reloadPending = false;
       });
     }
-    validateScoped(binding) {
-      if (!["char", "chat"].includes(binding.scope ?? ""))
-        throw new ServiceError({
-          code: "INVALID_REQUEST",
-          failureKind: "request-rejected",
-          message: "身份记录需要 char 或 chat 目标。"
-        });
-      if (!isUuid(binding.charDbId))
-        throw new ServiceError({
-          code: "INVALID_REQUEST",
-          failureKind: "request-rejected",
-          message: "角色目标需要有效 UUID。"
-        });
-      if (binding.scope === "chat" ? !isUuid(binding.chatDbId) : binding.chatDbId !== undefined)
-        throw new ServiceError({
-          code: "INVALID_REQUEST",
-          failureKind: "request-rejected",
-          message: "聊天目标需要有效 UUID，char 目标不接受聊天身份。"
-        });
-    }
     schedule(binding, task, businessWrite = false) {
       try {
         this.admit();
@@ -4189,12 +4313,7 @@
               message: "此数据库层级未实现。"
             });
           if (!captured.scope || captured.scope === "global") {
-            if (captured.charDbId !== undefined || captured.chatDbId !== undefined)
-              throw new ServiceError({
-                code: "INVALID_REQUEST",
-                failureKind: "request-rejected",
-                message: "global 目标不接受角色或聊天身份。"
-              });
+            validateGlobalTarget(captured);
             if (!this.database)
               throw new ServiceError({ code: "INSTANCE_DISABLED", message: "文件尚未恢复。" });
             if (this.database.availability === "ready")
@@ -4211,7 +4330,7 @@
               this.publish();
             }
           }
-          this.validateScoped(captured);
+          validateScopedTarget(captured);
           this.assertScoped(captured);
           if (!this.database || !this.targets)
             throw new ServiceError({ code: "INSTANCE_DISABLED", message: "root 文件尚未恢复。" });
@@ -4326,102 +4445,6 @@
         }
       });
     }
-  }
-
-  // src/core/binds.ts
-  var invalid4 = (reason) => {
-    throw new ServiceError({
-      code: "INVALID_REQUEST",
-      message: `绑定参数无效：${reason}`,
-      failureKind: "request-rejected"
-    });
-  };
-  function nativePrototype(prototype, constructor) {
-    const descriptor = Object.getOwnPropertyDescriptor(prototype, "constructor");
-    return !!descriptor && "value" in descriptor && typeof descriptor.value === "function" && Object.getOwnPropertyDescriptor(descriptor.value, "prototype")?.value === prototype && Function.prototype.toString.call(descriptor.value) === Function.prototype.toString.call(constructor);
-  }
-  function plain(value) {
-    const prototype = Object.getPrototypeOf(value);
-    return prototype === null || Object.getPrototypeOf(prototype) === null && nativePrototype(prototype, Object);
-  }
-  function ordinaryArray(value) {
-    const prototype = Object.getPrototypeOf(value);
-    return prototype !== null && Array.isArray(prototype) && plain(prototype) && nativePrototype(prototype, Array);
-  }
-  var typedArrayName = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), Symbol.toStringTag).get;
-  function entries2(value) {
-    if (!Array.isArray(value) && !plain(value))
-      return invalid4("只接受数组和普通对象。");
-    if (Array.isArray(value) && !ordinaryArray(value))
-      return invalid4("不接受数组类实例或自定义原型。");
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    if (Object.getOwnPropertySymbols(value).length)
-      return invalid4("不接受 symbol 属性。");
-    const result = [];
-    for (const [key, descriptor] of Object.entries(descriptors)) {
-      if (Array.isArray(value) && key === "length")
-        continue;
-      if (!("value" in descriptor) || !descriptor.enumerable)
-        return invalid4("不接受访问器或隐藏属性。");
-      if (Array.isArray(value) && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length))
-        return invalid4("数组不能包含额外属性。");
-      result.push([key, descriptor.value]);
-    }
-    if (Array.isArray(value) && result.length !== value.length)
-      return invalid4("数组不能包含空位。");
-    return result;
-  }
-  function jsonSnapshot(value, ancestors) {
-    if (value === null || typeof value === "string" || typeof value === "boolean")
-      return value;
-    if (typeof value === "number")
-      return Number.isFinite(value) ? value : invalid4("数值必须有限。");
-    if (typeof value !== "object")
-      return invalid4("JSON 中包含不支持的值。");
-    if (ancestors.has(value))
-      return invalid4("JSON 不能循环引用。");
-    ancestors.add(value);
-    try {
-      const properties = entries2(value);
-      if (Array.isArray(value))
-        return properties.map(([, item]) => jsonSnapshot(item, ancestors));
-      const result = Object.create(null);
-      for (const [key, item] of properties)
-        result[key] = jsonSnapshot(item, ancestors);
-      return result;
-    } finally {
-      ancestors.delete(value);
-    }
-  }
-  function scalar(value, allowJson) {
-    if (value === null || typeof value === "string")
-      return value;
-    if (typeof value === "number")
-      return Number.isFinite(value) ? value : invalid4("数值必须有限。");
-    if (ArrayBuffer.isView(value) && typedArrayName.call(value) === "Uint8Array")
-      return new Uint8Array(value);
-    if (allowJson && typeof value === "object")
-      return JSON.stringify(jsonSnapshot(value, new Set));
-    return invalid4(allowJson ? "顶层值只接受 NULL、字符串、有限数值、BLOB 或 JSON 数组/对象。" : "Worker 只接受已序列化的原生值。");
-  }
-  function capture(input, allowJson) {
-    if (input === undefined)
-      return;
-    if (input === null || typeof input !== "object")
-      return invalid4("最外层必须是参数数组或命名参数对象。");
-    const properties = entries2(input);
-    if (Array.isArray(input))
-      return properties.map(([, value]) => scalar(value, allowJson));
-    const result = Object.create(null);
-    for (const [key, value] of properties) {
-      if (!/^[:@$].+$/s.test(key))
-        return invalid4("命名参数键必须保留 :、@ 或 $ 前缀及参数名。");
-      result[key] = scalar(value, allowJson);
-    }
-    return result;
-  }
-  function validateSerializedBinds(input) {
-    return capture(input, false);
   }
 
   // src/worker/restart-coordinator.ts
@@ -4596,241 +4619,10 @@
     }
   }
 
-  // src/worker/entry.ts
-  importScripts(new URL("sql-wasm.js", self.location.href).href);
-  var engine = initSqlJs({ locateFile: (file) => new URL(file, self.location.href).href });
-  var instanceId = crypto.randomUUID();
-  var characterIdentities = new Map;
-  var chatIdentities = new Map;
-  var ports = new Set;
-  var lastSeen = new Map;
-  var key2 = identityBindingKey;
-  function removePort(port) {
-    restart.disconnected(port);
-    entities.disconnect(port);
-    for (const identity of characterIdentities.values())
-      identity.disconnect(port);
-    for (const identity of chatIdentities.values())
-      identity.disconnect(port);
-    ports.delete(port);
-    lastSeen.delete(port);
-    port.close();
-  }
-  setInterval(() => {
-    for (const [port, time] of lastSeen)
-      if (Date.now() - time > 90000)
-        removePort(port);
-  }, 30000);
-  var storage = new StorageCoordinator(new IndexedDbConfiguration, async (directory, binding, mode) => new SingleDatabase(await engine, new DirectoryStorage(directory, binding?.charDbId, binding?.chatDbId, mode === "opfs")), (info) => {
-    const event = { type: "storage-changed", instanceId, ...withEntityRevision(info) };
-    for (const port of ports) {
-      try {
-        port.postMessage(event);
-      } catch {
-        removePort(port);
-      }
-    }
-  });
-  var renames = new EntityRenames((binding, task) => storage.manageEntities(binding, task));
-  storage.onBackgroundSaveFailed = (binding, failure) => {
-    const event = { type: "background-save-failed", instanceId, binding, ...failure };
-    for (const port of ports) {
-      try {
-        port.postMessage(event);
-      } catch {
-        removePort(port);
-      }
-    }
-  };
-  function chatCoordinate(entity) {
-    if (!entity)
-      return false;
-    try {
-      const parts = JSON.parse(entity);
-      return Array.isArray(parts) && parts.length === 2 && parts.every((part) => typeof part === "string");
-    } catch {
-      return false;
-    }
-  }
-  var deletions = new EntityDeletions(storage, (binding, ticket) => {
-    for (const taskId of ticket.copyTaskIds ?? [])
-      entities.forgetCopy(taskId);
-    if (ticket.stage === "applied")
-      for (const c of ticket.credentials ?? [])
-        entities.forgetReference(binding, c.referenceId, c.chat);
-    for (const participant of ports) {
-      try {
-        participant.postMessage({
-          type: "entity-deleted",
-          instanceId,
-          storageId: binding.storageId,
-          configGeneration: binding.configGeneration,
-          ticket
-        });
-      } catch {
-        removePort(participant);
-      }
-    }
-  });
-  function withEntityRevision(info) {
-    return {
-      ...info,
-      storage: {
-        ...info.storage,
-        entityRevision: info.storage.storageId ? deletions.revision({ storageId: info.storage.storageId, configGeneration: info.storage.configGeneration }) : 0
-      }
-    };
-  }
-  var entities = new EntityCoordinator((binding, task) => storage.manageEntities(binding, task), (binding, entity) => {
-    renames.assertEntity(binding, entity);
-    deletions.assertEntity(binding, entity, entity !== binding.characterEntity && chatCoordinate(entity));
-  }, (binding, id, chat) => storage.assertIdentityTargetAvailable({
-    ...binding,
-    scope: chat ? "chat" : "char",
-    charDbId: chat ? binding.charDbId : id,
-    ...chat ? { chatDbId: id } : { chatDbId: undefined }
-  }), (binding, task) => storage.manageEntities(binding, task, true));
-  storage.beforeScopedExecution = (binding) => entities.assertCached(binding);
-  storage.beforeConfigurationChange = () => {
-    entities.assertSettled();
-    renames.assertSettled();
-    deletions.assertSettled();
-  };
-  storage.onRootLoaded = async (records, binding) => {
-    await entities.load(records, true);
-    await deletions.load(records, binding);
-  };
-  setInterval(() => {
-    storage.releaseIdle();
-  }, 30000);
-  function characters(binding, entity) {
-    for (const [key, existing] of characterIdentities) {
-      const values = JSON.parse(key);
-      if (values[0] === binding.storageId && values[1] === binding.configGeneration && existing.hasLease(entity))
-        return existing;
-    }
-    const domain = JSON.stringify([binding.storageId, binding.configGeneration, binding.entityRevision ?? 0]);
-    let coordinator = characterIdentities.get(domain);
-    if (!coordinator) {
-      coordinator = new CharacterIdentities(async (id, entity) => {
-        await entities.propose(binding, entity, id);
-        await storage.registerGenerated({ ...binding, scope: "char", charDbId: id });
-      }, (entity) => deletions.assertEntity(binding, entity));
-      characterIdentities.set(domain, coordinator);
-    }
-    return coordinator;
-  }
-  function chats(binding, entity) {
-    for (const [key, existing] of chatIdentities) {
-      const values = JSON.parse(key);
-      if (values[0] === binding.storageId && values[1] === binding.configGeneration && values[2] === binding.charDbId && existing.hasLease(entity))
-        return existing;
-    }
-    const domain = JSON.stringify([
-      binding.storageId,
-      binding.configGeneration,
-      binding.charDbId,
-      binding.entityRevision ?? 0
-    ]);
-    let coordinator = chatIdentities.get(domain);
-    if (!coordinator) {
-      coordinator = new CharacterIdentities(async (id, entity) => {
-        await entities.propose(binding, entity, id, true);
-        await storage.registerGenerated({ ...binding, scope: "chat", chatDbId: id });
-      }, (entity) => deletions.assertEntity(binding, entity, true));
-      chatIdentities.set(domain, coordinator);
-    }
-    return coordinator;
-  }
-  var active = new Set;
-  async function verifyDrain() {
-    entities.assertSettled();
-    renames.assertSettled();
-    deletions.assertSettled();
-    await storage.drainForRestart();
-    for (const coordinator of characterIdentities.values())
-      coordinator.assertSettled();
-    for (const coordinator of chatIdentities.values())
-      coordinator.assertSettled();
-  }
-  var deletionFailure = (error) => ["STALE_IDENTITY", "ENTITY_DELETE_PENDING", "ENTITY_DELETE_UNCONFIRMED"].includes(errorData(error).code);
-  function deletedIdentity() {
-    return new ServiceError({
-      code: "STALE_IDENTITY",
-      resultKind: "identity",
-      message: "原角色或聊天已经收到删除通知，原身份 HTTP 已结束，但不会恢复这个引用。"
-    });
-  }
-  async function finishIdentityAcquisition(binding, entity, chat, ticket, coordinator, owner) {
-    try {
-      const generation = await entities.generation(binding, entity, chat);
-      deletions.assertEntity(binding, entity, chat);
-      if (ticket.token)
-        coordinator.pendingTicket(entity, ticket.token, owner);
-      return { ...ticket, generation, referenceId: (await entities.credential(binding, entity, chat)).referenceId };
-    } catch (error) {
-      if (ticket.token) {
-        let current = false;
-        try {
-          coordinator.pendingTicket(entity, ticket.token, owner);
-          current = true;
-        } catch {}
-        if (current) {
-          coordinator.settle(entity, ticket.token, false, owner);
-        }
-      }
-      throw error;
-    }
-  }
-  async function settleIdentity(binding, entity, token, confirmed, chat, coordinator, owner) {
-    if (!confirmed) {
-      const ticket = coordinator.settle(entity, token, false, owner);
-      if (chat)
-        await entities.verify(binding, true);
-      await deletions.verify(binding, entity, chat);
-      return { ...ticket, ...await entities.credential(binding, entity, chat) };
-    }
-    try {
-      if (chat)
-        await entities.verify(binding, true);
-      await deletions.verify(binding, entity, chat);
-      deletions.assertEntity(binding, entity, chat);
-    } catch (error) {
-      if (!deletionFailure(error))
-        throw error;
-      coordinator.settle(entity, token, false, owner);
-      throw deletedIdentity();
-    }
-    const ticket = coordinator.pendingTicket(entity, token, owner);
-    try {
-      await entities.confirm(binding, entity, ticket.identityId, chat);
-      deletions.assertEntity(binding, entity, chat);
-    } catch (error) {
-      if (!deletionFailure(error))
-        throw error;
-      coordinator.settle(entity, token, false, owner);
-      throw deletedIdentity();
-    }
-    coordinator.settle(entity, token, true, owner);
-    return { ...ticket, ...await entities.credential(binding, entity, chat) };
-  }
-  var restart = new RestartCoordinator((port, event) => port.postMessage(event), async () => {
-    while (active.size)
-      await Promise.allSettled([...active]);
-    await verifyDrain();
-  });
-  var invalid5 = () => {
-    throw new ServiceError({
-      code: "INVALID_REQUEST",
-      failureKind: "request-rejected",
-      message: "请求字段或操作类型无效。"
-    });
-  };
-  var isBusinessWrite = isWriteAction;
-  var preflightError = (request, error) => isBusinessWrite(request) ? beforeBusinessSqlError(error) : error;
+  // src/worker/write-commands.ts
   function sqlCommand(input, mode) {
     if (!input || typeof input !== "object")
-      return invalid5();
+      return invalidRequest();
     checkPrefix(input.sql, mode);
     return { sql: input.sql, binds: validateSerializedBinds(input.binds), mode };
   }
@@ -4856,20 +4648,379 @@
     if (operation.type === "runSql") {
       const list = Array.isArray(operation.sql) ? operation.sql : [operation.sql];
       if (!list.length || list.some((sql) => typeof sql !== "string"))
-        return invalid5();
+        return invalidRequest();
       return list.map((sql) => ({ sql, mode: "runSql" }));
     }
     if (operation.type === "transaction") {
       if (!Array.isArray(operation.commands) || !operation.commands.length)
-        return invalid5();
+        return invalidRequest();
       return operation.commands.map((input) => {
         if (!input || typeof input !== "object")
-          return invalid5();
+          return invalidRequest();
         return sqlCommand(input, "transaction");
       });
     }
-    return invalid5();
+    return invalidRequest();
   }
+
+  // src/worker/character-identities.ts
+  class CharacterIdentities {
+    beforeIssue;
+    beforeRelease;
+    entities = new Map;
+    confirmed = new Set;
+    constructor(beforeIssue = async () => {}, beforeRelease = () => {}) {
+      this.beforeIssue = beforeIssue;
+      this.beforeRelease = beforeRelease;
+    }
+    hasLease(entity) {
+      const entry = this.entities.get(entity);
+      return !!entry?.token || !!entry?.waiters.length;
+    }
+    hasWorkFor(matches) {
+      return [...this.entities].some(([entity, entry]) => matches(entity) && (!!entry.token || !!entry.waiters.length));
+    }
+    seed(entity, id) {
+      if (!this.entities.has(entity))
+        this.entities.set(entity, { id, waiters: [] });
+    }
+    assertSettled() {
+      if ([...this.entities.values()].some((entry) => entry.token || entry.waiters.length))
+        throw identityFailure("仍有角色或聊天 UUID 初始化未完成，不能排空服务；请等待保存及 Worker 登记结束。", "unconfirmed");
+    }
+    acquire(entity, observed, owner) {
+      if (!entity || observed !== null && !isUuid(observed))
+        return Promise.reject(identityFailure("Worker 收到无效的角色或聊天目标名称或 UUID，未开始初始化；请重新取得目标并读回服务器 UUID。"));
+      observed = observed?.toLowerCase() ?? null;
+      let entry = this.entities.get(entity);
+      if (entry?.token) {
+        if (observed && observed !== entry.id)
+          return Promise.reject(identityFailure("读回的 UUID 与另一页面正在初始化的 UUID 不一致，未改写 UUID；请重新读回服务器结果。"));
+        return new Promise((resolve, reject) => entry.waiters.push({ resolve, reject }));
+      }
+      if (!observed && entry && this.confirmed.has(entry.id))
+        return Promise.resolve({ identityId: entry.id });
+      if (observed) {
+        this.confirmed.add(observed);
+        this.entities.set(entity, { id: observed, waiters: [] });
+        return Promise.resolve({ identityId: observed });
+      }
+      entry ??= { id: crypto.randomUUID(), waiters: [] };
+      entry.token = crypto.randomUUID();
+      entry.owner = owner;
+      this.entities.set(entity, entry);
+      const candidate = entry, token = entry.token;
+      return this.beforeIssue(candidate.id, entity).then(() => {
+        this.beforeRelease(entity);
+        if (candidate.token !== token || candidate.owner !== owner)
+          throw identityFailure("UUID 凭据所属连接已断开，未开始保存酒馆身份。");
+        return { identityId: candidate.id, token };
+      }).catch((error) => {
+        if (candidate.token === token && candidate.owner === owner) {
+          this.settle(entity, token, false, owner);
+        }
+        throw error;
+      });
+    }
+    pendingTicket(entity, token, owner) {
+      const entry = this.entities.get(entity);
+      if (!entry || entry.token !== token || entry.owner !== owner)
+        throw identityFailure("Worker 拒绝 UUID 登记：初始化凭据已失效或属于另一连接；请重新读回服务器 UUID 并取得目标。");
+      return { identityId: entry.id };
+    }
+    settle(entity, token, confirmed, owner) {
+      const result = this.pendingTicket(entity, token, owner);
+      const entry = this.entities.get(entity);
+      entry.token = undefined;
+      entry.owner = undefined;
+      if (confirmed) {
+        this.confirmed.add(entry.id);
+        for (const waiter of entry.waiters)
+          waiter.resolve(result);
+      } else
+        for (const waiter of entry.waiters)
+          waiter.reject(identityFailure("另一页面未完成 UUID 保存及登记，无法确认服务器结果；请重新读回原 UUID 后再尝试。", "unconfirmed"));
+      entry.waiters = [];
+      return result;
+    }
+    disconnect(owner) {
+      for (const [entity, entry] of this.entities)
+        if (entry.owner === owner && entry.token)
+          this.settle(entity, entry.token, false, owner);
+    }
+  }
+
+  // src/worker/identity-requests.ts
+  function createIdentityRequests({
+    storage,
+    entities,
+    deletions,
+    renames,
+    chatIdentities
+  }) {
+    function chats(binding, entity) {
+      for (const [key, existing] of chatIdentities) {
+        const values = JSON.parse(key);
+        if (values[0] === binding.storageId && values[1] === binding.configGeneration && values[2] === binding.charDbId && existing.hasLease(entity))
+          return existing;
+      }
+      const domain = JSON.stringify([
+        binding.storageId,
+        binding.configGeneration,
+        binding.charDbId,
+        binding.entityRevision ?? 0
+      ]);
+      let coordinator = chatIdentities.get(domain);
+      if (!coordinator) {
+        coordinator = new CharacterIdentities(async (id, entity) => {
+          await entities.propose(binding, entity, id);
+          await storage.registerGenerated({ ...binding, scope: "chat", chatDbId: id });
+        }, (entity) => deletions.assertEntity(binding, entity, true));
+        chatIdentities.set(domain, coordinator);
+      }
+      return coordinator;
+    }
+    const deletionFailure = (error) => ["STALE_IDENTITY", "ENTITY_DELETE_PENDING", "ENTITY_DELETE_UNCONFIRMED"].includes(errorData(error).code);
+    function deletedIdentity() {
+      return new ServiceError({
+        code: "STALE_IDENTITY",
+        resultKind: "identity",
+        message: "原角色或聊天已经收到删除通知，原身份 HTTP 已结束，但不会恢复这个引用。"
+      });
+    }
+    async function finishIdentityAcquisition(binding, entity, chat, ticket, coordinator, owner) {
+      try {
+        const generation = await entities.generation(binding, entity, chat);
+        deletions.assertEntity(binding, entity, chat);
+        if (ticket.token)
+          coordinator.pendingTicket(entity, ticket.token, owner);
+        return { ...ticket, generation, referenceId: (await entities.credential(binding, entity, chat)).referenceId };
+      } catch (error) {
+        if (ticket.token) {
+          let current = false;
+          try {
+            coordinator.pendingTicket(entity, ticket.token, owner);
+            current = true;
+          } catch {}
+          if (current) {
+            coordinator.settle(entity, ticket.token, false, owner);
+          }
+        }
+        throw error;
+      }
+    }
+    async function settleIdentity(binding, entity, token, confirmed, chat, coordinator, owner) {
+      if (!confirmed) {
+        const ticket = coordinator.settle(entity, token, false, owner);
+        if (chat)
+          await entities.verify(binding, true);
+        await deletions.verify(binding, entity, chat);
+        return { ...ticket, ...await entities.credential(binding, entity, chat) };
+      }
+      try {
+        if (chat)
+          await entities.verify(binding, true);
+        await deletions.verify(binding, entity, chat);
+        deletions.assertEntity(binding, entity, chat);
+      } catch (error) {
+        if (!deletionFailure(error))
+          throw error;
+        coordinator.settle(entity, token, false, owner);
+        throw deletedIdentity();
+      }
+      const ticket = coordinator.pendingTicket(entity, token, owner);
+      try {
+        await entities.confirm(binding, entity, ticket.identityId, chat);
+        deletions.assertEntity(binding, entity, chat);
+      } catch (error) {
+        if (!deletionFailure(error))
+          throw error;
+        coordinator.settle(entity, token, false, owner);
+        throw deletedIdentity();
+      }
+      coordinator.settle(entity, token, true, owner);
+      return { ...ticket, ...await entities.credential(binding, entity, chat) };
+    }
+    async function restore(request) {
+      const b = request.binding;
+      if (!b || !isUuid(b.charDbId) || !["char", "chat"].includes(b.scope ?? "") || (b.scope === "char" ? b.chatDbId !== undefined : !isUuid(b.chatDbId)) || b.scope === "char" && !Number.isSafeInteger(request.generation) || typeof request.entity !== "string")
+        return invalidRequest();
+      await storage.validateIdentityBinding(b);
+      if (request.readOnly)
+        deletions.assertBinding(b);
+      else
+        await deletions.verify(b, request.entity, b.scope === "chat");
+      renames.assertEntity(b, request.entity);
+      renames.assertEntity(b, b.characterEntity);
+      if (b.scope === "chat")
+        await entities.verify({ ...b, scope: "char", chatDbId: undefined }, false, request.readOnly);
+      const id = b.scope === "chat" ? b.chatDbId : b.charDbId;
+      const generation = request.readOnly ? await entities.confirmReadOnly(b, request.entity, id, b.scope === "chat") : await entities.confirm(b, request.entity, id, b.scope === "chat", request.generation);
+      if (!request.readOnly)
+        await storage.registerObserved(b);
+      if (request.generation !== undefined && request.generation !== generation)
+        throw new ServiceError({ code: "STALE_IDENTITY", resultKind: "identity", message: "恢复的文件引用代次已失效。" });
+      return {
+        identityId: id,
+        generation,
+        referenceId: (await entities.credential(b, request.entity, b.scope === "chat")).referenceId,
+        restored: true
+      };
+    }
+    async function chat(request, port) {
+      const b = request.binding;
+      if (!b || b.scope !== "char" || !isUuid(b.charDbId) || b.chatDbId !== undefined || typeof request.entity !== "string" || !request.entity)
+        return invalidRequest();
+      await storage.validateIdentityBinding(b);
+      const coordinator = chats(b, request.entity);
+      if (request.type === "chat-identity-acquire") {
+        await entities.verify(b);
+        await deletions.verify(b, request.entity, true);
+        renames.assertEntity(b, request.entity);
+        renames.assertEntity(b, b.characterEntity);
+        if (request.observedId) {
+          await entities.confirm(b, request.entity, request.observedId, true);
+          await storage.registerObserved({ ...b, scope: "chat", chatDbId: request.observedId });
+        } else {
+          const candidate = await entities.candidate(b, request.entity);
+          if (candidate)
+            coordinator.seed(request.entity, candidate);
+        }
+        const ticket = await coordinator.acquire(request.entity, request.observedId, port);
+        return finishIdentityAcquisition(b, request.entity, true, ticket, coordinator, port);
+      }
+      if (typeof request.token !== "string" || typeof request.confirmed !== "boolean")
+        return invalidRequest();
+      return settleIdentity(b, request.entity, request.token, request.confirmed, true, coordinator, port);
+    }
+    async function role(request) {
+      const b = request.binding;
+      if (typeof request.entity !== "string" || !request.entity || !b || b.scope && b.scope !== "global" || b.charDbId !== undefined || b.chatDbId !== undefined)
+        return invalidRequest();
+      await storage.validateIdentityBinding(b);
+      if (request.type === "identity-lookup") {
+        if (request.readOnly)
+          deletions.assertEntity(b, request.entity);
+        else
+          await deletions.verify(b, request.entity);
+        renames.assertEntity(b, request.entity);
+        const role = await entities.lookupRole(b, request.entity);
+        return role ? { identityId: role.id, generation: role.generation, referenceId: role.referenceId } : null;
+      }
+      await deletions.verify(b, request.entity);
+      renames.assertEntity(b, request.entity);
+      if (request.create !== undefined && typeof request.create !== "boolean")
+        return invalidRequest();
+      const role = await entities.prepareRole(b, request.entity, (id) => storage.registerPreparedRole({ ...b, scope: "char", charDbId: id }), request.create === true);
+      deletions.assertEntity(b, request.entity);
+      return role ? { identityId: role.id, generation: role.generation, referenceId: role.referenceId } : null;
+    }
+    return { restore, chat, role };
+  }
+
+  // src/worker/entry.ts
+  importScripts(new URL("sql-wasm.js", self.location.href).href);
+  var engine = initSqlJs({ locateFile: (file) => new URL(file, self.location.href).href });
+  var instanceId = crypto.randomUUID();
+  var chatIdentities = new Map;
+  var ports = new Set;
+  var lastSeen = new Map;
+  var key2 = identityBindingKey;
+  function removePort(port) {
+    restart.disconnected(port);
+    for (const identity of chatIdentities.values())
+      identity.disconnect(port);
+    ports.delete(port);
+    lastSeen.delete(port);
+    port.close();
+  }
+  setInterval(() => {
+    for (const [port, time] of lastSeen)
+      if (Date.now() - time > 90000)
+        removePort(port);
+  }, 30000);
+  function broadcast(event) {
+    for (const port of ports) {
+      try {
+        port.postMessage(event);
+      } catch {
+        removePort(port);
+      }
+    }
+  }
+  var storage = new StorageCoordinator(new IndexedDbConfiguration, async (directory, binding, mode) => new SingleDatabase(await engine, new DirectoryStorage(directory, binding?.charDbId, binding?.chatDbId, mode === "opfs")), (info) => {
+    const event = { type: "storage-changed", instanceId, ...withEntityRevision(info) };
+    broadcast(event);
+  });
+  var renames = new EntityRenames((binding, task) => storage.manageEntities(binding, task));
+  storage.onBackgroundSaveFailed = (binding, failure) => {
+    broadcast({ type: "background-save-failed", instanceId, binding, ...failure });
+  };
+  function chatCoordinate(entity) {
+    if (!entity)
+      return false;
+    try {
+      const parts = JSON.parse(entity);
+      return Array.isArray(parts) && parts.length === 2 && parts.every((part) => typeof part === "string");
+    } catch {
+      return false;
+    }
+  }
+  var deletions = new EntityDeletions(storage, (binding, ticket) => {
+    if (ticket.stage === "applied")
+      for (const c of ticket.credentials ?? [])
+        entities.forgetReference(binding, c.referenceId, c.chat);
+    broadcast({
+      type: "entity-deleted",
+      instanceId,
+      storageId: binding.storageId,
+      configGeneration: binding.configGeneration,
+      ticket
+    });
+  });
+  function withEntityRevision(info) {
+    return {
+      ...info,
+      storage: {
+        ...info.storage,
+        entityRevision: info.storage.storageId ? deletions.revision({ storageId: info.storage.storageId, configGeneration: info.storage.configGeneration }) : 0
+      }
+    };
+  }
+  var entities = new EntityCoordinator((binding, task) => storage.manageEntities(binding, task), (binding, entity) => {
+    renames.assertEntity(binding, entity);
+    deletions.assertEntity(binding, entity, entity !== binding.characterEntity && chatCoordinate(entity));
+  }, (binding, id, chat) => storage.assertIdentityTargetAvailable({
+    ...binding,
+    scope: chat ? "chat" : "char",
+    charDbId: chat ? binding.charDbId : id,
+    ...chat ? { chatDbId: id } : { chatDbId: undefined }
+  }), (binding, task) => storage.manageEntities(binding, task, true));
+  storage.beforeScopedExecution = (binding) => entities.assertCached(binding);
+  storage.beforeConfigurationChange = () => {
+    renames.assertSettled();
+    deletions.assertSettled();
+  };
+  storage.cleanupWaiting = (binding, target) => deletions.isCleanupWaiting(binding, target);
+  setInterval(() => {
+    storage.releaseIdle();
+  }, 30000);
+  var identity = createIdentityRequests({ storage, entities, deletions, renames, chatIdentities });
+  var active = new Set;
+  async function verifyDrain() {
+    renames.assertSettled();
+    deletions.assertSettled();
+    await storage.drainForRestart();
+    for (const coordinator of chatIdentities.values())
+      coordinator.assertSettled();
+  }
+  var restart = new RestartCoordinator((port, event) => port.postMessage(event), async () => {
+    while (active.size)
+      await Promise.allSettled([...active]);
+    await verifyDrain();
+  });
+  var isBusinessWrite = isWriteAction;
+  var preflightError = (request, error) => isBusinessWrite(request) ? beforeBusinessSqlError(error) : error;
   function executeWrite(operation, binding, execute = (commands, id) => storage.executeWrite(binding, commands, id)) {
     let commands, id;
     try {
@@ -4886,37 +5037,34 @@
     if (request.type === "restart-prepare") {
       restart.assertParticipant(port);
       if (!isUuid(request.targetBuildId))
-        return invalid5();
+        return invalidRequest();
       if (request.targetProtocolVersion !== PROTOCOL_VERSION) {
         const error = { code: "PROTOCOL_MISMATCH", message: "目标协议不兼容，取消准备。" };
         restart.cancel(error);
         throw new ServiceError(error);
       }
       if (request.purpose !== undefined && !["update", "disable"].includes(request.purpose))
-        return invalid5();
+        return invalidRequest();
       return restart.prepare(request.targetBuildId, ports, request.automatic === true, request.purpose);
     }
     if (request.type === "restart-reply") {
       if (typeof request.attemptId !== "string")
-        return invalid5();
+        return invalidRequest();
       restart.reply(port, request.attemptId, request.error);
       return {};
     }
     if (request.type === "restart-cancel") {
       if (typeof request.attemptId !== "string")
-        return invalid5();
+        return invalidRequest();
       restart.cancelAttempt(port, request.attemptId);
       return {};
     }
     if (request.type === "restart-commit") {
       if (typeof request.attemptId !== "string")
-        return invalid5();
+        return invalidRequest();
       return restart.commit(port, request.attemptId, (authorize) => storage.closeForRestart(() => {
-        entities.assertSettled();
         renames.assertSettled();
         deletions.assertSettled();
-        for (const coordinator of characterIdentities.values())
-          coordinator.assertSettled();
         for (const coordinator of chatIdentities.values())
           coordinator.assertSettled();
         authorize();
@@ -4934,15 +5082,13 @@
       await verifyDrain();
       return { drained: true, buildId: BUILD_ID, protocolVersion: PROTOCOL_VERSION };
     }
-    if (request.type === "character-copy-begin")
-      return entities.begin(request.oldAvatar, request.newAvatar, request.binding, request.taskId);
     if (request.type === "entity-delete-begin")
       return deletions.begin(request.kind, request.entity, request.operationId, request.deleteChats, request.binding);
     if (request.type === "entity-delete-pending")
       return deletions.pending(request.binding);
     if (request.type === "entity-delete-settle") {
       if (!isUuid(request.taskId) || typeof request.confirmed !== "boolean" || typeof request.absent !== "boolean" || request.requestOperationId !== undefined && !isUuid(request.requestOperationId) || request.nativeResult !== undefined && !["success", "failed", "unknown"].includes(request.nativeResult) || request.observedId !== undefined && request.observedId !== null && !isUuid(request.observedId) || request.remainingChatNames !== undefined && (!Array.isArray(request.remainingChatNames) || request.remainingChatNames.length > 256 || request.remainingChatNames.some((name) => typeof name !== "string" || !name) || new Set(request.remainingChatNames).size !== request.remainingChatNames.length))
-        return invalid5();
+        return invalidRequest();
       return deletions.settle(request, request.binding);
     }
     if (request.type === "entity-delete-resume") {
@@ -4953,7 +5099,7 @@
     if (request.type === "entity-rename-settle") {
       await storage.validateIdentityBinding(request.binding);
       if (!isUuid(request.taskId) || typeof request.checkedOldEntity !== "string" || typeof request.checkedNewEntity !== "string" || typeof request.confirmed !== "boolean" || request.observedId !== null && !isUuid(request.observedId))
-        return invalid5();
+        return invalidRequest();
       const result = await renames.settle({
         taskId: request.taskId,
         kind: request.kind,
@@ -4963,7 +5109,7 @@
         checkedNewEntity: request.checkedNewEntity,
         stage: "pending",
         expected: request.expected
-      }, request.observedId, request.parentId, request.confirmed, request.binding, () => {
+      }, request.observedId, request.confirmed, request.binding, () => {
         const avatars = request.kind === "char" ? [request.oldEntity, request.newEntity] : [JSON.parse(request.oldEntity)[0], JSON.parse(request.newEntity)[0]];
         const affects = (entity) => request.kind === "chat" ? entity === request.oldEntity || entity === request.newEntity : (() => {
           try {
@@ -4972,127 +5118,23 @@
             return false;
           }
         })();
-        return entities.hasCopyWorkFor(avatars) || [...characterIdentities.values()].some((coordinator) => coordinator.hasWorkFor((entity) => avatars.includes(entity))) || [...chatIdentities.values()].some((coordinator) => coordinator.hasWorkFor(affects));
+        return [...chatIdentities.values()].some((coordinator) => coordinator.hasWorkFor(affects));
       });
       if (result.stage === "applied")
-        for (const participant of ports) {
-          try {
-            participant.postMessage({
-              type: "entity-renamed",
-              instanceId,
-              storageId: request.binding.storageId,
-              configGeneration: request.binding.configGeneration
-            });
-          } catch {
-            removePort(participant);
-          }
-        }
+        broadcast({
+          type: "entity-renamed",
+          instanceId,
+          storageId: request.binding.storageId,
+          configGeneration: request.binding.configGeneration
+        });
       return result;
     }
-    if (request.type === "character-copy-acquire") {
-      const b = request.binding;
-      await storage.validateIdentityBinding(b);
-      await deletions.verify(b, request.oldAvatar);
-      await deletions.verify(b, request.newAvatar);
-      renames.assertEntity(b, request.oldAvatar);
-      renames.assertEntity(b, request.newAvatar);
-      const coordinator = characters(b, request.newAvatar);
-      const ticket = await entities.acquire(request.oldAvatar, request.newAvatar, request.taskId, request.sourceId, request.observedId, b, port, coordinator.hasLease(request.newAvatar));
-      if (ticket.token || ticket.stage === "cleared" && !coordinator.hasLease(request.newAvatar) && !await entities.candidate(b, request.newAvatar))
-        coordinator.forget(request.newAvatar);
-      return ticket;
-    }
-    if (request.type === "character-copy-settle") {
-      await storage.validateIdentityBinding(request.binding);
-      const ticket = await entities.settle(request.oldAvatar, request.newAvatar, request.taskId, request.token, request.confirmed, request.binding, port);
-      if (request.confirmed) {
-        try {
-          await deletions.verify(request.binding, request.oldAvatar);
-          await deletions.verify(request.binding, request.newAvatar);
-        } catch (error) {
-          if (deletionFailure(error))
-            throw deletedIdentity();
-          throw error;
-        }
-      }
-      return ticket;
-    }
-    if (request.type === "identity-restore") {
-      const b = request.binding;
-      if (!b || !isUuid(b.charDbId) || !["char", "chat"].includes(b.scope ?? "") || (b.scope === "char" ? b.chatDbId !== undefined : !isUuid(b.chatDbId)) || typeof request.entity !== "string")
-        return invalid5();
-      await storage.validateIdentityBinding(b);
-      if (request.readOnly)
-        deletions.assertBinding(b);
-      else
-        await deletions.verify(b, request.entity, b.scope === "chat");
-      renames.assertEntity(b, request.entity);
-      renames.assertEntity(b, b.characterEntity);
-      if (b.scope === "chat")
-        await entities.verify({ ...b, scope: "char", chatDbId: undefined }, false, request.readOnly);
-      const id = b.scope === "chat" ? b.chatDbId : b.charDbId;
-      const generation = request.readOnly ? await entities.confirmReadOnly(b, request.entity, id, b.scope === "chat") : await entities.confirm(b, request.entity, id, b.scope === "chat", request.matchingEntities, request.generation);
-      if (!request.readOnly)
-        await storage.registerObserved(b);
-      if (request.generation !== undefined && request.generation !== generation)
-        throw new ServiceError({ code: "STALE_IDENTITY", resultKind: "identity", message: "恢复的文件引用代次已失效。" });
-      return {
-        identityId: id,
-        generation,
-        referenceId: (await entities.credential(b, request.entity, b.scope === "chat")).referenceId,
-        restored: true
-      };
-    }
-    if (request.type === "chat-identity-acquire" || request.type === "chat-identity-settle") {
-      const b = request.binding;
-      if (!b || b.scope !== "char" || !isUuid(b.charDbId) || b.chatDbId !== undefined || typeof request.entity !== "string" || !request.entity)
-        return invalid5();
-      await storage.validateIdentityBinding(b);
-      const coordinator = chats(b, request.entity);
-      if (request.type === "chat-identity-acquire") {
-        await entities.verify(b);
-        await deletions.verify(b, request.entity, true);
-        renames.assertEntity(b, request.entity);
-        renames.assertEntity(b, b.characterEntity);
-        if (request.observedId) {
-          await entities.confirm(b, request.entity, request.observedId, true);
-          await storage.registerObserved({ ...b, scope: "chat", chatDbId: request.observedId });
-        } else {
-          const candidate = await entities.candidate(b, request.entity, true);
-          if (candidate)
-            coordinator.seed(request.entity, candidate);
-        }
-        const ticket = await coordinator.acquire(request.entity, request.observedId, port);
-        return finishIdentityAcquisition(b, request.entity, true, ticket, coordinator, port);
-      }
-      if (typeof request.token !== "string" || typeof request.confirmed !== "boolean")
-        return invalid5();
-      return settleIdentity(b, request.entity, request.token, request.confirmed, true, coordinator, port);
-    }
-    if (request.type === "identity-acquire" || request.type === "identity-settle") {
-      const b = request.binding;
-      if (typeof request.entity !== "string" || !request.entity || !b || b.scope && b.scope !== "global" || b.charDbId !== undefined || b.chatDbId !== undefined)
-        return invalid5();
-      await storage.validateIdentityBinding(b);
-      const coordinator = characters(b, request.entity);
-      if (request.type === "identity-acquire") {
-        await deletions.verify(b, request.entity);
-        renames.assertEntity(b, request.entity);
-        if (request.observedId) {
-          await entities.confirm(b, request.entity, request.observedId, false, request.matchingEntities);
-          await storage.registerObserved({ ...b, scope: "char", charDbId: request.observedId });
-        } else {
-          const candidate = await entities.candidate(b, request.entity);
-          if (candidate)
-            coordinator.seed(request.entity, candidate);
-        }
-        const ticket = await coordinator.acquire(request.entity, request.observedId, port);
-        return finishIdentityAcquisition(b, request.entity, false, ticket, coordinator, port);
-      }
-      if (typeof request.token !== "string" || typeof request.confirmed !== "boolean")
-        return invalid5();
-      return settleIdentity(b, request.entity, request.token, request.confirmed, false, coordinator, port);
-    }
+    if (request.type === "identity-restore")
+      return identity.restore(request);
+    if (request.type === "chat-identity-acquire" || request.type === "chat-identity-settle")
+      return identity.chat(request, port);
+    if (request.type === "identity-acquire" || request.type === "identity-lookup")
+      return identity.role(request);
     if (request.type === "scan-cleanup") {
       const result = await deletions.cleanScan(request.request, request.binding);
       if (result.record.status === "removed")
@@ -5101,6 +5143,10 @@
     }
     if (request.type === "scan")
       return storage.scan(request.binding, request.request);
+    if (request.type === "scan-remove-entry")
+      return storage.removeScanEntry(request.binding, request.request);
+    if (request.type === "scan-remove-target")
+      return storage.removeScanTarget(request.binding, request.target);
     try {
       if ("binding" in request && request.binding) {
         deletions.assertBinding(request.binding);
@@ -5123,7 +5169,7 @@
       return withEntityRevision(await storage.configureMode(request.mode, request.autoReloadEnabled));
     if (request.type === "open") {
       if (!request.directory || request.directory.kind !== "directory" || typeof request.directory.getFileHandle !== "function" || typeof request.directory.isSameEntry !== "function")
-        return invalid5();
+        return invalidRequest();
       return withEntityRevision(await storage.select(request.directory));
     }
     if (request.type === "check-permission")
@@ -5133,7 +5179,7 @@
     if (request.type === "batch") {
       if (!Array.isArray(request.operations) || !request.operations.length) {
         try {
-          invalid5();
+          invalidRequest();
         } catch (error) {
           throw beforeBusinessSqlError(error);
         }
@@ -5144,7 +5190,7 @@
           let handedOff = false;
           try {
             if (!operation || typeof operation.callId !== "string" || !operation.binding || key2(operation.binding) !== key2(request.binding))
-              invalid5();
+              invalidRequest();
             entities.assertCached(operation.binding);
             handedOff = true;
             const result = await executeWrite(operation, request.binding, execute);
@@ -5175,7 +5221,7 @@
           entities.assertCached(request.binding);
       }));
     }
-    return invalid5();
+    return invalidRequest();
   }
   self.onconnect = (event) => {
     const port = event.ports[0];

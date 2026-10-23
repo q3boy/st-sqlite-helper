@@ -1,7 +1,7 @@
 import { type ServiceErrorData } from './core/errors';
 import type { SqlValue } from './vendor/sqljs';
 import type { SqlBinds, SerializedSqlBinds } from './core/binds';
-export declare const PROTOCOL_VERSION = 21;
+export declare const PROTOCOL_VERSION = 23;
 export declare const BUILD_ID: string;
 export interface HelloInfo extends StorageInfo {
     protocolVersion: number;
@@ -48,13 +48,6 @@ export interface IdentityTicket {
     generation?: number;
     referenceId?: number;
 }
-export interface CopyTicket {
-    taskId: string;
-    stage: 'pending' | 'clearing' | 'cleared' | 'independent' | 'unconfirmed';
-    token?: string;
-    inheritedId?: string;
-    independentId?: string;
-}
 export interface RenameExpected {
     id: string | null;
     generation: number;
@@ -82,7 +75,6 @@ export interface DeleteTicket {
     deleteChats?: boolean;
     reason?: string;
     revision: number;
-    copyTaskIds?: string[];
     credentials?: Array<{
         entity: string;
         chat: boolean;
@@ -195,6 +187,14 @@ export type Action = {
     request: import('./scan-contracts').ScanRequest;
     binding: StorageBinding;
 } | {
+    type: 'scan-remove-entry';
+    request: import('./scan-contracts').ScanEntryRequest;
+    binding: StorageBinding;
+} | {
+    type: 'scan-remove-target';
+    target: import('./scan-contracts').ScanTarget;
+    binding: StorageBinding;
+} | {
     type: 'entity-delete-begin';
     kind: 'char' | 'chat';
     entity: string;
@@ -237,7 +237,6 @@ export type Action = {
     checkedNewEntity: string;
     expected?: RenameExpected;
     observedId: string | null;
-    parentId?: string;
     confirmed: boolean;
     binding: StorageBinding;
 } | {
@@ -245,30 +244,7 @@ export type Action = {
     binding: StorageBinding;
     entity: string;
     generation?: number;
-    matchingEntities?: string[];
     readOnly?: boolean;
-} | {
-    type: 'character-copy-begin';
-    oldAvatar: string;
-    newAvatar: string;
-    taskId?: string;
-    binding?: StorageBinding;
-} | {
-    type: 'character-copy-acquire';
-    oldAvatar: string;
-    newAvatar: string;
-    taskId: string;
-    sourceId: string | null;
-    observedId: string | null;
-    binding: StorageBinding;
-} | {
-    type: 'character-copy-settle';
-    oldAvatar: string;
-    newAvatar: string;
-    taskId: string;
-    token: string;
-    confirmed: boolean;
-    binding: StorageBinding;
 } | {
     type: 'restart-prepare';
     targetBuildId: string;
@@ -298,18 +274,18 @@ export type Action = {
     token: string;
     confirmed: boolean;
     binding: StorageBinding;
-} | {
+}
+/** Without `create` only an existing registration is prepared; null means the role is not registered. */
+ | {
     type: 'identity-acquire';
     entity: string;
-    observedId: string | null;
     binding: StorageBinding;
-    matchingEntities?: string[];
+    create?: boolean;
 } | {
-    type: 'identity-settle';
+    type: 'identity-lookup';
     entity: string;
-    token: string;
-    confirmed: boolean;
     binding: StorageBinding;
+    readOnly?: boolean;
 } | {
     type: 'hello';
 } | {

@@ -39,7 +39,7 @@
 | SYS_VERSION | 公共API、通信协议或构建不配套；更新配套资源后由用户刷新页面 | warning／refresh_page |
 | SYS_BUSY | 服务正在切换目录、关闭或更新，当前调用受阻；查看插件设置中的当前操作，不保证等待后自动恢复 | warning |
 | SYS_FAILED | 服务内部或配置发生错误；保留诊断信息并检查服务状态。若已发送写入仍未知，优先SQL_UNKNOWN | error |
-| DB_UNINITIALIZED | 对应库还未创建，没有可查询数据；业务可显示空状态，query不建库 | warning |
+| DB_UNINITIALIZED | 对应库还未创建，或该角色在当前存储中尚无角色编号登记（只读入口不分配编号），没有可查询数据；业务可显示空状态，query不建库 | warning |
 | DB_MISSING | 原文件无法找到；检查原目录与备份，不自动新建替代文件 | error |
 | DB_FAILED | 数据库文件或管理记录读取、打开或核对失败；具体已知情况由message说明，不凭此码判断文件物理损坏 | error |
 | DB_UNAVAILABLE | 原对象、目录或当前数据库不能继续供此代理使用；停止原流程，不自动选当前聊天或新目录执行旧请求 | warning |

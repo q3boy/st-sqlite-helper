@@ -86,9 +86,22 @@ export interface DvsUpdateStatus {
 export interface DvsLorebookVersionOptions {
     onExpired: 'WARNING_MESSAGE' | 'AUTO_UPDATE';
 }
+export interface DvsInjectFlags {
+    filter: boolean;
+    plot: boolean;
+}
+export interface DvsRegisterOptions {
+    /** Ends only this registration; it does not cancel SQL already in progress. */
+    signal?: AbortSignal;
+}
 export interface DvsApi {
+    getInject(): Promise<DvsInjectFlags>;
+    setInject(flags: DvsInjectFlags): Promise<DvsInjectFlags>;
+    reInject(): Promise<void>;
     lorebookVersionCheck(options: DvsLorebookVersionOptions): Promise<void>;
-    register(options: DvsRegistration): Promise<() => void>;
+    register(options: DvsRegistration, lifetime?: DvsRegisterOptions): Promise<() => void>;
+    /** Reports current readiness immediately and stays subscribed across registrations. */
+    onRegistrationChange(callback: (ready: boolean) => void | Promise<void>): () => void;
     table(name: string, rows?: readonly DvsValues[]): DvsDataTable;
     getState(target?: {
         messageId: number;
