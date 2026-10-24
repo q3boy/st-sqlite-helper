@@ -29,19 +29,65 @@
       { okButton: '知道了', allowVerticalScrolling: true },
     );
   };
-  const confirmRefresh = async () => {
+  const confirmRefresh = async (action = '安装') => {
     const result = await popup.show.confirm(
-      '酒馆sqlite助手已安装',
-      '<p>插件已安装，刷新页面后生效。是否现在刷新？也可以稍后手动刷新。</p>',
+      `酒馆sqlite助手已${action}`,
+      `<p>插件已${action}，刷新页面后生效。是否现在刷新？也可以稍后手动刷新。</p>`,
       { okButton: '刷新页面', cancelButton: '稍后刷新' },
     );
     if (result === affirmative) {
       try {
         await triggerSlash('/reload-page');
       } catch (error) {
-        await report('请手动刷新页面', '插件已安装，但刷新命令未能执行。请手动刷新页面使插件生效。', error);
+        await report('请手动刷新页面', `插件已${action}，但刷新命令未能执行。请手动刷新页面使插件生效。`, error);
       }
     }
+  };
+  const checkForUpdates = async () => {
+    const id = 'st-sqlite-helper';
+    let type;
+    try {
+      if (typeof getExtensionType !== 'function' || typeof getExtensionInstallationInfo !== 'function') {
+        throw new Error('当前酒馆助手没有提供所需的扩展更新检查接口。');
+      }
+      type = getExtensionType(id);
+      if (!['local', 'global'].includes(type)) throw new Error('无法确定插件的安装范围。');
+      const info = await getExtensionInstallationInfo(id);
+      if (!info || typeof info.is_up_to_date !== 'boolean') throw new Error('酒馆返回的扩展更新信息格式不正确。');
+      if (info.is_up_to_date) return;
+      if (type === 'global') {
+        if (typeof isAdmin !== 'function') throw new Error('当前酒馆助手没有提供管理员检查接口。');
+        if (!isAdmin()) {
+          await popup.show.text(
+            '酒馆sqlite助手有更新',
+            '<p>插件安装供所有账号使用，需要由酒馆管理员更新。请联系管理员在扩展管理中更新，完成后刷新页面。</p>',
+            { okButton: '知道了' },
+          );
+          return;
+        }
+      }
+      if (typeof updateExtension !== 'function' || typeof triggerSlash !== 'function') {
+        throw new Error('当前酒馆助手没有提供所需的更新或页面刷新接口。');
+      }
+    } catch (error) {
+      await report('无法检查插件更新', '请在扩展管理中手动检查酒馆sqlite助手的更新。', error);
+      return;
+    }
+    const scope = type === 'global' ? '更新会影响酒馆中的所有账号。' : '更新仅影响当前账号。';
+    const result = await popup.show.confirm(
+      '酒馆sqlite助手有更新',
+      `<p>发现插件有更新，是否现在更新？${scope}完成后需要刷新页面，也可以稍后在扩展管理中更新。</p>`,
+      { okButton: '更新插件', cancelButton: '稍后更新' },
+    );
+    if (result !== affirmative) return;
+    try {
+      const response = await updateExtension(id);
+      if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}\n${await response.text()}`);
+    } catch (error) {
+      await report('插件更新失败', '请根据下方错误在扩展管理中手动更新酒馆sqlite助手。', error);
+      return;
+    }
+    await confirmRefresh('更新');
   };
 
   let installed;
@@ -91,6 +137,12 @@
         return;
       }
       if (needsRefresh) await confirmRefresh();
+      else if (
+        installed.some(extension => extension.id === 'st-sqlite-helper') &&
+        !disabled.includes('third-party/st-sqlite-helper')
+      ) {
+        await checkForUpdates();
+      }
       return;
     }
     if (typeof isAdmin !== 'function' || typeof installExtension !== 'function' || typeof triggerSlash !== 'function') {
