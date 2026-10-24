@@ -2083,7 +2083,7 @@ function savedIdentityFailure(error, field, identityStage) {
 
 // src/protocol.ts
 var PROTOCOL_VERSION = 23;
-var BUILD_ID = "f6f62172-ba7c-40d5-86ab-bc3a58cbfe01";
+var BUILD_ID = "748090ee-c314-488e-9a9c-916255645207";
 var extensionEntryPath = new URL(import.meta.url).pathname;
 var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
 var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;
@@ -51084,9 +51084,24 @@ var start = async () => {
     };
     page[configCleanupKey] = cleanup;
     owner.addEventListener("pagehide", cleanup, { once: true });
-    const helper = owner.TavernHelper;
-    if (typeof helper?.initializeGlobal !== "function")
-      throw new Error("酒馆助手 initializeGlobal 不可用。");
+    const helper = await new Promise((resolve, reject) => {
+      if (typeof page.TavernHelper?.initializeGlobal === "function") {
+        resolve(page.TavernHelper);
+        return;
+      }
+      const poll = owner.setInterval(() => {
+        if (typeof page.TavernHelper?.initializeGlobal !== "function")
+          return;
+        owner.clearInterval(poll);
+        owner.clearTimeout(timeout);
+        resolve(page.TavernHelper);
+      }, 100);
+      const timeout = owner.setTimeout(() => {
+        owner.clearInterval(poll);
+        owner.clearTimeout(timeout);
+        reject(new Error("等待酒馆助手接口就绪已超过 15 秒，initializeGlobal 仍不可用。请确认酒馆助手已启用且加载成功，核对版本后刷新页面。"));
+      }, 15000);
+    });
     publishService({ initializeGlobal: (name, value) => helper.initializeGlobal(name, value) }, facade, owner);
     await ensureDvsUpdateRegexes();
     await ensureDvsInputInjectRegexes();
