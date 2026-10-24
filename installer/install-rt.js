@@ -47,12 +47,12 @@
     const id = 'st-sqlite-helper';
     let type;
     try {
-      if (typeof getExtensionType !== 'function' || typeof getExtensionInstallationInfo !== 'function') {
+      if (typeof getExtensionType !== 'function' || typeof getExtensionStatus !== 'function') {
         throw new Error('当前酒馆助手没有提供所需的扩展更新检查接口。');
       }
       type = getExtensionType(id);
       if (!['local', 'global'].includes(type)) throw new Error('无法确定插件的安装范围。');
-      const info = await getExtensionInstallationInfo(id);
+      const info = await getExtensionStatus(id);
       if (!info || typeof info.is_up_to_date !== 'boolean') throw new Error('酒馆返回的扩展更新信息格式不正确。');
       if (info.is_up_to_date) return;
       if (type === 'global') {
