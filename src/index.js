@@ -2083,7 +2083,7 @@ function savedIdentityFailure(error, field, identityStage) {
 
 // src/protocol.ts
 var PROTOCOL_VERSION = 23;
-var BUILD_ID = "748090ee-c314-488e-9a9c-916255645207";
+var BUILD_ID = "94d301f7-134e-4e05-b054-9b97bf0a62e5";
 var extensionEntryPath = new URL(import.meta.url).pathname;
 var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
 var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;
@@ -7464,6 +7464,98 @@ function coordinateVersion(host) {
   host.upgrade.catch((error) => console.error("SQLite 自动安全更新失败；同目标不自动重试", error));
 }
 
+// src/tavern/environment-check.ts
+var import_semver = __toESM(require_semver2(), 1);
+var requirements = [
+  { name: "SillyTavern", minimum: "1.18.0", url: "https://docs.sillytavern.app/installation/updating/" },
+  {
+    name: "酒馆助手",
+    minimum: "4.11.0",
+    url: "https://n0vi028.github.io/JS-Slash-Runner-Doc/guide/关于酒馆助手/安装与更新.html"
+  }
+];
+var checkKey = Symbol.for("st-sqlite-helper.environment-check");
+function evaluateEnvironmentVersion(name, minimum, value) {
+  const requirement = requirements.find((item) => item.name === name);
+  const issue = { name, minimum, url: requirement.url };
+  const current = typeof value === "string" ? value.trim() : "";
+  const normalized = current.replace(/^[vV]/, "");
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(normalized) || !import_semver.valid(normalized))
+    return { ...issue, current: current || undefined, reason: "未取得可识别的完整版本号，无法确认是否满足要求。" };
+  return import_semver.lt(normalized, minimum) ? { ...issue, current } : undefined;
+}
+function waitForHelper(owner) {
+  if (typeof owner.TavernHelper?.initializeGlobal === "function")
+    return Promise.resolve(owner.TavernHelper);
+  return new Promise((resolve, reject) => {
+    const poll = owner.setInterval(() => {
+      if (typeof owner.TavernHelper?.initializeGlobal !== "function")
+        return;
+      owner.clearInterval(poll);
+      owner.clearTimeout(timeout);
+      resolve(owner.TavernHelper);
+    }, 100);
+    const timeout = owner.setTimeout(() => {
+      owner.clearInterval(poll);
+      owner.clearTimeout(timeout);
+      reject(new Error("等待酒馆助手接口就绪已超过 15 秒，请确认助手已安装、启用且加载成功。"));
+    }, 15000);
+  });
+}
+async function readTavernVersion(owner, helper) {
+  if (typeof helper.getTavernVersion !== "function")
+    throw new Error("酒馆助手未提供酒馆版本查询接口，请检查助手安装与加载情况。");
+  const version = helper.getTavernVersion();
+  if (version !== "1.0.0")
+    return version;
+  const controller = new AbortController;
+  const timeout = owner.setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await owner.fetch("/version", { cache: "no-store", signal: controller.signal });
+    if (!response.ok)
+      throw new Error(`读取酒馆版本失败（HTTP ${response.status}）。`);
+    const data = await response.json();
+    return data?.pkgVersion;
+  } catch (error) {
+    if (controller.signal.aborted)
+      throw new Error("读取酒馆版本超过 5 秒，请检查酒馆连接后刷新页面。");
+    throw error;
+  } finally {
+    owner.clearTimeout(timeout);
+  }
+}
+function checkEnvironment(owner) {
+  const page = owner;
+  return page[checkKey] ??= (async () => {
+    let helper;
+    try {
+      helper = await waitForHelper(page);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return { ok: false, issues: requirements.map((item) => ({ ...item, reason })) };
+    }
+    const results = await Promise.allSettled([
+      readTavernVersion(owner, helper),
+      Promise.resolve().then(() => {
+        if (typeof helper.getTavernHelperVersion !== "function")
+          throw new Error("酒馆助手未提供版本查询接口，请检查助手安装与加载情况。");
+        return helper.getTavernHelperVersion();
+      })
+    ]);
+    const issues = [];
+    for (const [index, result] of results.entries()) {
+      const requirement = requirements[index];
+      const issue = result.status === "fulfilled" ? evaluateEnvironmentVersion(requirement.name, requirement.minimum, result.value) : {
+        ...requirement,
+        reason: result.reason instanceof Error ? result.reason.message : String(result.reason)
+      };
+      if (issue)
+        issues.push(issue);
+    }
+    return issues.length ? { ok: false, issues } : { ok: true, helper };
+  })();
+}
+
 // src/tavern/native-ui.ts
 function nativeUi(owner) {
   const context = owner.SillyTavern?.getContext();
@@ -7520,6 +7612,102 @@ async function readSavedDirectory(owner) {
   } finally {
     database.close();
   }
+}
+
+// src/tavern/environment-panel.ts
+var shownKey = Symbol.for("st-sqlite-helper.environment-notice-shown");
+function notice(document2, issues) {
+  const content = document2.createElement("section");
+  content.className = "sqlite-helper-settings-group sqlite-helper-environment";
+  content.dataset.environmentNotice = "";
+  const title = document2.createElement("h4");
+  title.textContent = "SQLite Helper 暂时无法启动";
+  const description = document2.createElement("p");
+  description.textContent = issues.some((issue) => issue.reason) ? "无法确认当前环境满足要求，请处理以下问题后刷新页面。" : "当前环境未达到最低版本要求，请升级以下项目。";
+  content.append(title, description);
+  const list = document2.createElement("ul");
+  for (const issue of issues) {
+    const row = document2.createElement("li");
+    const name = document2.createElement("strong");
+    name.textContent = issue.name;
+    const version = document2.createElement("p");
+    version.textContent = issue.reason ? `${issue.current ? `当前返回：${issue.current}。` : ""}${issue.reason}最低要求：${issue.minimum}。` : `当前 ${issue.current}，需要 ${issue.minimum} 或更高版本。`;
+    const link = document2.createElement("a");
+    link.href = issue.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = `${issue.name} 升级说明`;
+    row.append(name, version, link);
+    list.append(row);
+  }
+  const effect = document2.createElement("p");
+  effect.className = "sqlite-helper-description";
+  effect.textContent = "本页面未启动 SQLite Helper 及 DVS，原有启用设置保持不变。升级或处理完成后请刷新页面；关闭提示后，本页面不再自动弹出。";
+  content.append(list, effect);
+  return content;
+}
+async function prepareEnvironment(owner) {
+  const page = owner;
+  const document2 = owner.document;
+  document2.getElementById("st-sqlite-helper-settings")?.remove();
+  const panel = document2.createElement("div");
+  panel.id = "st-sqlite-helper-settings";
+  panel.className = "inline-drawer";
+  panel.innerHTML = '<div class="inline-drawer-toggle inline-drawer-header"><b>SQLite Helper</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"></div>';
+  const body = panel.querySelector(".inline-drawer-content");
+  const pending = document2.createElement("p");
+  pending.className = "sqlite-helper-description";
+  pending.textContent = "正在检查酒馆和酒馆助手版本…";
+  body.append(pending);
+  const location = document2.getElementById("extensions_settings2");
+  if (!location)
+    throw new Error("酒馆扩展设置容器 #extensions_settings2 不存在。");
+  location.append(panel);
+  let stylesheet = document2.getElementById("st-sqlite-helper-environment-style");
+  if (!stylesheet) {
+    const link = document2.createElement("link");
+    link.id = "st-sqlite-helper-environment-style";
+    link.rel = "stylesheet";
+    link.href = `${EXTENSION_PATH}sqlite-helper.css?build=${BUILD_ID}`;
+    document2.head.append(link);
+    stylesheet = link;
+  }
+  const result = await checkEnvironment(owner);
+  if (result.ok) {
+    panel.remove();
+    stylesheet.remove();
+    return result.helper;
+  }
+  const content = notice(document2, result.issues);
+  content.id = "st-sqlite-helper-environment-notice";
+  content.setAttribute("role", "alert");
+  body.replaceChildren(content);
+  if (!page[shownKey]) {
+    page[shownKey] = true;
+    try {
+      const context = nativeUi(owner);
+      const popupContent = notice(document2, result.issues);
+      const close = document2.createElement("button");
+      close.type = "button";
+      close.className = "menu_button";
+      close.textContent = "知道了";
+      let popup;
+      close.addEventListener("click", () => void popup.completeAffirmative());
+      popupContent.append(close);
+      popup = new context.Popup(popupContent, context.POPUP_TYPE.DISPLAY, "", {
+        okButton: false,
+        cancelButton: false,
+        leftAlign: true,
+        onClosing: async () => true,
+        onClose: async () => {}
+      });
+      popup.show().catch((error) => console.error("SQLite 环境提示弹窗显示失败", error));
+    } catch (error) {
+      console.error("SQLite 环境提示弹窗显示失败", error);
+      body.style.display = "block";
+    }
+  }
+  return;
 }
 
 // src/tavern/floating-layout.ts
@@ -10933,8 +11121,11 @@ async function nativeRegexPort() {
   };
 }
 async function ensureDvsUpdateRegexes(port) {
+  await ensureDvsRegexes(updateDataRegexes(), port);
+}
+async function ensureDvsRegexes(expected, port) {
   const native = port ?? await nativeRegexPort();
-  const expected = updateDataRegexes(), existing = native.read();
+  const existing = native.read();
   const same = (left, right) => Object.keys(right).every((key) => JSON.stringify(left[key]) === JSON.stringify(right[key]));
   if (expected.every((rule) => existing.filter((value) => value.id === rule.id).length === 1 && existing.some((value) => value.id === rule.id && same(value, rule))))
     return;
@@ -11809,7 +12000,7 @@ function captureInputInjectTarget(adapter, owner) {
 }
 
 // src/dvs/worldbook.ts
-var import_semver = __toESM(require_semver2(), 1);
+var import_semver2 = __toESM(require_semver2(), 1);
 function entryPurpose(name) {
   if (/^\[DVS_(?:DDL|INIT)\]/i.test(name))
     return "sql";
@@ -11855,7 +12046,7 @@ async function readWorldbooks(reader, avatar, assertCurrent) {
   return result;
 }
 function strictVersion(version) {
-  const parsed = import_semver.parse(version, { loose: false });
+  const parsed = import_semver2.parse(version, { loose: false });
   if (!parsed || `${parsed.version}${parsed.build.length ? `+${parsed.build.join(".")}` : ""}` !== version)
     throw new Error(`DVS DDL 版本必须是完整 SemVer major.minor.patch：${version}`);
   return version;
@@ -11870,18 +12061,18 @@ function migrations(entries, current) {
       throw new Error(`DDL 条目名称无效：${entry.book} / ${entry.name}`);
     selected.push({ ...entry, version: strictVersion(match[1]) });
   }
-  selected.sort((a, b) => import_semver.compare(a.version, b.version));
+  selected.sort((a, b) => import_semver2.compare(a.version, b.version));
   if (!selected.length)
     throw new Error("角色卡绑定世界书中没有 DVS DDL 版本条目。");
   for (let i = 1;i < selected.length; i++)
-    if (import_semver.compare(selected[i - 1].version, selected[i].version) === 0)
+    if (import_semver2.compare(selected[i - 1].version, selected[i].version) === 0)
       throw new Error(`DVS DDL 同版本条目有歧义：${selected[i - 1].book} / ${selected[i - 1].name} 与 ${selected[i].book} / ${selected[i].name}`);
   if (current !== null) {
     strictVersion(current);
-    if (import_semver.compare(selected.at(-1).version, current) < 0)
+    if (import_semver2.compare(selected.at(-1).version, current) < 0)
       throw new Error(`角色卡 DDL ${selected.at(-1).version} 低于聊天已成功版本 ${current}，不能自动降级。`);
   }
-  return selected.filter((entry) => current === null || import_semver.compare(entry.version, current) > 0);
+  return selected.filter((entry) => current === null || import_semver2.compare(entry.version, current) > 0);
 }
 function initializationEntry(entries, welcomeId) {
   const candidates = entries.filter((entry) => new RegExp(`^\\[DVS_INIT\\]welcome_${welcomeId}$`, "i").test(entry.name));
@@ -29406,8 +29597,43 @@ function mountDvsConfigPanel(container, controller, requests, theme, floorData, 
   };
 }
 
+// src/dvs/config-regex.ts
+var DVS_CONFIG_SLOT = `<span ${DVS_SLOT_ATTRIBUTE}="config"></span>`;
+function configDisplayRegexes() {
+  const common = {
+    disabled: false,
+    findRegex: "/<DVSConfig\\/>/g",
+    trimStrings: [],
+    placement: [2],
+    runOnEdit: true,
+    substituteRegex: 0,
+    minDepth: null,
+    maxDepth: null
+  };
+  return [
+    {
+      ...common,
+      id: "sqlite-helper-dvs-config-prompt",
+      scriptName: "DVS：请求中隐藏配置标签",
+      replaceString: "",
+      markdownOnly: false,
+      promptOnly: true
+    },
+    {
+      ...common,
+      id: "sqlite-helper-dvs-config-display",
+      scriptName: "DVS：显示开场白配置面板",
+      replaceString: DVS_CONFIG_SLOT,
+      markdownOnly: true,
+      promptOnly: false
+    }
+  ];
+}
+async function ensureDvsConfigRegexes(port) {
+  await ensureDvsRegexes(configDisplayRegexes(), port);
+}
+
 // src/dvs/config-display.ts
-var formatterKey = Symbol.for("st-sqlite-helper.dvs-config-formatter");
 var displayKey = Symbol.for("st-sqlite-helper.dvs-config-display");
 var DVS_REGISTRATION_CHANGED = "sqlite-helper-dvs-registration-changed";
 function replaceConfigSlot(slot, container) {
@@ -29439,80 +29665,12 @@ function mountDvsConfigDisplay(owner, controller, requests, theme, floorData, is
   page[displayKey]?.();
   const context = () => owner.SillyTavern?.getContext(), document2 = owner.document;
   let alive = true, unmount, mounted;
-  const eligible = (metadata) => {
+  const eligible = () => {
     if (!alive || !isEnabled() || !isRegistered())
-      return false;
-    if (metadata && (metadata.messageId !== 0 || metadata.isUser || metadata.isSystem || metadata.isReasoning))
       return false;
     const current = context();
     return !!current && greetingIndex(current, 0) !== undefined;
   };
-  const marker = "DVS_CONFIG_RENDER_SLOT_95F8B671";
-  const delegate = {
-    before(text, metadata) {
-      if (!eligible(metadata))
-        return text;
-      let first = true;
-      const replace = (part) => part.replaceAll("<DVSConfig/>", () => {
-        if (!first)
-          return "";
-        first = false;
-        return marker;
-      });
-      const code = /(^|\n)[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n[ \t]{0,3}\2[ \t]*(?=\n|$)|$)|(`+)[^\n]*?\3/g;
-      let result = "", offset = 0;
-      for (const match of text.matchAll(code)) {
-        result += replace(text.slice(offset, match.index)) + match[0];
-        offset = match.index + match[0].length;
-      }
-      return result + replace(text.slice(offset));
-    },
-    after(text, metadata) {
-      if (!eligible(metadata) || !text.includes(marker))
-        return text;
-      const template = document2.createElement("template");
-      template.innerHTML = text;
-      const walker = document2.createTreeWalker(template.content, 4), nodes = [];
-      while (walker.nextNode())
-        nodes.push(walker.currentNode);
-      let inserted = false;
-      for (const node of nodes) {
-        if (!node.data.includes(marker))
-          continue;
-        if (node.parentElement?.closest("pre,code")) {
-          node.data = node.data.replaceAll(marker, "<DVSConfig/>");
-          continue;
-        }
-        const parts = node.data.split(marker), fragment = document2.createDocumentFragment();
-        parts.forEach((part, index) => {
-          if (index && !inserted) {
-            const span = document2.createElement("span");
-            span.setAttribute("data-dvs-config-slot", "");
-            fragment.append(span);
-            inserted = true;
-          }
-          fragment.append(document2.createTextNode(part));
-        });
-        node.replaceWith(fragment);
-      }
-      return template.innerHTML;
-    }
-  };
-  const formatter = context()?.messageFormatter;
-  if (formatter) {
-    let hooks = page[formatterKey];
-    if (!hooks) {
-      hooks = {};
-      page[formatterKey] = hooks;
-      formatter.addHook((text, metadata) => hooks.delegate?.before(text, metadata) ?? text, {
-        stage: formatter.stage.BEFORE_REGEX
-      });
-      formatter.addHook((text, metadata) => hooks.delegate?.after(text, metadata) ?? text, {
-        stage: formatter.stage.AFTER_MARKDOWN
-      });
-    }
-    hooks.delegate = delegate;
-  }
   const destroy = () => {
     unmount?.();
     unmount = undefined;
@@ -29520,19 +29678,24 @@ function mountDvsConfigDisplay(owner, controller, requests, theme, floorData, is
     mounted = undefined;
   };
   const mount = () => {
+    const message = document2.querySelector('.mes[mesid="0"] .mes_text');
+    for (const code of message?.querySelectorAll("pre,code") ?? []) {
+      const text = code.textContent ?? "";
+      if (text.includes(DVS_CONFIG_SLOT))
+        code.textContent = text.replaceAll(DVS_CONFIG_SLOT, "<DVSConfig/>");
+    }
     if (!eligible()) {
       destroy();
       return;
     }
-    const message = document2.querySelector('.mes[mesid="0"] .mes_text');
     if (mounted?.isConnected && message?.contains(mounted))
       return;
     destroy();
-    const slots = message?.querySelectorAll("[data-dvs-config-slot]");
-    const slot = slots?.[0];
-    if (!slot || slot.closest("pre,code") || !eligible())
+    const slots = [...message?.querySelectorAll(`[${DVS_SLOT_ATTRIBUTE}="config"]`) ?? []].filter((slot) => !slot.closest("pre,code"));
+    const slot = slots[0];
+    if (!slot)
       return;
-    for (const duplicate of [...slots ?? []].slice(1))
+    for (const duplicate of slots.slice(1))
       duplicate.remove();
     mounted = document2.createElement("div");
     mounted.className = "dvs-config-inline";
@@ -29576,8 +29739,6 @@ function mountDvsConfigDisplay(owner, controller, requests, theme, floorData, is
     destroy();
     for (const remove of removals)
       remove();
-    if (page[formatterKey]?.delegate === delegate)
-      page[formatterKey].delegate = undefined;
     if (page[displayKey] === dispose)
       delete page[displayKey];
   };
@@ -35279,7 +35440,7 @@ function createUpdateFeedback(owner, reportError) {
 }
 
 // src/dvs/lorebook-version.ts
-var import_semver2 = __toESM(require_semver2(), 1);
+var import_semver3 = __toESM(require_semver2(), 1);
 function version2(value, label) {
   if (typeof value !== "string")
     throw new Error(`${label}缺少完整版本号，请填写 major.minor.patch。`);
@@ -35287,7 +35448,7 @@ function version2(value, label) {
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(text))
     throw new Error(`${label}“${value}”不是完整 SemVer 版本号，请填写例如 0.1.0 或 v0.1.0。`);
   try {
-    return new import_semver2.SemVer(text);
+    return new import_semver3.SemVer(text);
   } catch {
     throw new Error(`${label}“${value}”不是有效 SemVer 版本号。`);
   }
@@ -35328,7 +35489,7 @@ async function checkLorebookVersion(port, options, now = () => new Date) {
     const original = await port.load(fixed.primary);
     assert();
     const oldVersion = worldbookVersion(original, fixed.primary);
-    if (!import_semver2.lt(oldVersion, cardVersion))
+    if (!import_semver3.lt(oldVersion, cardVersion))
       return;
     if (options.onExpired === "WARNING_MESSAGE") {
       port.notify("warning", `主世界书“${fixed.primary}”的版本 ${oldVersion.raw} 低于角色卡版本 ${cardVersion.raw}。请先保留当前世界书及本地修改，再从角色卡重新导入世界书并设为本卡主世界书。`);
@@ -35367,7 +35528,7 @@ async function checkLorebookVersion(port, options, now = () => new Date) {
     assert();
     const currentVersion = worldbookVersion(await port.read(newName), newName);
     assert();
-    if (import_semver2.lt(currentVersion, cardVersion))
+    if (import_semver3.lt(currentVersion, cardVersion))
       throw new Error(`导入后主世界书版本仍为 ${currentVersion.raw}，低于角色卡 ${cardVersion.raw}。请作者修正卡内世界书后重新导入。`);
     await port.complete(`主世界书已更新为“${newName}”（${currentVersion.raw}）。原书及全部本地修改保留在“${backup}”，可自行查看并取回修改。`, assert);
   } catch (cause) {
@@ -51027,10 +51188,14 @@ function installDvsChatPanels(owner, ui, floorData) {
 // src/tavern/extension-entry.ts
 var configCleanupKey = Symbol.for("st-sqlite-helper.dvs-config-cleanup");
 var owner = window;
-var host = startExtension(owner);
 var start = async () => {
   owner.document.getElementById("st-sqlite-helper-publication-error")?.remove();
+  let startedHost;
   try {
+    const helper = await prepareEnvironment(owner);
+    if (!helper)
+      return;
+    const host = startedHost = startExtension(owner);
     const facade = getServiceFacade(owner, host);
     const page = owner;
     page[configCleanupKey]?.();
@@ -51084,27 +51249,10 @@ var start = async () => {
     };
     page[configCleanupKey] = cleanup;
     owner.addEventListener("pagehide", cleanup, { once: true });
-    const helper = await new Promise((resolve, reject) => {
-      if (typeof page.TavernHelper?.initializeGlobal === "function") {
-        resolve(page.TavernHelper);
-        return;
-      }
-      const poll = owner.setInterval(() => {
-        if (typeof page.TavernHelper?.initializeGlobal !== "function")
-          return;
-        owner.clearInterval(poll);
-        owner.clearTimeout(timeout);
-        resolve(page.TavernHelper);
-      }, 100);
-      const timeout = owner.setTimeout(() => {
-        owner.clearInterval(poll);
-        owner.clearTimeout(timeout);
-        reject(new Error("等待酒馆助手接口就绪已超过 15 秒，initializeGlobal 仍不可用。请确认酒馆助手已启用且加载成功，核对版本后刷新页面。"));
-      }, 15000);
-    });
     publishService({ initializeGlobal: (name, value) => helper.initializeGlobal(name, value) }, facade, owner);
     await ensureDvsUpdateRegexes();
     await ensureDvsInputInjectRegexes();
+    await ensureDvsConfigRegexes();
     publishDvs(owner, host, facade, () => controller.getSavedRequestSnapshot("variable"), () => controller.getSavedRequestSnapshot("input_inject"));
   } catch (error) {
     const message = "SQLite 业务接口发布失败，业务脚本暂时无法使用。请查看详细原因，核对插件与酒馆助手版本后刷新页面。";
@@ -51121,7 +51269,7 @@ var start = async () => {
     reason.textContent = error instanceof Error ? error.message : String(error);
     details.append(summary, reason);
     notice.append(text, details);
-    host.diagnostics.error("public-api-publication", error);
+    startedHost?.diagnostics.error("public-api-publication", error);
     owner.document.body.append(notice);
     owner.addEventListener("pagehide", () => notice.remove(), { once: true });
   }

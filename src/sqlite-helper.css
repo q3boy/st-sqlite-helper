@@ -1127,6 +1127,37 @@ button.sqlite-viewer-text-cell:hover {
     box-shadow: inset 3px 0 0 var(--dvs-delta);
   }
 }
+.sqlite-helper-environment {
+  color: var(--SmartThemeBodyColor, inherit);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  text-align: start;
+}
+.sqlite-helper-environment h4 {
+  margin: 0 0 0.75em;
+}
+.sqlite-helper-environment p {
+  margin: 0.5em 0;
+}
+.sqlite-helper-environment ul {
+  padding-inline-start: 1.4em;
+  margin: 1em 0;
+}
+.sqlite-helper-environment li + li {
+  margin-top: 1em;
+}
+.sqlite-helper-environment .sqlite-helper-description {
+  opacity: 0.8;
+}
+.sqlite-helper-environment .menu_button {
+  margin: 1em 0 0 auto;
+  width: max-content;
+  white-space: nowrap;
+}
+.popup .sqlite-helper-environment {
+  max-height: calc(100dvh - 160px);
+  overflow-y: auto;
+}
 
 /* DVS 界面 */
 /*! tailwindcss v4.3.3 | MIT License | https://tailwindcss.com */
