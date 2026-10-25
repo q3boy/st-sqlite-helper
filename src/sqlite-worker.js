@@ -179,12 +179,13 @@
 
   // src/protocol.ts
   var PROTOCOL_VERSION = 23;
-  var BUILD_ID = "94d301f7-134e-4e05-b054-9b97bf0a62e5";
+  var BUILD_ID = "f6afd4e3-a7f7-4490-9e30-aea7ebd0d735";
   var extensionEntryPath = undefined;
   var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
   var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;
   var EXTENSION_PATH = `/scripts/extensions/${EXTENSION_TEMPLATE_PATH}/`;
   var WORKER_URL = `${EXTENSION_PATH}sqlite-worker.js`;
+  var DEDICATED_WORKER_URL = `${EXTENSION_PATH}sqlite-dedicated-worker.js`;
   var isUuid = (value) => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
   var bindingKey = (b) => JSON.stringify([b.storageId, b.configGeneration, b.scope ?? "global", b.charDbId ?? null, b.chatDbId ?? null]);
   var identityBindingKey = (b) => JSON.stringify([
@@ -1556,6 +1557,7 @@
     SQL;
     storage;
     onBackgroundSaveFailed;
+    saveDebounceMs;
     db;
     state = "new";
     transient = false;
@@ -1567,10 +1569,11 @@
     firstSaveHooks;
     fileBaseline;
     tail = Promise.resolve();
-    constructor(SQL, storage, onBackgroundSaveFailed) {
+    constructor(SQL, storage, onBackgroundSaveFailed, saveDebounceMs = 1000) {
       this.SQL = SQL;
       this.storage = storage;
       this.onBackgroundSaveFailed = onBackgroundSaveFailed;
+      this.saveDebounceMs = saveDebounceMs;
     }
     get availability() {
       return this.state;
@@ -1735,7 +1738,7 @@
             } catch {}
           }
         });
-      }, 1000);
+      }, this.saveDebounceMs);
       this.saveTimer.unref?.();
     }
     open() {
@@ -4918,360 +4921,372 @@
     return { restore, chat, role };
   }
 
-  // src/worker/entry.ts
+  // src/worker/runtime.ts
   importScripts(new URL("sql-wasm.js", self.location.href).href);
-  var engine = initSqlJs({ locateFile: (file) => new URL(file, self.location.href).href });
-  var instanceId = crypto.randomUUID();
-  var chatIdentities = new Map;
-  var ports = new Set;
-  var lastSeen = new Map;
-  var key2 = identityBindingKey;
-  function removePort(port) {
-    restart.disconnected(port);
-    for (const identity of chatIdentities.values())
-      identity.disconnect(port);
-    ports.delete(port);
-    lastSeen.delete(port);
-    port.close();
-  }
-  setInterval(() => {
-    for (const [port, time] of lastSeen)
-      if (Date.now() - time > 90000)
-        removePort(port);
-  }, 30000);
-  function broadcast(event) {
-    for (const port of ports) {
-      try {
-        port.postMessage(event);
-      } catch {
-        removePort(port);
-      }
+  function createWorkerRuntime(saveDebounceMs) {
+    const engine = initSqlJs({ locateFile: (file) => new URL(file, self.location.href).href });
+    const instanceId = crypto.randomUUID();
+    const chatIdentities = new Map;
+    const ports = new Set;
+    const lastSeen = new Map;
+    const key = identityBindingKey;
+    function removePort(port) {
+      restart.disconnected(port);
+      for (const identity of chatIdentities.values())
+        identity.disconnect(port);
+      ports.delete(port);
+      lastSeen.delete(port);
+      port.close();
     }
-  }
-  var storage = new StorageCoordinator(new IndexedDbConfiguration, async (directory, binding, mode) => new SingleDatabase(await engine, new DirectoryStorage(directory, binding?.charDbId, binding?.chatDbId, mode === "opfs")), (info) => {
-    const event = { type: "storage-changed", instanceId, ...withEntityRevision(info) };
-    broadcast(event);
-  });
-  var renames = new EntityRenames((binding, task) => storage.manageEntities(binding, task));
-  storage.onBackgroundSaveFailed = (binding, failure) => {
-    broadcast({ type: "background-save-failed", instanceId, binding, ...failure });
-  };
-  function chatCoordinate(entity) {
-    if (!entity)
-      return false;
-    try {
-      const parts = JSON.parse(entity);
-      return Array.isArray(parts) && parts.length === 2 && parts.every((part) => typeof part === "string");
-    } catch {
-      return false;
-    }
-  }
-  var deletions = new EntityDeletions(storage, (binding, ticket) => {
-    if (ticket.stage === "applied")
-      for (const c of ticket.credentials ?? [])
-        entities.forgetReference(binding, c.referenceId, c.chat);
-    broadcast({
-      type: "entity-deleted",
-      instanceId,
-      storageId: binding.storageId,
-      configGeneration: binding.configGeneration,
-      ticket
-    });
-  });
-  function withEntityRevision(info) {
-    return {
-      ...info,
-      storage: {
-        ...info.storage,
-        entityRevision: info.storage.storageId ? deletions.revision({ storageId: info.storage.storageId, configGeneration: info.storage.configGeneration }) : 0
-      }
-    };
-  }
-  var entities = new EntityCoordinator((binding, task) => storage.manageEntities(binding, task), (binding, entity) => {
-    renames.assertEntity(binding, entity);
-    deletions.assertEntity(binding, entity, entity !== binding.characterEntity && chatCoordinate(entity));
-  }, (binding, id, chat) => storage.assertIdentityTargetAvailable({
-    ...binding,
-    scope: chat ? "chat" : "char",
-    charDbId: chat ? binding.charDbId : id,
-    ...chat ? { chatDbId: id } : { chatDbId: undefined }
-  }), (binding, task) => storage.manageEntities(binding, task, true));
-  storage.beforeScopedExecution = (binding) => entities.assertCached(binding);
-  storage.beforeConfigurationChange = () => {
-    renames.assertSettled();
-    deletions.assertSettled();
-  };
-  storage.cleanupWaiting = (binding, target) => deletions.isCleanupWaiting(binding, target);
-  setInterval(() => {
-    storage.releaseIdle();
-  }, 30000);
-  var identity = createIdentityRequests({ storage, entities, deletions, renames, chatIdentities });
-  var active = new Set;
-  async function verifyDrain() {
-    renames.assertSettled();
-    deletions.assertSettled();
-    await storage.drainForRestart();
-    for (const coordinator of chatIdentities.values())
-      coordinator.assertSettled();
-  }
-  var restart = new RestartCoordinator((port, event) => port.postMessage(event), async () => {
-    while (active.size)
-      await Promise.allSettled([...active]);
-    await verifyDrain();
-  });
-  var isBusinessWrite = isWriteAction;
-  var preflightError = (request, error) => isBusinessWrite(request) ? beforeBusinessSqlError(error) : error;
-  function executeWrite(operation, binding, execute = (commands, id) => storage.executeWrite(binding, commands, id)) {
-    let commands, id;
-    try {
-      commands = writeCommands(operation);
-      id = operation.callId ?? crypto.randomUUID();
-    } catch (error) {
-      throw beforeBusinessSqlError(error);
-    }
-    return execute(commands, id);
-  }
-  async function dispatch(request, port) {
-    if (request.protocolVersion !== PROTOCOL_VERSION)
-      throw preflightError(request, new ServiceError({ code: "PROTOCOL_MISMATCH", message: "通信协议不兼容，请关闭所有旧验证页后加载同一构建。" }));
-    if (request.type === "restart-prepare") {
-      restart.assertParticipant(port);
-      if (!isUuid(request.targetBuildId))
-        return invalidRequest();
-      if (request.targetProtocolVersion !== PROTOCOL_VERSION) {
-        const error = { code: "PROTOCOL_MISMATCH", message: "目标协议不兼容，取消准备。" };
-        restart.cancel(error);
-        throw new ServiceError(error);
-      }
-      if (request.purpose !== undefined && !["update", "disable"].includes(request.purpose))
-        return invalidRequest();
-      return restart.prepare(request.targetBuildId, ports, request.automatic === true, request.purpose);
-    }
-    if (request.type === "restart-reply") {
-      if (typeof request.attemptId !== "string")
-        return invalidRequest();
-      restart.reply(port, request.attemptId, request.error);
-      return {};
-    }
-    if (request.type === "restart-cancel") {
-      if (typeof request.attemptId !== "string")
-        return invalidRequest();
-      restart.cancelAttempt(port, request.attemptId);
-      return {};
-    }
-    if (request.type === "restart-commit") {
-      if (typeof request.attemptId !== "string")
-        return invalidRequest();
-      return restart.commit(port, request.attemptId, (authorize) => storage.closeForRestart(() => {
-        renames.assertSettled();
-        deletions.assertSettled();
-        for (const coordinator of chatIdentities.values())
-          coordinator.assertSettled();
-        authorize();
-      }), () => self.close());
-    }
-    if (request.type === "hello" && restart.state !== "idle")
-      throw new ServiceError({ code: "SERVICE_RESTARTING", message: "全局准备期间暂停新连接握手，请取消后显式重连。" });
-    try {
-      if (!["ping", "disconnect", "storage-status", "restart-drain"].includes(request.type))
-        restart.assertAdmission(port);
-    } catch (error) {
-      throw preflightError(request, error);
-    }
-    if (request.type === "restart-drain") {
-      await verifyDrain();
-      return { drained: true, buildId: BUILD_ID, protocolVersion: PROTOCOL_VERSION };
-    }
-    if (request.type === "entity-delete-begin")
-      return deletions.begin(request.kind, request.entity, request.operationId, request.deleteChats, request.binding);
-    if (request.type === "entity-delete-pending")
-      return deletions.pending(request.binding);
-    if (request.type === "entity-delete-settle") {
-      if (!isUuid(request.taskId) || typeof request.confirmed !== "boolean" || typeof request.absent !== "boolean" || request.requestOperationId !== undefined && !isUuid(request.requestOperationId) || request.nativeResult !== undefined && !["success", "failed", "unknown"].includes(request.nativeResult) || request.observedId !== undefined && request.observedId !== null && !isUuid(request.observedId) || request.remainingChatNames !== undefined && (!Array.isArray(request.remainingChatNames) || request.remainingChatNames.length > 256 || request.remainingChatNames.some((name) => typeof name !== "string" || !name) || new Set(request.remainingChatNames).size !== request.remainingChatNames.length))
-        return invalidRequest();
-      return deletions.settle(request, request.binding);
-    }
-    if (request.type === "entity-delete-resume") {
-      return deletions.resume(request.binding);
-    }
-    if (request.type === "entity-rename-begin")
-      return renames.begin(request.kind, request.oldEntity, request.newEntity, request.binding);
-    if (request.type === "entity-rename-settle") {
-      await storage.validateIdentityBinding(request.binding);
-      if (!isUuid(request.taskId) || typeof request.checkedOldEntity !== "string" || typeof request.checkedNewEntity !== "string" || typeof request.confirmed !== "boolean" || request.observedId !== null && !isUuid(request.observedId))
-        return invalidRequest();
-      const result = await renames.settle({
-        taskId: request.taskId,
-        kind: request.kind,
-        oldEntity: request.oldEntity,
-        newEntity: request.newEntity,
-        checkedOldEntity: request.checkedOldEntity,
-        checkedNewEntity: request.checkedNewEntity,
-        stage: "pending",
-        expected: request.expected
-      }, request.observedId, request.confirmed, request.binding, () => {
-        const avatars = request.kind === "char" ? [request.oldEntity, request.newEntity] : [JSON.parse(request.oldEntity)[0], JSON.parse(request.newEntity)[0]];
-        const affects = (entity) => request.kind === "chat" ? entity === request.oldEntity || entity === request.newEntity : (() => {
-          try {
-            return avatars.includes(JSON.parse(entity)[0]);
-          } catch {
-            return false;
-          }
-        })();
-        return [...chatIdentities.values()].some((coordinator) => coordinator.hasWorkFor(affects));
-      });
-      if (result.stage === "applied")
-        broadcast({
-          type: "entity-renamed",
-          instanceId,
-          storageId: request.binding.storageId,
-          configGeneration: request.binding.configGeneration
-        });
-      return result;
-    }
-    if (request.type === "identity-restore")
-      return identity.restore(request);
-    if (request.type === "chat-identity-acquire" || request.type === "chat-identity-settle")
-      return identity.chat(request, port);
-    if (request.type === "identity-acquire" || request.type === "identity-lookup")
-      return identity.role(request);
-    if (request.type === "scan-cleanup") {
-      const result = await deletions.cleanScan(request.request, request.binding);
-      if (result.record.status === "removed")
-        entities.forgetReference(request.binding, request.request.expected.referenceId, request.request.expected.scope === "chat");
-      return result;
-    }
-    if (request.type === "scan")
-      return storage.scan(request.binding, request.request);
-    if (request.type === "scan-remove-entry")
-      return storage.removeScanEntry(request.binding, request.request);
-    if (request.type === "scan-remove-target")
-      return storage.removeScanTarget(request.binding, request.target);
-    try {
-      if ("binding" in request && request.binding) {
-        deletions.assertBinding(request.binding);
-        await entities.verify(request.binding, false, request.type === "viewer");
-      }
-    } catch (error) {
-      throw preflightError(request, error);
-    }
-    if (request.type === "hello")
-      return { protocolVersion: PROTOCOL_VERSION, buildId: BUILD_ID, ...withEntityRevision(await storage.getStatus()) };
-    if (request.type === "ping")
-      return { alive: true };
-    if (request.type === "disconnect") {
-      removePort(port);
-      return {};
-    }
-    if (request.type === "storage-status")
-      return withEntityRevision(await storage.getStatus());
-    if (request.type === "storage-configure")
-      return withEntityRevision(await storage.configureMode(request.mode, request.autoReloadEnabled));
-    if (request.type === "open") {
-      if (!request.directory || request.directory.kind !== "directory" || typeof request.directory.getFileHandle !== "function" || typeof request.directory.isSameEntry !== "function")
-        return invalidRequest();
-      return withEntityRevision(await storage.select(request.directory));
-    }
-    if (request.type === "check-permission")
-      return withEntityRevision(await storage.resume(request.binding));
-    if (request.type === "refresh")
-      return storage.refresh(request.binding);
-    if (request.type === "batch") {
-      if (!Array.isArray(request.operations) || !request.operations.length) {
+    setInterval(() => {
+      for (const [port, time] of lastSeen)
+        if (Date.now() - time > 90000)
+          removePort(port);
+    }, 30000);
+    function broadcast(event) {
+      for (const port of ports) {
         try {
-          invalidRequest();
-        } catch (error) {
-          throw beforeBusinessSqlError(error);
-        }
-      }
-      return storage.executeBatch(request.binding, async (execute) => {
-        const results = [];
-        for (const operation of request.operations) {
-          let handedOff = false;
-          try {
-            if (!operation || typeof operation.callId !== "string" || !operation.binding || key2(operation.binding) !== key2(request.binding))
-              invalidRequest();
-            entities.assertCached(operation.binding);
-            handedOff = true;
-            const result = await executeWrite(operation, request.binding, execute);
-            results.push({ callId: operation.callId, ok: true, result });
-          } catch (error) {
-            const data = {
-              ...errorData(handedOff ? error : beforeBusinessSqlError(error)),
-              operationId: operation?.callId
-            };
-            results.push({ callId: operation?.callId ?? "", ok: false, error: data });
-          }
-        }
-        return results;
-      });
-    }
-    if (isWriteAction(request))
-      return executeWrite(request, request.binding);
-    if (request.type === "viewer")
-      return storage.inspect(request.binding, (db) => db.viewer(request.request, () => {
-        if (request.binding)
-          entities.assertCached(request.binding);
-      }));
-    if (request.type === "query") {
-      checkQueryPrefix(request.sql);
-      const query = { sql: request.sql, binds: validateSerializedBinds(request.binds) };
-      return storage.execute(request.binding, (db) => db.query(query, () => {
-        if (request.binding)
-          entities.assertCached(request.binding);
-      }));
-    }
-    return invalidRequest();
-  }
-  self.onconnect = (event) => {
-    const port = event.ports[0];
-    ports.add(port);
-    lastSeen.set(port, Date.now());
-    port.onmessageerror = () => {
-      removePort(port);
-    };
-    port.onmessage = (event) => {
-      if (!ports.has(port))
-        return;
-      lastSeen.set(port, Date.now());
-      const request = event.data;
-      if (!request || typeof request.requestId !== "string")
-        return;
-      (async () => {
-        let response;
-        try {
-          const work = dispatch(request, port);
-          const business = ![
-            "ping",
-            "disconnect",
-            "storage-status",
-            "restart-drain",
-            "restart-prepare",
-            "restart-reply",
-            "restart-cancel",
-            "restart-commit"
-          ].includes(request.type);
-          if (business) {
-            active.add(work);
-            work.finally(() => active.delete(work)).catch(() => {});
-          }
-          response = { requestId: request.requestId, instanceId, ok: true, result: await work };
-        } catch (error) {
-          const data = errorData(error);
-          response = {
-            requestId: request.requestId,
-            instanceId,
-            ok: false,
-            error: isBusinessWrite(request) ? { ...data, failureKind: data.failureKind ?? "service", executionState: data.executionState ?? "unknown" } : data
-          };
-        }
-        try {
-          port.postMessage(response);
+          port.postMessage(event);
         } catch {
           removePort(port);
         }
-      })();
+      }
+    }
+    const storage = new StorageCoordinator(new IndexedDbConfiguration, async (directory, binding, mode) => new SingleDatabase(await engine, new DirectoryStorage(directory, binding?.charDbId, binding?.chatDbId, mode === "opfs"), undefined, saveDebounceMs), (info) => {
+      const event = { type: "storage-changed", instanceId, ...withEntityRevision(info) };
+      broadcast(event);
+    });
+    const renames = new EntityRenames((binding, task) => storage.manageEntities(binding, task));
+    storage.onBackgroundSaveFailed = (binding, failure) => {
+      broadcast({ type: "background-save-failed", instanceId, binding, ...failure });
     };
-    port.start();
+    function chatCoordinate(entity) {
+      if (!entity)
+        return false;
+      try {
+        const parts = JSON.parse(entity);
+        return Array.isArray(parts) && parts.length === 2 && parts.every((part) => typeof part === "string");
+      } catch {
+        return false;
+      }
+    }
+    const deletions = new EntityDeletions(storage, (binding, ticket) => {
+      if (ticket.stage === "applied")
+        for (const c of ticket.credentials ?? [])
+          entities.forgetReference(binding, c.referenceId, c.chat);
+      broadcast({
+        type: "entity-deleted",
+        instanceId,
+        storageId: binding.storageId,
+        configGeneration: binding.configGeneration,
+        ticket
+      });
+    });
+    function withEntityRevision(info) {
+      return {
+        ...info,
+        storage: {
+          ...info.storage,
+          entityRevision: info.storage.storageId ? deletions.revision({ storageId: info.storage.storageId, configGeneration: info.storage.configGeneration }) : 0
+        }
+      };
+    }
+    const entities = new EntityCoordinator((binding, task) => storage.manageEntities(binding, task), (binding, entity) => {
+      renames.assertEntity(binding, entity);
+      deletions.assertEntity(binding, entity, entity !== binding.characterEntity && chatCoordinate(entity));
+    }, (binding, id, chat) => storage.assertIdentityTargetAvailable({
+      ...binding,
+      scope: chat ? "chat" : "char",
+      charDbId: chat ? binding.charDbId : id,
+      ...chat ? { chatDbId: id } : { chatDbId: undefined }
+    }), (binding, task) => storage.manageEntities(binding, task, true));
+    storage.beforeScopedExecution = (binding) => entities.assertCached(binding);
+    storage.beforeConfigurationChange = () => {
+      renames.assertSettled();
+      deletions.assertSettled();
+    };
+    storage.cleanupWaiting = (binding, target) => deletions.isCleanupWaiting(binding, target);
+    setInterval(() => {
+      storage.releaseIdle();
+    }, 30000);
+    const identity = createIdentityRequests({ storage, entities, deletions, renames, chatIdentities });
+    const active = new Set;
+    async function verifyDrain() {
+      renames.assertSettled();
+      deletions.assertSettled();
+      await storage.drainForRestart();
+      for (const coordinator of chatIdentities.values())
+        coordinator.assertSettled();
+    }
+    const restart = new RestartCoordinator((port, event) => port.postMessage(event), async () => {
+      while (active.size)
+        await Promise.allSettled([...active]);
+      await verifyDrain();
+    });
+    const isBusinessWrite = isWriteAction;
+    const preflightError = (request, error) => isBusinessWrite(request) ? beforeBusinessSqlError(error) : error;
+    function executeWrite(operation, binding, execute = (commands, id) => storage.executeWrite(binding, commands, id)) {
+      let commands, id;
+      try {
+        commands = writeCommands(operation);
+        id = operation.callId ?? crypto.randomUUID();
+      } catch (error) {
+        throw beforeBusinessSqlError(error);
+      }
+      return execute(commands, id);
+    }
+    async function dispatch(request, port) {
+      if (request.protocolVersion !== PROTOCOL_VERSION)
+        throw preflightError(request, new ServiceError({ code: "PROTOCOL_MISMATCH", message: "通信协议不兼容，请关闭所有旧验证页后加载同一构建。" }));
+      if (request.type === "restart-prepare") {
+        restart.assertParticipant(port);
+        if (!isUuid(request.targetBuildId))
+          return invalidRequest();
+        if (request.targetProtocolVersion !== PROTOCOL_VERSION) {
+          const error = { code: "PROTOCOL_MISMATCH", message: "目标协议不兼容，取消准备。" };
+          restart.cancel(error);
+          throw new ServiceError(error);
+        }
+        if (request.purpose !== undefined && !["update", "disable"].includes(request.purpose))
+          return invalidRequest();
+        return restart.prepare(request.targetBuildId, ports, request.automatic === true, request.purpose);
+      }
+      if (request.type === "restart-reply") {
+        if (typeof request.attemptId !== "string")
+          return invalidRequest();
+        restart.reply(port, request.attemptId, request.error);
+        return {};
+      }
+      if (request.type === "restart-cancel") {
+        if (typeof request.attemptId !== "string")
+          return invalidRequest();
+        restart.cancelAttempt(port, request.attemptId);
+        return {};
+      }
+      if (request.type === "restart-commit") {
+        if (typeof request.attemptId !== "string")
+          return invalidRequest();
+        return restart.commit(port, request.attemptId, (authorize) => storage.closeForRestart(() => {
+          renames.assertSettled();
+          deletions.assertSettled();
+          for (const coordinator of chatIdentities.values())
+            coordinator.assertSettled();
+          authorize();
+        }), () => self.close());
+      }
+      if (request.type === "hello" && restart.state !== "idle")
+        throw new ServiceError({ code: "SERVICE_RESTARTING", message: "全局准备期间暂停新连接握手，请取消后显式重连。" });
+      try {
+        if (!["ping", "disconnect", "storage-status", "restart-drain"].includes(request.type))
+          restart.assertAdmission(port);
+      } catch (error) {
+        throw preflightError(request, error);
+      }
+      if (request.type === "restart-drain") {
+        await verifyDrain();
+        return { drained: true, buildId: BUILD_ID, protocolVersion: PROTOCOL_VERSION };
+      }
+      if (request.type === "entity-delete-begin")
+        return deletions.begin(request.kind, request.entity, request.operationId, request.deleteChats, request.binding);
+      if (request.type === "entity-delete-pending")
+        return deletions.pending(request.binding);
+      if (request.type === "entity-delete-settle") {
+        if (!isUuid(request.taskId) || typeof request.confirmed !== "boolean" || typeof request.absent !== "boolean" || request.requestOperationId !== undefined && !isUuid(request.requestOperationId) || request.nativeResult !== undefined && !["success", "failed", "unknown"].includes(request.nativeResult) || request.observedId !== undefined && request.observedId !== null && !isUuid(request.observedId) || request.remainingChatNames !== undefined && (!Array.isArray(request.remainingChatNames) || request.remainingChatNames.length > 256 || request.remainingChatNames.some((name) => typeof name !== "string" || !name) || new Set(request.remainingChatNames).size !== request.remainingChatNames.length))
+          return invalidRequest();
+        return deletions.settle(request, request.binding);
+      }
+      if (request.type === "entity-delete-resume") {
+        return deletions.resume(request.binding);
+      }
+      if (request.type === "entity-rename-begin")
+        return renames.begin(request.kind, request.oldEntity, request.newEntity, request.binding);
+      if (request.type === "entity-rename-settle") {
+        await storage.validateIdentityBinding(request.binding);
+        if (!isUuid(request.taskId) || typeof request.checkedOldEntity !== "string" || typeof request.checkedNewEntity !== "string" || typeof request.confirmed !== "boolean" || request.observedId !== null && !isUuid(request.observedId))
+          return invalidRequest();
+        const result = await renames.settle({
+          taskId: request.taskId,
+          kind: request.kind,
+          oldEntity: request.oldEntity,
+          newEntity: request.newEntity,
+          checkedOldEntity: request.checkedOldEntity,
+          checkedNewEntity: request.checkedNewEntity,
+          stage: "pending",
+          expected: request.expected
+        }, request.observedId, request.confirmed, request.binding, () => {
+          const avatars = request.kind === "char" ? [request.oldEntity, request.newEntity] : [JSON.parse(request.oldEntity)[0], JSON.parse(request.newEntity)[0]];
+          const affects = (entity) => request.kind === "chat" ? entity === request.oldEntity || entity === request.newEntity : (() => {
+            try {
+              return avatars.includes(JSON.parse(entity)[0]);
+            } catch {
+              return false;
+            }
+          })();
+          return [...chatIdentities.values()].some((coordinator) => coordinator.hasWorkFor(affects));
+        });
+        if (result.stage === "applied")
+          broadcast({
+            type: "entity-renamed",
+            instanceId,
+            storageId: request.binding.storageId,
+            configGeneration: request.binding.configGeneration
+          });
+        return result;
+      }
+      if (request.type === "identity-restore")
+        return identity.restore(request);
+      if (request.type === "chat-identity-acquire" || request.type === "chat-identity-settle")
+        return identity.chat(request, port);
+      if (request.type === "identity-acquire" || request.type === "identity-lookup")
+        return identity.role(request);
+      if (request.type === "scan-cleanup") {
+        const result = await deletions.cleanScan(request.request, request.binding);
+        if (result.record.status === "removed")
+          entities.forgetReference(request.binding, request.request.expected.referenceId, request.request.expected.scope === "chat");
+        return result;
+      }
+      if (request.type === "scan")
+        return storage.scan(request.binding, request.request);
+      if (request.type === "scan-remove-entry")
+        return storage.removeScanEntry(request.binding, request.request);
+      if (request.type === "scan-remove-target")
+        return storage.removeScanTarget(request.binding, request.target);
+      try {
+        if ("binding" in request && request.binding) {
+          deletions.assertBinding(request.binding);
+          await entities.verify(request.binding, false, request.type === "viewer");
+        }
+      } catch (error) {
+        throw preflightError(request, error);
+      }
+      if (request.type === "hello")
+        return { protocolVersion: PROTOCOL_VERSION, buildId: BUILD_ID, ...withEntityRevision(await storage.getStatus()) };
+      if (request.type === "ping")
+        return { alive: true };
+      if (request.type === "disconnect") {
+        removePort(port);
+        return {};
+      }
+      if (request.type === "storage-status")
+        return withEntityRevision(await storage.getStatus());
+      if (request.type === "storage-configure")
+        return withEntityRevision(await storage.configureMode(request.mode, request.autoReloadEnabled));
+      if (request.type === "open") {
+        if (!request.directory || request.directory.kind !== "directory" || typeof request.directory.getFileHandle !== "function" || typeof request.directory.isSameEntry !== "function")
+          return invalidRequest();
+        return withEntityRevision(await storage.select(request.directory));
+      }
+      if (request.type === "check-permission")
+        return withEntityRevision(await storage.resume(request.binding));
+      if (request.type === "refresh")
+        return storage.refresh(request.binding);
+      if (request.type === "batch") {
+        if (!Array.isArray(request.operations) || !request.operations.length) {
+          try {
+            invalidRequest();
+          } catch (error) {
+            throw beforeBusinessSqlError(error);
+          }
+        }
+        return storage.executeBatch(request.binding, async (execute) => {
+          const results = [];
+          for (const operation of request.operations) {
+            let handedOff = false;
+            try {
+              if (!operation || typeof operation.callId !== "string" || !operation.binding || key(operation.binding) !== key(request.binding))
+                invalidRequest();
+              entities.assertCached(operation.binding);
+              handedOff = true;
+              const result = await executeWrite(operation, request.binding, execute);
+              results.push({ callId: operation.callId, ok: true, result });
+            } catch (error) {
+              const data = {
+                ...errorData(handedOff ? error : beforeBusinessSqlError(error)),
+                operationId: operation?.callId
+              };
+              results.push({ callId: operation?.callId ?? "", ok: false, error: data });
+            }
+          }
+          return results;
+        });
+      }
+      if (isWriteAction(request))
+        return executeWrite(request, request.binding);
+      if (request.type === "viewer")
+        return storage.inspect(request.binding, (db) => db.viewer(request.request, () => {
+          if (request.binding)
+            entities.assertCached(request.binding);
+        }));
+      if (request.type === "query") {
+        checkQueryPrefix(request.sql);
+        const query = { sql: request.sql, binds: validateSerializedBinds(request.binds) };
+        return storage.execute(request.binding, (db) => db.query(query, () => {
+          if (request.binding)
+            entities.assertCached(request.binding);
+        }));
+      }
+      return invalidRequest();
+    }
+    function connectPort(port) {
+      ports.add(port);
+      lastSeen.set(port, Date.now());
+      port.onmessageerror = () => {
+        removePort(port);
+      };
+      port.onmessage = (event) => {
+        if (!ports.has(port))
+          return;
+        lastSeen.set(port, Date.now());
+        const request = event.data;
+        if (!request || typeof request.requestId !== "string")
+          return;
+        (async () => {
+          let response;
+          try {
+            const work = dispatch(request, port);
+            const business = ![
+              "ping",
+              "disconnect",
+              "storage-status",
+              "restart-drain",
+              "restart-prepare",
+              "restart-reply",
+              "restart-cancel",
+              "restart-commit"
+            ].includes(request.type);
+            if (business) {
+              active.add(work);
+              work.finally(() => active.delete(work)).catch(() => {});
+            }
+            response = { requestId: request.requestId, instanceId, ok: true, result: await work };
+          } catch (error) {
+            const data = errorData(error);
+            response = {
+              requestId: request.requestId,
+              instanceId,
+              ok: false,
+              error: isBusinessWrite(request) ? {
+                ...data,
+                failureKind: data.failureKind ?? "service",
+                executionState: data.executionState ?? "unknown"
+              } : data
+            };
+          }
+          try {
+            port.postMessage(response);
+          } catch {
+            removePort(port);
+          }
+        })();
+      };
+      port.start();
+    }
+    return { connectPort };
+  }
+
+  // src/worker/entry.ts
+  var runtime = createWorkerRuntime(1000);
+  self.onconnect = (event) => {
+    runtime.connectPort(event.ports[0]);
   };
 })();

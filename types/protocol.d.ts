@@ -24,6 +24,12 @@ export declare const EXTENSION_NAME: string;
 export declare const EXTENSION_TEMPLATE_PATH: string;
 export declare const EXTENSION_PATH: string;
 export declare const WORKER_URL: string;
+export declare const DEDICATED_WORKER_URL: string;
+export type WorkerMode = 'shared' | 'dedicated';
+export interface DedicatedWorkerConnect {
+    type: 'connect';
+    port: MessagePort;
+}
 export declare const WORKER_NAME = "st-sqlite-helper";
 export interface StorageBinding {
     storageId: string;

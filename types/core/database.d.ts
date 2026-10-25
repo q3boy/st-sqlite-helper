@@ -55,6 +55,7 @@ export declare class SingleDatabase {
     private readonly SQL;
     private readonly storage;
     onBackgroundSaveFailed?: ((failure: BackgroundSaveFailure) => void) | undefined;
+    private readonly saveDebounceMs;
     private db?;
     private state;
     private transient;
@@ -66,7 +67,7 @@ export declare class SingleDatabase {
     private firstSaveHooks?;
     private fileBaseline?;
     private tail;
-    constructor(SQL: SqlJsStatic, storage: Storage, onBackgroundSaveFailed?: ((failure: BackgroundSaveFailure) => void) | undefined);
+    constructor(SQL: SqlJsStatic, storage: Storage, onBackgroundSaveFailed?: ((failure: BackgroundSaveFailure) => void) | undefined, saveDebounceMs?: number);
     get availability(): 'new' | 'ready' | 'disabled';
     get hasPendingFirstCommit(): boolean;
     /** Cancel only pending normal saves; the returned fact belongs to this close attempt. */

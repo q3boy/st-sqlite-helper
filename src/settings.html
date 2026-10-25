@@ -3,8 +3,11 @@
   <div class="inline-drawer-content">
     <section class="sqlite-helper-settings-group" aria-label="SQLite 服务">
       <label class="checkbox_label"><input type="checkbox" data-enabled><span>启用 SQLite 服务</span></label>
-      <p data-enable-status></p><p class="sqlite-helper-description" data-connection></p>
-      <p class="sqlite-helper-description">数据修改后保存有1秒左右延迟。关闭服务时，尚未保存的修改可能丢失。</p>
+      <p data-enable-status></p>
+      <p data-settings-sync-status></p>
+      <details data-enable-details hidden><summary>查看启动与设置同步详情</summary><pre data-enable-error-detail></pre></details>
+      <p class="sqlite-helper-description" data-connection></p>
+      <p class="sqlite-helper-description">数据修改后会延迟保存。关闭服务或刷新页面时，尚未保存的修改可能丢失。</p>
     </section>
     <section class="sqlite-helper-settings-group" aria-label="存储模式">
       <h4>存储模式</h4>
@@ -32,9 +35,25 @@
     <p data-management-error role="status"></p>
     <details data-management-details hidden><summary>查看详细原因</summary><pre data-management-error-detail></pre></details>
     <details class="sqlite-helper-settings-group sqlite-helper-advanced">
-      <summary><b>高级选项</b><span class="sqlite-helper-description">版本信息、连接恢复与安全重启</span></summary>
+      <summary><b>高级选项</b><span class="sqlite-helper-description">运行环境、版本信息与连接管理</span></summary>
       <div class="sqlite-helper-advanced-content">
+        <fieldset class="sqlite-helper-worker-mode">
+          <legend>工作模式</legend>
+          <div class="sqlite-helper-worker-options">
+            <label class="checkbox_label"><input type="radio" name="sqlite-helper-worker-mode" value="auto" data-worker-mode-selection><span>自动</span></label>
+            <label class="checkbox_label"><input type="radio" name="sqlite-helper-worker-mode" value="shared" data-worker-mode-selection><span>共享</span></label>
+            <label class="checkbox_label"><input type="radio" name="sqlite-helper-worker-mode" value="dedicated" data-worker-mode-selection><span>独立</span></label>
+          </div>
+          <dl class="sqlite-helper-worker-help sqlite-helper-description">
+            <dt>自动：</dt><dd>根据运行环境自动选择</dd>
+            <dt>共享：</dt><dd>推荐多Tab场景使用，性能更好</dd>
+            <dt>独立：</dt><dd>单Tab或共享Worker出错时使用</dd>
+          </dl>
+          <p class="sqlite-helper-description" data-worker-mode-status role="status"></p>
+        </fieldset>
         <dl class="sqlite-helper-versions" data-versions>
+          <dt>运行模式</dt><dd data-runtime-mode></dd>
+          <dt>环境检测</dt><dd data-host-environment></dd>
           <dt>页面接口</dt><dd data-page-version></dd>
           <dt>页面构建</dt><dd data-page-build></dd>
           <dt>Worker 连接</dt><dd data-worker-version></dd>
