@@ -1,5 +1,8 @@
 (async () => {
-  const repository = 'https://github.com/q3boy/st-sqlite-helper';
+  const repositories = [
+    ['GitHub', 'https://github.com/q3boy/st-sqlite-helper'],
+    ['Gitee', 'https://gitee.com/q3boy/st-sqlite-helper.git'],
+  ];
   // 顺序仅供内部识别和全部停用时选择提示对象，不向玩家列出版本清单。
   const extensions = [
     { id: 'st-sqlite-helper', name: '酒馆sqlite助手' },
@@ -15,12 +18,18 @@
     element.textContent = String(value);
     return element.innerHTML;
   };
-  const source = `<p>正式安装地址：<a href="${repository}" target="_blank" rel="noopener noreferrer">${repository}</a></p>`;
+  const source = repositories
+    .map(
+      ([name, url]) => `<p>${name} 安装地址：<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a></p>`,
+    )
+    .join('');
   const errorText = error => (error instanceof Error ? error.message : String(error));
   const report = async (title, message, error) => {
     const detail = error === undefined ? '' : `\n\n详细说明：${errorText(error)}`;
     if (!popup) {
-      owner.alert(`${title}\n\n${message}${detail}\n\n手动安装地址：${repository}`);
+      owner.alert(
+        `${title}\n\n${message}${detail}\n\n手动安装地址：\n${repositories.map(([name, url]) => `${name}：${url}`).join('\n')}`,
+      );
       return;
     }
     await popup.show.text(
@@ -29,6 +38,48 @@
       { okButton: '知道了', allowVerticalScrolling: true },
     );
   };
+
+  // 固定依赖只在入口检查一次；缺失项一次列全，不进入安装或更新分支。
+  const missing = [
+    ['isInstalledExtension', typeof isInstalledExtension],
+    ['getExtensionType', typeof getExtensionType],
+    ['getExtensionStatus', typeof getExtensionStatus],
+    ['isAdmin', typeof isAdmin],
+    ['installExtension', typeof installExtension],
+    ['updateExtension', typeof updateExtension],
+    ['triggerSlash', typeof triggerSlash],
+  ]
+    .filter(([, type]) => type !== 'function')
+    .map(([name]) => `酒馆助手：${name}`);
+  let context;
+  let contextError;
+  if (typeof owner.SillyTavern?.getContext !== 'function') missing.unshift('酒馆：SillyTavern.getContext');
+  else {
+    try {
+      context = owner.SillyTavern.getContext();
+    } catch (error) {
+      contextError = errorText(error);
+    }
+  }
+  if (typeof context?.Popup?.show?.confirm !== 'function') missing.push('酒馆：Popup.show.confirm');
+  if (typeof context?.Popup?.show?.text === 'function') popup = context.Popup;
+  else missing.push('酒馆：Popup.show.text');
+  if (typeof context?.POPUP_RESULT?.AFFIRMATIVE !== 'number') missing.push('酒馆：POPUP_RESULT.AFFIRMATIVE');
+  if (missing.length || contextError) {
+    await report(
+      '安装引导无法运行',
+      '请更新酒馆或酒馆助手，并确认酒馆助手已启用且加载成功后重新运行安装引导。也可按下方地址手动安装。',
+      [
+        missing.length ? `缺少所需接口或常量：\n${missing.join('\n')}` : '',
+        contextError ? `读取酒馆上下文失败：${contextError}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+    return;
+  }
+  affirmative = context.POPUP_RESULT.AFFIRMATIVE;
+
   const confirmRefresh = async (action = '安装') => {
     const result = await popup.show.confirm(
       `酒馆sqlite助手已${action}`,
@@ -47,16 +98,12 @@
     const id = 'st-sqlite-helper';
     let type;
     try {
-      if (typeof getExtensionType !== 'function' || typeof getExtensionStatus !== 'function') {
-        throw new Error('当前酒馆助手没有提供所需的扩展更新检查接口。');
-      }
       type = getExtensionType(id);
       if (!['local', 'global'].includes(type)) throw new Error('无法确定插件的安装范围。');
       const info = await getExtensionStatus(id);
       if (!info || typeof info.is_up_to_date !== 'boolean') throw new Error('酒馆返回的扩展更新信息格式不正确。');
       if (info.is_up_to_date) return;
       if (type === 'global') {
-        if (typeof isAdmin !== 'function') throw new Error('当前酒馆助手没有提供管理员检查接口。');
         if (!isAdmin()) {
           await popup.show.text(
             '酒馆sqlite助手有更新',
@@ -65,9 +112,6 @@
           );
           return;
         }
-      }
-      if (typeof updateExtension !== 'function' || typeof triggerSlash !== 'function') {
-        throw new Error('当前酒馆助手没有提供所需的更新或页面刷新接口。');
       }
     } catch (error) {
       await report('无法检查插件更新', '请在扩展管理中手动检查酒馆sqlite助手的更新。', error);
@@ -94,17 +138,6 @@
   let needsRefresh = false;
   let installationType;
   try {
-    const context = owner.SillyTavern?.getContext();
-    if (
-      typeof context?.Popup?.show?.confirm !== 'function' ||
-      typeof context?.Popup?.show?.text !== 'function' ||
-      typeof context?.POPUP_RESULT?.AFFIRMATIVE !== 'number'
-    ) {
-      throw new Error('当前酒馆没有提供所需的确认弹窗接口。');
-    }
-    popup = context.Popup;
-    affirmative = context.POPUP_RESULT.AFFIRMATIVE;
-    if (typeof isInstalledExtension !== 'function') throw new Error('当前酒馆助手没有提供扩展安装检查接口。');
     installed = extensions.filter(extension => isInstalledExtension(extension.id));
     if (!installed.length) {
       // 安装成功后暂不刷新时，助手的页面缓存不会更新；先用原生发现接口核对。
@@ -145,9 +178,6 @@
       }
       return;
     }
-    if (typeof isAdmin !== 'function' || typeof installExtension !== 'function' || typeof triggerSlash !== 'function') {
-      throw new Error('当前酒馆助手没有提供所需的安装或页面刷新接口。');
-    }
     installationType = isAdmin() ? 'global' : 'local';
   } catch (error) {
     await report(
@@ -161,16 +191,25 @@
   const scope = installationType === 'global' ? '安装后酒馆中的所有账号都可使用。' : '安装后仅当前账号可使用。';
   const result = await popup.show.confirm(
     '安装酒馆sqlite助手',
-    `<p>这张角色卡需要酒馆sqlite助手。将从以下正式仓库安装，${scope}完成后需要刷新页面。</p>${source}`,
-    { okButton: '安装插件', cancelButton: '取消' },
+    `<p>这张角色卡需要酒馆sqlite助手。优先从 GitHub 安装，失败后自动尝试 Gitee。${scope}完成后需要刷新页面。</p>${source}`,
+    { okButton: '安装插件', cancelButton: '取消', allowVerticalScrolling: true },
   );
   if (result !== affirmative) return;
-  try {
-    const response = await installExtension(repository, installationType);
-    if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}\n${await response.text()}`);
-  } catch (error) {
-    await report('插件安装失败', '请根据下方错误检查后手动安装酒馆sqlite助手。', error);
+  const failures = [];
+  for (const [name, url] of repositories) {
+    try {
+      const response = await installExtension(url, installationType);
+      if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}\n${await response.text()}`);
+    } catch (error) {
+      failures.push(`${name}：${errorText(error)}`);
+      continue;
+    }
+    await confirmRefresh();
     return;
   }
-  await confirmRefresh();
+  await report(
+    '插件安装失败',
+    'GitHub 和 Gitee 均未能完成安装。请根据下方错误检查后手动安装酒馆sqlite助手。',
+    failures.join('\n\n'),
+  );
 })();

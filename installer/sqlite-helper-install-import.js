@@ -1,1 +1,1 @@
-import 'https://testingcf.jsdelivr.net/gh/q3boy/st-sqlite-helper@master/installer/install-rt-v2.js';
+import 'https://testingcf.jsdelivr.net/gh/q3boy/st-sqlite-helper@master/installer/install-rt-v3.js';
