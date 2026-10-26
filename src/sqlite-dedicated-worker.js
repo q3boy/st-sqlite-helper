@@ -179,7 +179,7 @@
 
   // src/protocol.ts
   var PROTOCOL_VERSION = 23;
-  var BUILD_ID = "f6afd4e3-a7f7-4490-9e30-aea7ebd0d735";
+  var BUILD_ID = "ed0dbf74-fe72-4506-bf12-a7d9f958b227";
   var extensionEntryPath = undefined;
   var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
   var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;

@@ -2083,7 +2083,7 @@ function savedIdentityFailure(error, field, identityStage) {
 
 // src/protocol.ts
 var PROTOCOL_VERSION = 23;
-var BUILD_ID = "f6afd4e3-a7f7-4490-9e30-aea7ebd0d735";
+var BUILD_ID = "ed0dbf74-fe72-4506-bf12-a7d9f958b227";
 var extensionEntryPath = new URL(import.meta.url).pathname;
 var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
 var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;
@@ -6400,6 +6400,7 @@ var DEFAULT_DVS_CONFIG = {
   apiUrl: "",
   model: "",
   outputFormat: "text",
+  stream: false,
   worldbookFilterMode: "exclude",
   tableFilterMode: "exclude",
   maxTokens: 65535,
@@ -6504,6 +6505,8 @@ function validateConfig(value, allowIncomplete = false) {
     throw new Error("请填写模型名，或获取模型后选择。");
   if (!["text", "json_schema", "json_object"].includes(config.outputFormat))
     throw new Error("输出格式无效。");
+  if (typeof config.stream !== "boolean")
+    throw new Error("流式调用须为布尔值。");
   for (const [field, label] of [
     ["worldbookFilterMode", "世界书筛选方式"],
     ["tableFilterMode", "变量表筛选方式"]
@@ -45072,6 +45075,11 @@ var __component29 = /* @__PURE__ */ defineComponent({
       cancelPending("连接参数已修改，进行中的请求已取消。");
       result.value = undefined;
     });
+    watch2(() => form.config.stream, () => {
+      if (pending.value?.kind === "test")
+        cancelPending("调用方式已修改，进行中的测试已取消。");
+      result.value = undefined;
+    });
     watch2(() => props.storageVersion, () => {
       cancelPending("存储空间已改变，进行中的请求已取消。");
       result.value = undefined;
@@ -45397,11 +45405,25 @@ function render30(_ctx, _cache, $props, $setup, $data, $options) {
           ]),
           _: 1
         }),
+        createVNode($setup["ConfigField"], {
+          label: "调用方式",
+          full: ""
+        }, {
+          default: withCtx(() => [
+            createVNode($setup["ConfigSegmented"], {
+              "model-value": $setup.form.config.stream ? "on" : "off",
+              label: "调用方式",
+              options: [{ value: "off", label: "非流式" }, { value: "on", label: "流式" }],
+              "onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.form.config.stream = $event === "on")
+            }, null, 8, ["model-value"])
+          ]),
+          _: 1
+        }),
         createVNode($setup["ConfigField"], { label: "世界书筛选" }, {
           default: withCtx(() => [
             createVNode($setup["ConfigSegmented"], {
               modelValue: $setup.form.config.worldbookFilterMode,
-              "onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.form.config.worldbookFilterMode = $event),
+              "onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.form.config.worldbookFilterMode = $event),
               label: "世界书筛选",
               options: $setup.filterOptions
             }, null, 8, ["modelValue", "options"])
@@ -45412,7 +45434,7 @@ function render30(_ctx, _cache, $props, $setup, $data, $options) {
           default: withCtx(() => [
             createVNode($setup["ConfigSegmented"], {
               modelValue: $setup.form.config.tableFilterMode,
-              "onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.form.config.tableFilterMode = $event),
+              "onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.form.config.tableFilterMode = $event),
               label: "变量表筛选",
               options: $setup.filterOptions
             }, null, 8, ["modelValue", "options"])
@@ -45428,14 +45450,14 @@ function render30(_ctx, _cache, $props, $setup, $data, $options) {
         class: normalizeClass(["dvs:group/adv dvs:rounded-lg", $setup.look.box])
       }, [
         createBaseVNode("summary", {
-          onClick: _cache[12] || (_cache[12] = ($event) => $setup.pinWhileToggling($event.currentTarget)),
+          onClick: _cache[13] || (_cache[13] = ($event) => $setup.pinWhileToggling($event.currentTarget)),
           class: normalizeClass(["dvs:flex dvs:cursor-pointer dvs:list-none dvs:items-center dvs:gap-2 dvs:rounded-lg dvs:px-3 dvs:py-2 dvs:select-none dvs:[&::-webkit-details-marker]:hidden", $setup.look.hoverRow])
         }, [
           createVNode($setup["PhSlidersHorizontal"], {
             size: 15,
             class: normalizeClass($setup.look.muted)
           }, null, 8, ["class"]),
-          _cache[18] || (_cache[18] = createBaseVNode("span", { class: "dvs:font-medium" }, "高级参数", -1)),
+          _cache[19] || (_cache[19] = createBaseVNode("span", { class: "dvs:font-medium" }, "高级参数", -1)),
           $setup.changedCount ? (openBlock(), createElementBlock("span", {
             key: 0,
             class: normalizeClass(["dvs:rounded dvs:px-1.5 dvs:text-[0.82em]", $setup.look.badgeAccent])
@@ -45534,12 +45556,12 @@ function render30(_ctx, _cache, $props, $setup, $data, $options) {
                   size: 12,
                   weight: "fill"
                 }),
-                _cache[19] || (_cache[19] = createTextVNode("DeepSeek 关闭思考 ", -1))
+                _cache[20] || (_cache[20] = createTextVNode("DeepSeek 关闭思考 ", -1))
               ], 2)
             ]),
             withDirectives(createBaseVNode("textarea", {
               id: `${$setup.id}-extra`,
-              "onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.extraText = $event),
+              "onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.extraText = $event),
               class: normalizeClass($setup.look.textarea),
               rows: $setup.extraRows,
               spellcheck: "false",
@@ -45573,7 +45595,7 @@ function render30(_ctx, _cache, $props, $setup, $data, $options) {
             size: 15,
             class: normalizeClass($setup.look.muted)
           }, null, 8, ["class"]),
-          _cache[20] || (_cache[20] = createBaseVNode("span", { class: "dvs:font-medium" }, "测试结果", -1))
+          _cache[21] || (_cache[21] = createBaseVNode("span", { class: "dvs:font-medium" }, "测试结果", -1))
         ]),
         createBaseVNode("ul", _hoisted_204, [
           (openBlock(true), createElementBlock(Fragment, null, renderList($setup.testRows, ([label, item]) => {
@@ -45604,7 +45626,7 @@ function render30(_ctx, _cache, $props, $setup, $data, $options) {
           key: 0,
           class: normalizeClass(["dvs:mt-2 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-2 dvs:pt-2 dvs:text-[0.92em]", $setup.look.ruleTop])
         }, [
-          _cache[21] || (_cache[21] = createTextVNode(" 推荐输出格式：", -1)),
+          _cache[22] || (_cache[22] = createTextVNode(" 推荐输出格式：", -1)),
           createBaseVNode("strong", null, toDisplayString($setup.FORMAT_NAMES[$setup.result.suggestedFormat]), 1),
           $setup.form.config.outputFormat === $setup.result.suggestedFormat ? (openBlock(), createElementBlock("span", {
             key: 0,
@@ -45613,7 +45635,7 @@ function render30(_ctx, _cache, $props, $setup, $data, $options) {
             key: 1,
             label: "改用推荐格式",
             class: "dvs:ms-auto",
-            onClick: _cache[14] || (_cache[14] = ($event) => $setup.form.config.outputFormat = $setup.result.suggestedFormat)
+            onClick: _cache[15] || (_cache[15] = ($event) => $setup.form.config.outputFormat = $setup.result.suggestedFormat)
           }))
         ], 2)) : (openBlock(), createElementBlock("p", {
           key: 1,
@@ -45623,7 +45645,7 @@ function render30(_ctx, _cache, $props, $setup, $data, $options) {
             size: 14,
             weight: "fill"
           }),
-          _cache[22] || (_cache[22] = createTextVNode("测试没有完成，修正上面的问题后再试一次。 ", -1))
+          _cache[23] || (_cache[23] = createTextVNode("测试没有完成，修正上面的问题后再试一次。 ", -1))
         ], 2))
       ], 2)) : createCommentVNode("v-if", true),
       $setup.formError ? (openBlock(), createBlock($setup["ConfigNotice"], {
@@ -45639,14 +45661,14 @@ function render30(_ctx, _cache, $props, $setup, $data, $options) {
           key: 0,
           icon: $setup.PhStop,
           label: "取消测试",
-          onClick: _cache[15] || (_cache[15] = ($event) => $setup.cancelPending("已取消测试。"))
+          onClick: _cache[16] || (_cache[16] = ($event) => $setup.cancelPending("已取消测试。"))
         }, null, 8, ["icon"])) : (openBlock(), createBlock($setup["ConfigButton"], {
           key: 1,
           icon: $setup.PhFlask,
           label: "测试",
           disabled: !!$setup.pending,
           title: "最多发送 3 次固定请求，可能产生少量费用；不读取聊天，也不更新变量",
-          onClick: _cache[16] || (_cache[16] = ($event) => $setup.run("test"))
+          onClick: _cache[17] || (_cache[17] = ($event) => $setup.run("test"))
         }, null, 8, ["icon", "disabled"])),
         createBaseVNode("span", {
           class: normalizeClass(["dvs:text-[0.82em] dvs:@max-[26rem]:hidden", $setup.look.faint]),
@@ -45661,9 +45683,9 @@ function render30(_ctx, _cache, $props, $setup, $data, $options) {
             label: "取消",
             variant: "ghost",
             disabled: $props.saving,
-            onClick: _cache[17] || (_cache[17] = ($event) => $setup.emit("cancel"))
+            onClick: _cache[18] || (_cache[18] = ($event) => $setup.emit("cancel"))
           }, null, 8, ["disabled"]),
-          _cache[23] || (_cache[23] = createBaseVNode("button", {
+          _cache[24] || (_cache[24] = createBaseVNode("button", {
             type: "submit",
             class: "dvs:contents",
             tabindex: "-1",
@@ -46309,17 +46331,18 @@ var _hoisted_2111 = { class: "dvs:m-0 dvs:grid dvs:grid-cols-[auto_1fr] dvs:gap-
 var _hoisted_229 = { class: "dvs:m-0 dvs:min-w-0 dvs:font-dvs-mono dvs:text-[0.92em] dvs:break-all" };
 var _hoisted_235 = { class: "dvs:m-0" };
 var _hoisted_244 = { class: "dvs:m-0" };
-var _hoisted_254 = { class: "dvs:mt-3 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-1.5" };
-var _hoisted_264 = { class: "dvs:ms-auto dvs:flex dvs:gap-1.5" };
-var _hoisted_273 = { class: "dvs:flex dvs:items-center dvs:gap-2 dvs:px-3 dvs:pt-2.5 dvs:pb-1 dvs:font-medium" };
-var _hoisted_283 = { class: "dvs:px-3 dvs:pt-1 dvs:pb-3" };
-var _hoisted_293 = { class: "dvs:ms-auto dvs:flex dvs:gap-1.5" };
-var _hoisted_302 = {
+var _hoisted_254 = { class: "dvs:m-0" };
+var _hoisted_264 = { class: "dvs:mt-3 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-1.5" };
+var _hoisted_273 = { class: "dvs:ms-auto dvs:flex dvs:gap-1.5" };
+var _hoisted_283 = { class: "dvs:flex dvs:items-center dvs:gap-2 dvs:px-3 dvs:pt-2.5 dvs:pb-1 dvs:font-medium" };
+var _hoisted_293 = { class: "dvs:px-3 dvs:pt-1 dvs:pb-3" };
+var _hoisted_302 = { class: "dvs:ms-auto dvs:flex dvs:gap-1.5" };
+var _hoisted_318 = {
   key: 2,
   class: "dvs:mt-3 dvs:space-y-2"
 };
-var _hoisted_318 = { class: "dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-x-3 dvs:gap-y-1.5" };
-var _hoisted_322 = { class: "dvs:mt-2 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-x-3 dvs:gap-y-1.5" };
+var _hoisted_322 = { class: "dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-x-3 dvs:gap-y-1.5" };
+var _hoisted_332 = { class: "dvs:mt-2 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-x-3 dvs:gap-y-1.5" };
 function render32(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("section", {
     class: normalizeClass(["dvs:@container", [$setup.greeting ? "dvs-ui" : "dvs-config-native", $setup.look.shell, $setup.look.text]]),
@@ -46674,8 +46697,12 @@ function render32(_ctx, _cache, $props, $setup, $data, $options) {
                       createBaseVNode("dd", _hoisted_235, toDisplayString($setup.FORMAT_NAMES[config.config.outputFormat]), 1),
                       createBaseVNode("dt", {
                         class: normalizeClass($setup.look.muted)
+                      }, "调用方式", 2),
+                      createBaseVNode("dd", _hoisted_244, toDisplayString(config.config.stream ? "流式" : "非流式"), 1),
+                      createBaseVNode("dt", {
+                        class: normalizeClass($setup.look.muted)
                       }, "输入增强筛选", 2),
-                      createBaseVNode("dd", _hoisted_244, "世界书" + toDisplayString($setup.FILTER_NAMES[config.config.worldbookFilterMode]) + "，变量表" + toDisplayString($setup.FILTER_NAMES[config.config.tableFilterMode]), 1),
+                      createBaseVNode("dd", _hoisted_254, "世界书" + toDisplayString($setup.FILTER_NAMES[config.config.worldbookFilterMode]) + "，变量表" + toDisplayString($setup.FILTER_NAMES[config.config.tableFilterMode]), 1),
                       createBaseVNode("dt", {
                         class: normalizeClass($setup.look.muted)
                       }, "高级参数", 2),
@@ -46694,12 +46721,12 @@ function render32(_ctx, _cache, $props, $setup, $data, $options) {
                       key: 0,
                       class: normalizeClass(["dvs-scroll dvs:mx-0 dvs:mt-2 dvs:mb-0 dvs:overflow-x-auto dvs:rounded-lg dvs:px-3 dvs:py-1.5 dvs:font-dvs-mono dvs:text-[0.84em] dvs:whitespace-pre-wrap", $setup.look.sunken])
                     }, toDisplayString($setup.extraBodyText(config.config.extraBody)), 3)) : createCommentVNode("v-if", true),
-                    createBaseVNode("div", _hoisted_254, [
+                    createBaseVNode("div", _hoisted_264, [
                       $setup.confirmDelete === config.id ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
                         createBaseVNode("span", {
                           class: normalizeClass(["dvs:text-[0.9em]", $setup.look.remove])
                         }, "删除「" + toDisplayString(config.name) + "」？无法撤销。", 3),
-                        createBaseVNode("span", _hoisted_264, [
+                        createBaseVNode("span", _hoisted_273, [
                           createVNode($setup["ConfigButton"], {
                             label: "取消",
                             variant: "ghost",
@@ -46760,7 +46787,7 @@ function render32(_ctx, _cache, $props, $setup, $data, $options) {
               key: 0,
               class: normalizeClass(["dvs:overflow-hidden dvs:rounded-lg", $setup.look.boxNew])
             }, [
-              createBaseVNode("div", _hoisted_273, [
+              createBaseVNode("div", _hoisted_283, [
                 createVNode($setup["PhPlus"], {
                   size: 14,
                   weight: "bold",
@@ -46768,14 +46795,14 @@ function render32(_ctx, _cache, $props, $setup, $data, $options) {
                 }, null, 8, ["class"]),
                 createTextVNode(" " + toDisplayString($setup.editing.copied ? "复制配置" : $setup.configs.length ? "新增配置" : "创建第一个模型配置"), 1)
               ]),
-              createBaseVNode("div", _hoisted_283, [
+              createBaseVNode("div", _hoisted_293, [
                 $setup.pendingStart ? (openBlock(), createElementBlock("div", {
                   key: 0,
                   class: normalizeClass(["dvs:mb-3 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-1.5 dvs:rounded-lg dvs:px-2.5 dvs:py-1.5", $setup.look.warnBar]),
                   role: "alert"
                 }, [
                   _cache[12] || (_cache[12] = createBaseVNode("span", { class: "dvs:text-[0.92em]" }, "当前修改还没有保存，放弃并继续？", -1)),
-                  createBaseVNode("span", _hoisted_293, [
+                  createBaseVNode("span", _hoisted_302, [
                     createVNode($setup["ConfigButton"], {
                       label: "继续编辑",
                       variant: "ghost",
@@ -46808,7 +46835,7 @@ function render32(_ctx, _cache, $props, $setup, $data, $options) {
                   onSave: $setup.save,
                   onCancel: $setup.cancelEdit
                 }, null, 8, ["draft", "copied", "saving", "start-dirty", "storage-version", "requests"])),
-                $setup.feedback ? (openBlock(), createElementBlock("div", _hoisted_302, [
+                $setup.feedback ? (openBlock(), createElementBlock("div", _hoisted_318, [
                   createVNode($setup["ConfigNotice"], {
                     kind: $setup.feedback.kind,
                     text: $setup.feedback.text,
@@ -46830,7 +46857,7 @@ function render32(_ctx, _cache, $props, $setup, $data, $options) {
         createBaseVNode("h5", {
           class: normalizeClass([$setup.sectionTitle, $setup.look.muted])
         }, "显示", 2),
-        createBaseVNode("div", _hoisted_318, [
+        createBaseVNode("div", _hoisted_322, [
           _cache[13] || (_cache[13] = createBaseVNode("span", { class: "dvs:text-[0.95em]" }, "聊天面板配色", -1)),
           createVNode($setup["ConfigSegmented"], {
             "model-value": $props.theme.mode,
@@ -46839,7 +46866,7 @@ function render32(_ctx, _cache, $props, $setup, $data, $options) {
             "onUpdate:modelValue": $setup.chooseTheme
           }, null, 8, ["model-value"])
         ]),
-        createBaseVNode("div", _hoisted_322, [
+        createBaseVNode("div", _hoisted_332, [
           _cache[14] || (_cache[14] = createBaseVNode("span", { class: "dvs:text-[0.95em]" }, "楼层数据查看", -1)),
           createVNode($setup["ConfigSegmented"], {
             "model-value": $props.floorData.enabled ? "on" : "off",
@@ -48918,6 +48945,60 @@ function parsePatchData(content, format = "text") {
   return value;
 }
 
+// src/dvs/model-sse.ts
+class ModelSseParser {
+  line = "";
+  skipLf = false;
+  data = [];
+  hasData = false;
+  push(text) {
+    const events = [];
+    let start = 0;
+    for (let i = 0;i < text.length; i++) {
+      const char = text[i];
+      if (this.skipLf) {
+        this.skipLf = false;
+        if (char === `
+`) {
+          start = i + 1;
+          continue;
+        }
+      }
+      if (char !== "\r" && char !== `
+`)
+        continue;
+      this.line += text.slice(start, i);
+      this.readLine(events);
+      this.line = "";
+      this.skipLf = char === "\r";
+      start = i + 1;
+    }
+    this.line += text.slice(start);
+    return events;
+  }
+  readLine(events) {
+    if (this.line === "") {
+      if (this.data.length)
+        events.push(this.data.join(`
+`));
+      this.data = [];
+      return;
+    }
+    const colon = this.line.indexOf(":");
+    const field = colon < 0 ? this.line : this.line.slice(0, colon);
+    if (field !== "data")
+      return;
+    this.hasData = true;
+    let value = colon < 0 ? "" : this.line.slice(colon + 1);
+    if (value.startsWith(" "))
+      value = value.slice(1);
+    this.data.push(value);
+  }
+  get incomplete() {
+    return this.data.length > 0 || this.line === "data" || this.line.startsWith("data:");
+  }
+}
+
 // src/dvs/model-request.ts
 class ModelRequestError extends Error {
   kind;
@@ -48958,7 +49039,7 @@ function buildModelBody(config, key, messages, protocol) {
     custom_url: config.apiUrl,
     model: config.model,
     messages: requestMessages,
-    stream: false,
+    stream: config.stream,
     max_tokens: config.maxTokens,
     custom_include_headers: JSON.stringify({ Authorization: key ? `Bearer ${key}` : "" }),
     custom_include_body: JSON.stringify(extra)
@@ -48981,7 +49062,7 @@ function buildModelBody(config, key, messages, protocol) {
     };
   return body;
 }
-async function nativeRequest(snapshot, path, body, signal, options = {}) {
+async function nativeRequest(snapshot, path, body, signal, options = {}, stream = false) {
   if (options.trace)
     options.trace.request = body;
   const controller = new AbortController;
@@ -49003,13 +49084,14 @@ async function nativeRequest(snapshot, path, body, signal, options = {}) {
     if (controller.signal.aborted)
       throw new ModelRequestError(timedOut ? "timeout" : "cancelled", timedOut ? "等待模型回复超时，请检查服务状态后重试。" : "本次模型请求已取消。");
   };
+  let response;
   try {
     await current();
     const owner = globalThis;
     const headers = options.getRequestHeaders?.() ?? owner.SillyTavern?.getContext().getRequestHeaders();
     if (!headers)
       throw new ModelRequestError("service", "当前页面无法发送模型请求，请刷新页面。");
-    const response = await (options.fetch ?? globalThis.fetch)(path, {
+    response = await (options.fetch ?? globalThis.fetch)(path, {
       method: "POST",
       headers: { ...headers },
       body: JSON.stringify(body),
@@ -49019,6 +49101,11 @@ async function nativeRequest(snapshot, path, body, signal, options = {}) {
     if (options.trace) {
       options.trace.response.status = response.status;
       options.trace.response.statusText = response.statusText;
+    }
+    if (response.ok && stream) {
+      const data = await readStream(response, snapshot.key, options, current);
+      await current();
+      return data;
     }
     let raw;
     if (response.ok || options.trace) {
@@ -49043,14 +49130,7 @@ async function nativeRequest(snapshot, path, body, signal, options = {}) {
       throw new ModelRequestError("response", "服务返回的内容无法读取，请检查 API 地址或稍后重试。");
     }
     await current();
-    if (object3(data) && data.error) {
-      if (data.quota_error)
-        throw new ModelRequestError("service", "模型服务报告配额不足，本次请求未完成。", undefined, "quota_error");
-      const error = data.error;
-      const statusText = typeof data.statusText === "string" ? data.statusText : typeof error === "string" ? error : object3(error) && typeof error.message === "string" ? error.message : "未知服务错误";
-      const safe = redactModelError(statusText, snapshot.key);
-      throw new ModelRequestError("service", `酒馆模型接口返回错误：${safe}`, undefined, safe);
-    }
+    checkServiceError(data, snapshot.key);
     return data;
   } catch (error) {
     if (error instanceof ModelRequestError)
@@ -49060,6 +49140,124 @@ async function nativeRequest(snapshot, path, body, signal, options = {}) {
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", abort);
+    if (response?.body && !response.body.locked)
+      await response.body.cancel().catch(() => {});
+  }
+}
+function checkServiceError(data, key) {
+  if (!object3(data) || !data.error)
+    return;
+  if (data.quota_error)
+    throw new ModelRequestError("service", "模型服务报告配额不足，本次请求未完成。", undefined, "quota_error");
+  const error = data.error;
+  const statusText = typeof data.statusText === "string" ? data.statusText : typeof error === "string" ? error : object3(error) && typeof error.message === "string" ? error.message : "未知服务错误";
+  const safe = redactModelError(statusText, key);
+  throw new ModelRequestError("service", `酒馆模型接口返回错误：${safe}`, undefined, safe);
+}
+function invalidReply(options) {
+  return new ModelRequestError("response", options?.purpose === "test" ? "模型没有返回完整的非空正文，或拒绝了本次请求。" : "变量模型没有返回完整的非空内容，或拒绝了本次更新请求。");
+}
+function checkFinishReason(reason, options) {
+  if (reason !== "length")
+    return;
+  throw new ModelRequestError("response", options?.purpose === "test" ? "模型输出达到 token 上限，内容已截断，请增加最大 token 后重新测试。" : "变量模型输出达到 token 上限，内容已截断，请增加最大 token 后重新更新变量。");
+}
+async function readStream(response, key, options, current) {
+  if (!response.body)
+    throw invalidReply(options);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder;
+  const parser = new ModelSseParser;
+  let raw = "";
+  let content = "";
+  let finishReason = null;
+  let done = false;
+  let eof = false;
+  const incomplete = () => new ModelRequestError("network", "模型回复未完整接收，请检查连接后重试。");
+  const accept = (text) => {
+    raw += text;
+    if (options.trace)
+      options.trace.response.body = raw;
+    for (const event of parser.push(text)) {
+      if (!event)
+        continue;
+      if (event === "[DONE]") {
+        done = true;
+        break;
+      }
+      let data;
+      try {
+        data = JSON.parse(event);
+      } catch {
+        throw new ModelRequestError("response", "模型流式回复包含无效 JSON，请检查服务响应后重试。");
+      }
+      checkServiceError(data, key);
+      if (!object3(data))
+        throw invalidReply(options);
+      if (!Array.isArray(data.choices))
+        throw invalidReply(options);
+      const indexed = data.choices.some((value) => object3(value) && value.index !== undefined);
+      const choice = indexed ? data.choices.find((value) => object3(value) && value.index === 0) : data.choices[0];
+      if (choice === undefined)
+        continue;
+      if (!object3(choice))
+        throw invalidReply(options);
+      const delta = object3(choice.delta) ? choice.delta : undefined;
+      const message = object3(choice.message) ? choice.message : undefined;
+      if (typeof choice.finish_reason === "string" && choice.finish_reason) {
+        finishReason = choice.finish_reason;
+        if (options.trace)
+          options.trace.response.finishReason = finishReason;
+      }
+      checkFinishReason(finishReason, options);
+      if (delta?.refusal || message?.refusal)
+        throw invalidReply(options);
+      const part = delta?.content ?? message?.content ?? choice.text;
+      if (part === null || part === undefined)
+        continue;
+      if (typeof part !== "string")
+        throw invalidReply(options);
+      content += part;
+    }
+  };
+  try {
+    while (!done) {
+      await current();
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch {
+        await current();
+        throw incomplete();
+      }
+      await current();
+      if (chunk.done) {
+        eof = true;
+        accept(decoder.decode());
+        break;
+      }
+      accept(decoder.decode(chunk.value, { stream: true }));
+    }
+    await current();
+    if (!done && parser.incomplete)
+      throw incomplete();
+    if (!done && !parser.hasData) {
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        throw invalidReply(options);
+      }
+      checkServiceError(data, key);
+      return data;
+    }
+    if (!done && !finishReason)
+      throw incomplete();
+    return { choices: [{ message: { content }, finish_reason: finishReason }] };
+  } finally {
+    if (!eof)
+      await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
 }
 async function listModels(snapshot, signal, options) {
@@ -49076,16 +49274,15 @@ async function listModels(snapshot, signal, options) {
   ].sort();
 }
 async function requestModel(snapshot, messages, signal, options) {
-  const data = await nativeRequest(snapshot, "/api/backends/chat-completions/generate", buildModelBody(snapshot.config, snapshot.key, messages, options?.protocol), signal, options);
+  const data = await nativeRequest(snapshot, "/api/backends/chat-completions/generate", buildModelBody(snapshot.config, snapshot.key, messages, options?.protocol), signal, options, snapshot.config.stream);
   const choice = object3(data) && Array.isArray(data.choices) ? data.choices[0] : undefined;
   const message = object3(choice) && object3(choice.message) ? choice.message : undefined;
   const finishReason = object3(choice) && typeof choice.finish_reason === "string" ? choice.finish_reason : null;
   if (options?.trace)
     options.trace.response.finishReason = finishReason;
   if (!message || message.refusal || typeof message.content !== "string" || !message.content.trim())
-    throw new ModelRequestError("response", options?.purpose === "test" ? "模型没有返回完整的非空正文，或拒绝了本次请求。" : "变量模型没有返回完整的非空内容，或拒绝了本次更新请求。");
-  if (finishReason === "length")
-    throw new ModelRequestError("response", options?.purpose === "test" ? "模型输出达到 token 上限，内容已截断，请增加最大 token 后重新测试。" : "变量模型输出达到 token 上限，内容已截断，请增加最大 token 后重新更新变量。");
+    throw invalidReply(options);
+  checkFinishReason(finishReason, options);
   return { content: message.content, finishReason };
 }
 
@@ -51831,7 +52028,7 @@ function validateTestResponse(content) {
 }
 var unfinished = (detail = "尚未进行；本次探测未完成。") => ({ status: "unfinished", detail });
 function rejected(error) {
-  return error instanceof ModelRequestError && (error.kind === "http" && error.status === 400 || error.kind === "service" && error.statusText?.trim().toLowerCase() === "bad request");
+  return error instanceof ModelRequestError && (error.kind === "http" && error.status === 400 && error.statusText?.trim().toLowerCase() !== "unauthorized" || error.kind === "service" && error.statusText?.trim().toLowerCase() === "bad request");
 }
 async function testModel(snapshot, signal, options) {
   const testOptions = {
