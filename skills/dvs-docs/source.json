@@ -1,0 +1,38 @@
+{
+  "sources": {
+    "doc/dvs/指南/DVS作者使用手册.md": "references/dvs-author-guide.md",
+    "doc/dvs/指南/DVS场景开发指南.md": "references/dvs-scenarios.md",
+    "doc/dvs/指南/DVS接口与进阶用法.md": "references/dvs-api.md",
+    "doc/dvs/指南/场景/悬浮状态栏.md": "references/statusbar-guide.md",
+    "doc/dvs/指南/场景/接入与检查.md": "references/setup-guide.md",
+    "doc/dvs/指南/场景/数据加工.md": "references/data-processing-guide.md",
+    "doc/dvs/指南/场景/数据结构.md": "references/data-model-guide.md",
+    "doc/dvs/指南/场景/旧卡转换.md": "references/migration-guide.md",
+    "doc/dvs/指南/场景/生成拦截.md": "references/generation-interception-guide.md",
+    "doc/dvs/指南/场景/输入增强.md": "references/input-enhancement-guide.md",
+    "doc/使用/README.md": "references/usage-index.md",
+    "doc/使用/卡片开发skill.md": "references/skill-usage.md",
+    "doc/使用/安装引导脚本.md": "references/installer-guide.md",
+    "examples/dvs-minimal-card/card.json": "assets/dvs-minimal-card/card.json",
+    "examples/dvs-minimal-card/dvs.js": "assets/dvs-minimal-card/dvs.js",
+    "examples/dvs-minimal-card/index.yaml": "assets/dvs-minimal-card/index.yaml",
+    "examples/dvs-minimal-card/README.md": "assets/dvs-minimal-card/README.md",
+    "examples/dvs-minimal-card/welcome.txt": "assets/dvs-minimal-card/welcome.txt",
+    "examples/dvs-minimal-card/worldbook/data.txt": "assets/dvs-minimal-card/worldbook/data.txt",
+    "examples/dvs-minimal-card/worldbook/ddl.sql": "assets/dvs-minimal-card/worldbook/ddl.sql",
+    "examples/dvs-minimal-card/worldbook/init.sql": "assets/dvs-minimal-card/worldbook/init.sql",
+    "examples/dvs-minimal-card/worldbook/narrative.txt": "assets/dvs-minimal-card/worldbook/narrative.txt",
+    "examples/dvs-minimal-card/worldbook/person.txt": "assets/dvs-minimal-card/worldbook/person.txt",
+    "examples/dvs-minimal-card/worldbook/rules.txt": "assets/dvs-minimal-card/worldbook/rules.txt",
+    "examples/dvs-pre-narrative-ui/interaction.js": "assets/dvs-pre-narrative-ui/interaction.js",
+    "examples/dvs-pre-narrative-ui/README.md": "assets/dvs-pre-narrative-ui/README.md",
+    "LICENSE": "LICENSE",
+    "skills/dvs-docs/SKILL.md": "SKILL.md",
+    "skills/NOTICE.md": "NOTICE.md"
+  },
+  "requires": [
+    "st-sqlite-scripting"
+  ],
+  "generated": {},
+  "contentHash": "aa63cbcfe16ab0fba08720e871fc6be4e17765b3eafd7061bc87fe29642eec73"
+}

@@ -1,0 +1,39 @@
+{
+  "sources": {
+    "doc/dvs/指南/场景/接入与检查.md": "references/setup-guide.md",
+    "examples/dvs-minimal-card/card.json": "assets/dvs-minimal-card/card.json",
+    "examples/dvs-minimal-card/dvs.js": "assets/dvs-minimal-card/dvs.js",
+    "examples/dvs-minimal-card/index.yaml": "assets/dvs-minimal-card/index.yaml",
+    "examples/dvs-minimal-card/README.md": "assets/dvs-minimal-card/README.md",
+    "examples/dvs-minimal-card/welcome.txt": "assets/dvs-minimal-card/welcome.txt",
+    "examples/dvs-minimal-card/worldbook/data.txt": "assets/dvs-minimal-card/worldbook/data.txt",
+    "examples/dvs-minimal-card/worldbook/ddl.sql": "assets/dvs-minimal-card/worldbook/ddl.sql",
+    "examples/dvs-minimal-card/worldbook/init.sql": "assets/dvs-minimal-card/worldbook/init.sql",
+    "examples/dvs-minimal-card/worldbook/narrative.txt": "assets/dvs-minimal-card/worldbook/narrative.txt",
+    "examples/dvs-minimal-card/worldbook/person.txt": "assets/dvs-minimal-card/worldbook/person.txt",
+    "examples/dvs-minimal-card/worldbook/rules.txt": "assets/dvs-minimal-card/worldbook/rules.txt",
+    "LICENSE": "LICENSE",
+    "skills/dvs/SKILL.md": "SKILL.md",
+    "skills/NOTICE.md": "NOTICE.md"
+  },
+  "requires": [
+    "dvs-docs",
+    "st-sqlite-scripting"
+  ],
+  "generated": {
+    "scripts/dvs-card-migrate.mjs": {
+      "build": "scripts/card-migrate/build.ts",
+      "sources": [
+        "scripts/card-migrate/cli.ts",
+        "scripts/card-migrate/convert.ts",
+        "src/dvs2/lorebook-tags.ts",
+        "src/dvs2/compat/lorebook.ts",
+        "src/dvs2/compat/script-config.ts"
+      ],
+      "dependencies": {
+        "yaml": "2.9.1"
+      }
+    }
+  },
+  "contentHash": "6d3cfbb7bf4c5a35d09ec8515dc6883f0c51d1b3685bc200af3d7222a6b5f613"
+}

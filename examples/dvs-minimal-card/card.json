@@ -27,7 +27,18 @@
               "buttons": []
             },
             "data": {
-              "dvs_enable": true
+              "dvs": {
+                "enabled": true,
+                "exts": {
+                  "tables_opt": false,
+                  "plot_plan": false
+                },
+                "config": {
+                  "lb_opt": {
+                    "llm_filter": false
+                  }
+                }
+              }
             },
             "export_with": {
               "data": true,
@@ -53,7 +64,7 @@
           "id": 0,
           "keys": [],
           "secondary_keys": [],
-          "comment": "[DVS_DDL]v1.0.0",
+          "comment": "[DVS:DDL]v1.0.0",
           "content": "CREATE TABLE 人物 (\n  rid BLOB PRIMARY KEY CHECK(typeof(rid)='blob' AND length(rid)=16),\n  姓名 TEXT NOT NULL,\n  好感度 INTEGER NOT NULL CHECK(typeof(好感度)='integer' AND 好感度 BETWEEN 0 AND 100)\n);\nCREATE TABLE 场景 (\n  rid BLOB PRIMARY KEY CHECK(typeof(rid)='blob' AND length(rid)=16),\n  编号 TEXT NOT NULL,\n  时间 TEXT NOT NULL,\n  地点 TEXT NOT NULL\n);\nCREATE TABLE 物品 (\n  rid BLOB PRIMARY KEY CHECK(typeof(rid)='blob' AND length(rid)=16),\n  名称 TEXT NOT NULL,\n  数量 INTEGER NOT NULL CHECK(typeof(数量)='integer' AND 数量 > 0)\n);",
           "constant": true,
           "selective": false,
@@ -99,7 +110,7 @@
           "id": 1,
           "keys": [],
           "secondary_keys": [],
-          "comment": "[DVS_INIT]welcome_0",
+          "comment": "[DVS:初始化]welcome_0",
           "content": "INSERT INTO 人物(rid,姓名,好感度) VALUES(randomblob(16),'林溪',10);\nINSERT INTO 场景(rid,编号,时间,地点) VALUES(randomblob(16),'当前','2026-10-19 15:00','青禾书店');\nINSERT INTO 物品(rid,名称,数量) VALUES(randomblob(16),'帆布包',1),(randomblob(16),'书签',2);",
           "constant": true,
           "selective": false,
@@ -191,7 +202,7 @@
           "id": 3,
           "keys": [],
           "secondary_keys": [],
-          "comment": "[DVS_NAR]当前状态",
+          "comment": "[DVS:预处理,正文]当前状态",
           "content": "以下是本轮故事开始前的状态。依据这些状态续写，不把数值表或数据库操作直接写进故事。\n[[DVS_DATA:yaml]]",
           "constant": true,
           "selective": false,
@@ -237,7 +248,7 @@
           "id": 4,
           "keys": [],
           "secondary_keys": [],
-          "comment": "[DVS_RULES]更新规则",
+          "comment": "[DVS:变量规则]更新规则",
           "content": "只根据本轮正文中已经发生的事件更新状态，背景设定和玩家尚未实现的意图不算已发生事件。\n\n人物：只保留“林溪”这一行，姓名不变。好感度是她对{{user}}的亲近程度，整数0至100；普通交谈没有明显情绪变化时保持不变，明确的体贴或冲突可做小幅调整，不凭空大幅变化。\n场景：只保留编号为“当前”的一行。时间使用YYYY-MM-DD HH:mm；按正文明确经过的时间更新，未说明经过时间则不变。地点按实际到达的位置更新，计划去某处不等于已经到达。\n物品：表示林溪的随身物品，名称是业务键，数量是正整数。只根据实际获得、交出或消耗更新；用完时删除对应行。帆布包和书签分别计数，不另建容器或物品属性。\n\n人物与场景不新增、不删除；物品可以新增或删除。没有变化的字段和物品保持原值，不生成额外的表或字段。",
           "constant": true,
           "selective": false,
@@ -283,7 +294,7 @@
           "id": 5,
           "keys": [],
           "secondary_keys": [],
-          "comment": "[DVS_DATA]变量数据",
+          "comment": "[DVS:变量数据]变量数据",
           "content": "[[DVS_DATA:yaml]]",
           "constant": true,
           "selective": false,

@@ -1,0 +1,40 @@
+# 使用导航
+
+酒馆sqlite助手包含两部分：Helper 为酒馆助手脚本提供 SQLite 数据库；DVS 使用 Helper 管理角色卡中随 AI 回复变化的状态。人物设定、业务字段、初值和更新规则由作者决定。
+
+安装前确认取得完整扩展包。安装入口、必需依赖、浏览器要求和更新操作统一见[使用与维护指南](../../st-sqlite-scripting/references/helper-usage.md#安装与更新)。
+
+## 玩家
+
+1. 阅读[安装与更新](../../st-sqlite-scripting/references/helper-usage.md#安装与更新)，确认酒馆助手已启用。
+2. 按[存储模式与授权](../../st-sqlite-scripting/references/helper-usage.md#启用服务与授权目录)选择数据位置。游玩模式无需选择目录，切换模式不会迁移数据。
+3. 使用 DVS 卡片时，在“DVS 模型配置”中按[模型配置说明](dvs-author-guide.md#配置变量模型)保存配置并为变量更新选择它。卡片若启用输入增强，还需为输入增强选择配置或跟随变量更新；它会在正文前筛选资料，并按卡片设置规划本轮剧情。正文模型仍使用酒馆自己的连接。
+4. 在[数据库查看器](../../st-sqlite-scripting/references/helper-usage.md#sqlite-数据库查看器)查看数据；需要清理删除角色或聊天后留下的数据时，按[扫描与修复](../../st-sqlite-scripting/references/helper-usage.md#扫描与修复)先扫描、核对，再执行。
+
+遇到提示先看[故障处理](../../st-sqlite-scripting/references/helper-usage.md#遇到故障时)。写入返回后仍可能尚未保存，不要立即关闭服务或重新加载，也不要因等待过久直接重复提交。
+
+## Helper 脚本作者
+
+1. 从[完整笔记示例](../../st-sqlite-scripting/assets/helper-notes/README.md)开始，在专用单人聊天中运行 `notes.js`，核对建表、绑定参数写入、查询和重复运行。
+2. 阅读[业务侧使用指南](../../st-sqlite-scripting/references/helper-author-guide.md)，决定数据库范围、代理持有时间、哪些命令必须共同提交，以及错误时怎样停止后续动作。
+3. 接口细节按需查[公共接口契约](../../st-sqlite-scripting/references/helper-api.md)、[数据库与保存契约](../../st-sqlite-scripting/references/helper-sql.md)及[错误说明](../../st-sqlite-scripting/references/helper-errors.md)。编辑器类型使用扩展包中的 `types/sqlite-helper.d.ts`。
+
+Helper 示例不需要 DVS 卡片或状态栏。完整实现只在示例源文件维护，指南解释它使用的接口和行为。
+
+要随卡附带可选的插件安装提示，按[安装引导脚本](installer-guide.md)导入 JSON 或通过 tavern_sync 打包 JS；同一张卡只选择一种方式。
+
+## DVS 卡片作者
+
+1. 按[最小角色卡示例](../assets/dvs-minimal-card/README.md)导入并查看源文件。示例以书店店员林溪的好感度、时间地点和物品列表说明连续流程，不包含状态栏。
+2. 按[DVS 作者手册](dvs-author-guide.md)从设定、表结构和初值开始，配置世界书、酒馆助手脚本、`narrativePrepare` 和 `beforeGen` 两个必需回调，再核对正文输入、变量更新和查询。
+3. 修改字段时同时调整 SQL、世界书、注册信息和回调；新聊天初始化与已有聊天升级分别处理。编辑器类型使用扩展包中的 `types/dvs.d.ts`。
+
+需要减少每轮正文资料或预先安排剧情时，继续照着[输入增强示例](dvs-author-guide.md#可选正文资料筛选与剧情规划)设置脚本开关、世界书标签、表格筛选宏和规划规则。功能默认关闭，最小卡不依赖它。玩家可以展开用户消息下的“输入增强”面板检查本轮结果，并对最新用户消息重新生成或清除；变量仍按最终生成的正文更新。
+
+整理旧版标签和默认配置时，按[旧版 DVS 卡片升级](dvs-author-guide.md#旧版-dvs-卡片升级)使用完整包的 `tools/dvs-card-migrate.mjs`。转换源文件后还需生成导入包并核对实际使用的世界书和脚本配置；它与业务表结构升级是两件事。
+
+按具体操作开发卡片，先看[DVS 场景开发指南](dvs-scenarios.md)。需要 AI 协助时，选择[SQLite Helper 与 DVS 开发 skills](skill-usage.md)中的总入口或专用入口。酒馆扩展安装与 AI 工具的 skill 安装是两件事，安装扩展不会自动向 AI 工具安装 skill。
+
+## 共同限制
+
+当前面向单人聊天，不支持群聊、跨库事务、聊天分支自动隔离或多设备同步。角色编号只保存在当前存储的管理库中；复制角色得到新文件名，作为新角色独立登记，不复制数据库。聊天复制后的独立身份、导入聊天的编号处理和完整备份恢复尚未提供。旧版插件管理结构不自动迁移；DVS 作者的业务表版本迁移另按作者手册操作。数据库查询成功只证明当前内存可读，不能代替重新打开文件后的保存读回；操作细节见[文件、升级与备份](../../st-sqlite-scripting/references/helper-usage.md#文件升级与备份)。

@@ -1,0 +1,13 @@
+{
+  "sources": {
+    "doc/dvs/指南/场景/数据结构.md": "references/data-model-guide.md",
+    "LICENSE": "LICENSE",
+    "skills/dvs-data-model/SKILL.md": "SKILL.md",
+    "skills/NOTICE.md": "NOTICE.md"
+  },
+  "requires": [
+    "dvs-docs"
+  ],
+  "generated": {},
+  "contentHash": "b2fafed3373075591de6a77ee8f5220dc299735f23b3c28e46b98c02292d7d26"
+}

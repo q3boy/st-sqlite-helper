@@ -1,0 +1,13 @@
+{
+  "sources": {
+    "doc/dvs/指南/场景/数据加工.md": "references/data-processing-guide.md",
+    "LICENSE": "LICENSE",
+    "skills/dvs-data-processing/SKILL.md": "SKILL.md",
+    "skills/NOTICE.md": "NOTICE.md"
+  },
+  "requires": [
+    "dvs-docs"
+  ],
+  "generated": {},
+  "contentHash": "2446de6fe25a74c7078ee299eadebd85404aaa5e2be88b3f884aa394ded0a8e0"
+}

@@ -1,0 +1,13 @@
+{
+  "sources": {
+    "doc/dvs/指南/场景/输入增强.md": "references/input-enhancement-guide.md",
+    "LICENSE": "LICENSE",
+    "skills/dvs-input-enhancement/SKILL.md": "SKILL.md",
+    "skills/NOTICE.md": "NOTICE.md"
+  },
+  "requires": [
+    "dvs-docs"
+  ],
+  "generated": {},
+  "contentHash": "fee671c78fb1eb2190d4907ea3066fc09ec4d7d84b29d92e6e00a0882393485d"
+}

@@ -1,0 +1,13 @@
+{
+  "sources": {
+    "doc/dvs/指南/场景/悬浮状态栏.md": "references/statusbar-guide.md",
+    "LICENSE": "LICENSE",
+    "skills/dvs-statusbar/SKILL.md": "SKILL.md",
+    "skills/NOTICE.md": "NOTICE.md"
+  },
+  "requires": [
+    "dvs-docs"
+  ],
+  "generated": {},
+  "contentHash": "ee3e31894e3bf2327cfea63e711c1ea3bd043b204d4d451e0802b9a6be8ce543"
+}

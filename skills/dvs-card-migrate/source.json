@@ -1,0 +1,27 @@
+{
+  "sources": {
+    "doc/dvs/指南/场景/旧卡转换.md": "references/migration-guide.md",
+    "LICENSE": "LICENSE",
+    "skills/dvs-card-migrate/SKILL.md": "SKILL.md",
+    "skills/NOTICE.md": "NOTICE.md"
+  },
+  "requires": [
+    "dvs-docs"
+  ],
+  "generated": {
+    "scripts/dvs-card-migrate.mjs": {
+      "build": "scripts/card-migrate/build.ts",
+      "sources": [
+        "scripts/card-migrate/cli.ts",
+        "scripts/card-migrate/convert.ts",
+        "src/dvs2/lorebook-tags.ts",
+        "src/dvs2/compat/lorebook.ts",
+        "src/dvs2/compat/script-config.ts"
+      ],
+      "dependencies": {
+        "yaml": "2.9.1"
+      }
+    }
+  },
+  "contentHash": "f07283455462b6c50b0c76c83e8b8c3fafbd628af4597d2a60d5d7962a644199"
+}

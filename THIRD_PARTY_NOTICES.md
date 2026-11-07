@@ -1,6 +1,6 @@
 # 第三方组件与许可
 
-本文件列出完整运行包实际分发的第三方代码。项目自有材料的 CC BY-NC-SA 4.0 不替换下列组件的许可。Bun、TypeScript、测试框架、Vue 和房车卡资源未随此扩展运行包分发。
+本文件列出完整运行包实际分发的第三方代码及类型声明。项目自有材料的 CC BY-NC-SA 4.0 不替换下列组件的许可。Bun、TypeScript、测试框架和房车卡资源未随此扩展运行包分发。
 
 ## sql.js 1.14.2
 
@@ -448,4 +448,89 @@ obstacle to adoption, that text has been removed.
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE
+```
+
+## @noble/hashes 2.0.1
+
+来源：[noble-hashes](https://github.com/paulmillr/noble-hashes)。SHA-256 实现打包进入页面与 Worker，用于已有内容核对；保留完整 MIT 许可。
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2022 Paul Miller (https://paulmillr.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the “Software”), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+## @types/json-schema 7.0.15
+
+生成拦截的公开请求参数使用 JSON Schema 声明，构建将此声明包及其引用保留在包内。来源：[DefinitelyTyped](https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/json-schema)。
+
+```text
+    MIT License
+
+    Copyright (c) Microsoft Corporation.
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE
+```
+## Vue 3.5.44 与 CSSType 类型声明
+
+Vue 运行代码打包进入扩展；作者 SDK 同时分发 Vue runtime-dom、runtime-core、reactivity、shared 及 CSSType 的类型声明。类型文件中的外部引用改为包内相对路径，各文件保留对应上游的完整 MIT 许可。Vue 不包含模板编译器的类型声明。
+
+来源：[Vue](https://github.com/vuejs/core)、[CSSType](https://github.com/frenic/csstype)。Vue 许可如下：
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2018-present, Yuxi (Evan) You
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ```

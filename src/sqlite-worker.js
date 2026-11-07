@@ -1,4 +1,2207 @@
 (() => {
+  var __create = Object.create;
+  var __getProtoOf = Object.getPrototypeOf;
+  var __defProp = Object.defineProperty;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  function __accessProp(key) {
+    return this[key];
+  }
+  var __toESMCache_node;
+  var __toESMCache_esm;
+  var __toESM = (mod, isNodeMode, target) => {
+    var canCache = mod != null && typeof mod === "object";
+    if (canCache) {
+      var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
+      var cached = cache.get(mod);
+      if (cached)
+        return cached;
+    }
+    target = mod != null ? __create(__getProtoOf(mod)) : {};
+    const to = isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
+    if (mod && typeof mod === "object" || typeof mod === "function") {
+      for (let key of __getOwnPropNames(mod))
+        if (!__hasOwnProp.call(to, key))
+          __defProp(to, key, {
+            get: __accessProp.bind(mod, key),
+            enumerable: true
+          });
+    }
+    if (canCache)
+      cache.set(mod, to);
+    return to;
+  };
+  var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
+
+  // node_modules/semver/internal/constants.js
+  var require_constants = __commonJS(function(exports, module) {
+    var SEMVER_SPEC_VERSION = "2.0.0";
+    var MAX_LENGTH = 256;
+    var MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER || 9007199254740991;
+    var MAX_SAFE_COMPONENT_LENGTH = 16;
+    var MAX_SAFE_BUILD_LENGTH = MAX_LENGTH - 6;
+    var RELEASE_TYPES = [
+      "major",
+      "premajor",
+      "minor",
+      "preminor",
+      "patch",
+      "prepatch",
+      "prerelease"
+    ];
+    module.exports = {
+      MAX_LENGTH,
+      MAX_SAFE_COMPONENT_LENGTH,
+      MAX_SAFE_BUILD_LENGTH,
+      MAX_SAFE_INTEGER,
+      RELEASE_TYPES,
+      SEMVER_SPEC_VERSION,
+      FLAG_INCLUDE_PRERELEASE: 1,
+      FLAG_LOOSE: 2
+    };
+  });
+
+  // node_modules/semver/internal/debug.js
+  var require_debug = __commonJS(function(exports, module) {
+    var debug = typeof process === "object" && process.env && process.env.NODE_DEBUG && /\bsemver\b/i.test(process.env.NODE_DEBUG) ? (...args) => console.error("SEMVER", ...args) : () => {};
+    module.exports = debug;
+  });
+
+  // node_modules/semver/internal/re.js
+  var require_re = __commonJS(function(exports, module) {
+    var {
+      MAX_SAFE_COMPONENT_LENGTH,
+      MAX_SAFE_BUILD_LENGTH,
+      MAX_LENGTH
+    } = require_constants();
+    var debug = require_debug();
+    exports = module.exports = {};
+    var re = exports.re = [];
+    var safeRe = exports.safeRe = [];
+    var src = exports.src = [];
+    var safeSrc = exports.safeSrc = [];
+    var t = exports.t = {};
+    var R = 0;
+    var LETTERDASHNUMBER = "[a-zA-Z0-9-]";
+    var safeRegexReplacements = [
+      ["\\s", 1],
+      ["\\d", MAX_LENGTH],
+      [LETTERDASHNUMBER, MAX_SAFE_BUILD_LENGTH]
+    ];
+    var makeSafeRegex = (value) => {
+      for (const [token, max] of safeRegexReplacements) {
+        value = value.split(`${token}*`).join(`${token}{0,${max}}`).split(`${token}+`).join(`${token}{1,${max}}`);
+      }
+      return value;
+    };
+    var createToken = (name, value, isGlobal) => {
+      const safe = makeSafeRegex(value);
+      const index = R++;
+      debug(name, index, value);
+      t[name] = index;
+      src[index] = value;
+      safeSrc[index] = safe;
+      re[index] = new RegExp(value, isGlobal ? "g" : undefined);
+      safeRe[index] = new RegExp(safe, isGlobal ? "g" : undefined);
+    };
+    createToken("NUMERICIDENTIFIER", "0|[1-9]\\d*");
+    createToken("NUMERICIDENTIFIERLOOSE", "\\d+");
+    createToken("NONNUMERICIDENTIFIER", `\\d*[a-zA-Z-]${LETTERDASHNUMBER}*`);
+    createToken("MAINVERSION", `(${src[t.NUMERICIDENTIFIER]})\\.` + `(${src[t.NUMERICIDENTIFIER]})\\.` + `(${src[t.NUMERICIDENTIFIER]})`);
+    createToken("MAINVERSIONLOOSE", `(${src[t.NUMERICIDENTIFIERLOOSE]})\\.` + `(${src[t.NUMERICIDENTIFIERLOOSE]})\\.` + `(${src[t.NUMERICIDENTIFIERLOOSE]})`);
+    createToken("PRERELEASEIDENTIFIER", `(?:${src[t.NONNUMERICIDENTIFIER]}|${src[t.NUMERICIDENTIFIER]})`);
+    createToken("PRERELEASEIDENTIFIERLOOSE", `(?:${src[t.NONNUMERICIDENTIFIER]}|${src[t.NUMERICIDENTIFIERLOOSE]})`);
+    createToken("PRERELEASE", `(?:-(${src[t.PRERELEASEIDENTIFIER]}(?:\\.${src[t.PRERELEASEIDENTIFIER]})*))`);
+    createToken("PRERELEASELOOSE", `(?:-?(${src[t.PRERELEASEIDENTIFIERLOOSE]}(?:\\.${src[t.PRERELEASEIDENTIFIERLOOSE]})*))`);
+    createToken("BUILDIDENTIFIER", `${LETTERDASHNUMBER}+`);
+    createToken("BUILD", `(?:\\+(${src[t.BUILDIDENTIFIER]}(?:\\.${src[t.BUILDIDENTIFIER]})*))`);
+    createToken("FULLPLAIN", `v?${src[t.MAINVERSION]}${src[t.PRERELEASE]}?${src[t.BUILD]}?`);
+    createToken("FULL", `^${src[t.FULLPLAIN]}$`);
+    createToken("LOOSEPLAIN", `[v=\\s]*${src[t.MAINVERSIONLOOSE]}${src[t.PRERELEASELOOSE]}?${src[t.BUILD]}?`);
+    createToken("LOOSE", `^${src[t.LOOSEPLAIN]}$`);
+    createToken("GTLT", "((?:<|>)?=?)");
+    createToken("XRANGEIDENTIFIERLOOSE", `${src[t.NUMERICIDENTIFIERLOOSE]}|x|X|\\*`);
+    createToken("XRANGEIDENTIFIER", `${src[t.NUMERICIDENTIFIER]}|x|X|\\*`);
+    createToken("XRANGEPLAIN", `[v=\\s]*(${src[t.XRANGEIDENTIFIER]})` + `(?:\\.(${src[t.XRANGEIDENTIFIER]})` + `(?:\\.(${src[t.XRANGEIDENTIFIER]})` + `(?:${src[t.PRERELEASE]})?${src[t.BUILD]}?` + `)?)?`);
+    createToken("XRANGEPLAINLOOSE", `[v=\\s]*(${src[t.XRANGEIDENTIFIERLOOSE]})` + `(?:\\.(${src[t.XRANGEIDENTIFIERLOOSE]})` + `(?:\\.(${src[t.XRANGEIDENTIFIERLOOSE]})` + `(?:${src[t.PRERELEASELOOSE]})?${src[t.BUILD]}?` + `)?)?`);
+    createToken("XRANGE", `^${src[t.GTLT]}\\s*${src[t.XRANGEPLAIN]}$`);
+    createToken("XRANGELOOSE", `^${src[t.GTLT]}\\s*${src[t.XRANGEPLAINLOOSE]}$`);
+    createToken("COERCEPLAIN", `${"(^|[^\\d])" + "(\\d{1,"}${MAX_SAFE_COMPONENT_LENGTH}})` + `(?:\\.(\\d{1,${MAX_SAFE_COMPONENT_LENGTH}}))?` + `(?:\\.(\\d{1,${MAX_SAFE_COMPONENT_LENGTH}}))?`);
+    createToken("COERCE", `${src[t.COERCEPLAIN]}(?:$|[^\\d])`);
+    createToken("COERCEFULL", src[t.COERCEPLAIN] + `(?:${src[t.PRERELEASE]})?` + `(?:${src[t.BUILD]})?` + `(?:$|[^\\d])`);
+    createToken("COERCERTL", src[t.COERCE], true);
+    createToken("COERCERTLFULL", src[t.COERCEFULL], true);
+    createToken("LONETILDE", "(?:~>?)");
+    createToken("TILDETRIM", `(\\s*)${src[t.LONETILDE]}\\s+`, true);
+    exports.tildeTrimReplace = "$1~";
+    createToken("TILDE", `^${src[t.LONETILDE]}${src[t.XRANGEPLAIN]}$`);
+    createToken("TILDELOOSE", `^${src[t.LONETILDE]}${src[t.XRANGEPLAINLOOSE]}$`);
+    createToken("LONECARET", "(?:\\^)");
+    createToken("CARETTRIM", `(\\s*)${src[t.LONECARET]}\\s+`, true);
+    exports.caretTrimReplace = "$1^";
+    createToken("CARET", `^${src[t.LONECARET]}${src[t.XRANGEPLAIN]}$`);
+    createToken("CARETLOOSE", `^${src[t.LONECARET]}${src[t.XRANGEPLAINLOOSE]}$`);
+    createToken("COMPARATORLOOSE", `^${src[t.GTLT]}\\s*(${src[t.LOOSEPLAIN]})$|^$`);
+    createToken("COMPARATOR", `^${src[t.GTLT]}\\s*(${src[t.FULLPLAIN]})$|^$`);
+    createToken("COMPARATORTRIM", `(\\s*)${src[t.GTLT]}\\s*(${src[t.LOOSEPLAIN]}|${src[t.XRANGEPLAIN]})`, true);
+    exports.comparatorTrimReplace = "$1$2$3";
+    createToken("HYPHENRANGE", `^\\s*(${src[t.XRANGEPLAIN]})` + `\\s+-\\s+` + `(${src[t.XRANGEPLAIN]})` + `\\s*$`);
+    createToken("HYPHENRANGELOOSE", `^\\s*(${src[t.XRANGEPLAINLOOSE]})` + `\\s+-\\s+` + `(${src[t.XRANGEPLAINLOOSE]})` + `\\s*$`);
+    createToken("STAR", "(<|>)?=?\\s*\\*");
+    createToken("GTE0", "^\\s*>=\\s*0\\.0\\.0\\s*$");
+    createToken("GTE0PRE", "^\\s*>=\\s*0\\.0\\.0-0\\s*$");
+  });
+
+  // node_modules/semver/internal/parse-options.js
+  var require_parse_options = __commonJS(function(exports, module) {
+    var looseOption = Object.freeze({ loose: true });
+    var emptyOpts = Object.freeze({});
+    var parseOptions = (options) => {
+      if (!options) {
+        return emptyOpts;
+      }
+      if (typeof options !== "object") {
+        return looseOption;
+      }
+      return options;
+    };
+    module.exports = parseOptions;
+  });
+
+  // node_modules/semver/internal/identifiers.js
+  var require_identifiers = __commonJS(function(exports, module) {
+    var numeric = /^[0-9]+$/;
+    var compareIdentifiers = (a, b) => {
+      if (typeof a === "number" && typeof b === "number") {
+        return a === b ? 0 : a < b ? -1 : 1;
+      }
+      const anum = numeric.test(a);
+      const bnum = numeric.test(b);
+      if (anum && bnum) {
+        a = +a;
+        b = +b;
+      }
+      return a === b ? 0 : anum && !bnum ? -1 : bnum && !anum ? 1 : a < b ? -1 : 1;
+    };
+    var rcompareIdentifiers = (a, b) => compareIdentifiers(b, a);
+    module.exports = {
+      compareIdentifiers,
+      rcompareIdentifiers
+    };
+  });
+
+  // node_modules/semver/classes/semver.js
+  var require_semver = __commonJS(function(exports, module) {
+    var debug = require_debug();
+    var { MAX_LENGTH, MAX_SAFE_INTEGER } = require_constants();
+    var { safeRe: re, t } = require_re();
+    var parseOptions = require_parse_options();
+    var { compareIdentifiers } = require_identifiers();
+    var isPrereleaseIdentifier = (prerelease, identifier) => {
+      const identifiers = identifier.split(".");
+      if (identifiers.length > prerelease.length) {
+        return false;
+      }
+      for (let i = 0;i < identifiers.length; i++) {
+        if (compareIdentifiers(prerelease[i], identifiers[i]) !== 0) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    class SemVer {
+      constructor(version, options) {
+        options = parseOptions(options);
+        if (version instanceof SemVer) {
+          if (version.loose === !!options.loose && version.includePrerelease === !!options.includePrerelease) {
+            return version;
+          } else {
+            version = version.version;
+          }
+        } else if (typeof version !== "string") {
+          throw new TypeError(`Invalid version. Must be a string. Got type "${typeof version}".`);
+        }
+        if (version.length > MAX_LENGTH) {
+          throw new TypeError(`version is longer than ${MAX_LENGTH} characters`);
+        }
+        debug("SemVer", version, options);
+        this.options = options;
+        this.loose = !!options.loose;
+        this.includePrerelease = !!options.includePrerelease;
+        const m = version.trim().match(options.loose ? re[t.LOOSE] : re[t.FULL]);
+        if (!m) {
+          throw new TypeError(`Invalid Version: ${version}`);
+        }
+        this.raw = version;
+        this.major = +m[1];
+        this.minor = +m[2];
+        this.patch = +m[3];
+        if (this.major > MAX_SAFE_INTEGER || this.major < 0) {
+          throw new TypeError("Invalid major version");
+        }
+        if (this.minor > MAX_SAFE_INTEGER || this.minor < 0) {
+          throw new TypeError("Invalid minor version");
+        }
+        if (this.patch > MAX_SAFE_INTEGER || this.patch < 0) {
+          throw new TypeError("Invalid patch version");
+        }
+        if (!m[4]) {
+          this.prerelease = [];
+        } else {
+          this.prerelease = m[4].split(".").map((id) => {
+            if (/^[0-9]+$/.test(id)) {
+              const num = +id;
+              if (num >= 0 && num < MAX_SAFE_INTEGER) {
+                return num;
+              }
+            }
+            return id;
+          });
+        }
+        this.build = m[5] ? m[5].split(".") : [];
+        this.format();
+      }
+      format() {
+        this.version = `${this.major}.${this.minor}.${this.patch}`;
+        if (this.prerelease.length) {
+          this.version += `-${this.prerelease.join(".")}`;
+        }
+        return this.version;
+      }
+      toString() {
+        return this.version;
+      }
+      compare(other) {
+        debug("SemVer.compare", this.version, this.options, other);
+        if (!(other instanceof SemVer)) {
+          if (typeof other === "string" && other === this.version) {
+            return 0;
+          }
+          other = new SemVer(other, this.options);
+        }
+        if (other.version === this.version) {
+          return 0;
+        }
+        return this.compareMain(other) || this.comparePre(other);
+      }
+      compareMain(other) {
+        if (!(other instanceof SemVer)) {
+          other = new SemVer(other, this.options);
+        }
+        if (this.major < other.major) {
+          return -1;
+        }
+        if (this.major > other.major) {
+          return 1;
+        }
+        if (this.minor < other.minor) {
+          return -1;
+        }
+        if (this.minor > other.minor) {
+          return 1;
+        }
+        if (this.patch < other.patch) {
+          return -1;
+        }
+        if (this.patch > other.patch) {
+          return 1;
+        }
+        return 0;
+      }
+      comparePre(other) {
+        if (!(other instanceof SemVer)) {
+          other = new SemVer(other, this.options);
+        }
+        if (this.prerelease.length && !other.prerelease.length) {
+          return -1;
+        } else if (!this.prerelease.length && other.prerelease.length) {
+          return 1;
+        } else if (!this.prerelease.length && !other.prerelease.length) {
+          return 0;
+        }
+        let i = 0;
+        do {
+          const a = this.prerelease[i];
+          const b = other.prerelease[i];
+          debug("prerelease compare", i, a, b);
+          if (a === undefined && b === undefined) {
+            return 0;
+          } else if (b === undefined) {
+            return 1;
+          } else if (a === undefined) {
+            return -1;
+          } else if (a === b) {
+            continue;
+          } else {
+            return compareIdentifiers(a, b);
+          }
+        } while (++i);
+      }
+      compareBuild(other) {
+        if (!(other instanceof SemVer)) {
+          other = new SemVer(other, this.options);
+        }
+        let i = 0;
+        do {
+          const a = this.build[i];
+          const b = other.build[i];
+          debug("build compare", i, a, b);
+          if (a === undefined && b === undefined) {
+            return 0;
+          } else if (b === undefined) {
+            return 1;
+          } else if (a === undefined) {
+            return -1;
+          } else if (a === b) {
+            continue;
+          } else {
+            return compareIdentifiers(a, b);
+          }
+        } while (++i);
+      }
+      inc(release, identifier, identifierBase) {
+        if (release.startsWith("pre")) {
+          if (!identifier && identifierBase === false) {
+            throw new Error("invalid increment argument: identifier is empty");
+          }
+          if (identifier) {
+            const match = `-${identifier}`.match(this.options.loose ? re[t.PRERELEASELOOSE] : re[t.PRERELEASE]);
+            if (!match || match[1] !== identifier) {
+              throw new Error(`invalid identifier: ${identifier}`);
+            }
+          }
+        }
+        switch (release) {
+          case "premajor":
+            this.prerelease.length = 0;
+            this.patch = 0;
+            this.minor = 0;
+            this.major++;
+            this.inc("pre", identifier, identifierBase);
+            break;
+          case "preminor":
+            this.prerelease.length = 0;
+            this.patch = 0;
+            this.minor++;
+            this.inc("pre", identifier, identifierBase);
+            break;
+          case "prepatch":
+            this.prerelease.length = 0;
+            this.inc("patch", identifier, identifierBase);
+            this.inc("pre", identifier, identifierBase);
+            break;
+          case "prerelease":
+            if (this.prerelease.length === 0) {
+              this.inc("patch", identifier, identifierBase);
+            }
+            this.inc("pre", identifier, identifierBase);
+            break;
+          case "release":
+            if (this.prerelease.length === 0) {
+              throw new Error(`version ${this.raw} is not a prerelease`);
+            }
+            this.prerelease.length = 0;
+            break;
+          case "major":
+            if (this.minor !== 0 || this.patch !== 0 || this.prerelease.length === 0) {
+              this.major++;
+            }
+            this.minor = 0;
+            this.patch = 0;
+            this.prerelease = [];
+            break;
+          case "minor":
+            if (this.patch !== 0 || this.prerelease.length === 0) {
+              this.minor++;
+            }
+            this.patch = 0;
+            this.prerelease = [];
+            break;
+          case "patch":
+            if (this.prerelease.length === 0) {
+              this.patch++;
+            }
+            this.prerelease = [];
+            break;
+          case "pre": {
+            const base = Number(identifierBase) ? 1 : 0;
+            if (this.prerelease.length === 0) {
+              this.prerelease = [base];
+            } else {
+              let i = this.prerelease.length;
+              while (--i >= 0) {
+                if (typeof this.prerelease[i] === "number") {
+                  this.prerelease[i]++;
+                  i = -2;
+                }
+              }
+              if (i === -1) {
+                if (identifier === this.prerelease.join(".") && identifierBase === false) {
+                  throw new Error("invalid increment argument: identifier already exists");
+                }
+                this.prerelease.push(base);
+              }
+            }
+            if (identifier) {
+              let prerelease = [identifier, base];
+              if (identifierBase === false) {
+                prerelease = [identifier];
+              }
+              if (isPrereleaseIdentifier(this.prerelease, identifier)) {
+                const prereleaseBase = this.prerelease[identifier.split(".").length];
+                if (isNaN(prereleaseBase)) {
+                  this.prerelease = prerelease;
+                }
+              } else {
+                this.prerelease = prerelease;
+              }
+            }
+            break;
+          }
+          default:
+            throw new Error(`invalid increment argument: ${release}`);
+        }
+        this.raw = this.format();
+        if (this.build.length) {
+          this.raw += `+${this.build.join(".")}`;
+        }
+        return this;
+      }
+    }
+    module.exports = SemVer;
+  });
+
+  // node_modules/semver/functions/parse.js
+  var require_parse = __commonJS(function(exports, module) {
+    var SemVer = require_semver();
+    var parse = (version, options, throwErrors = false) => {
+      if (version instanceof SemVer) {
+        return version;
+      }
+      try {
+        return new SemVer(version, options);
+      } catch (er) {
+        if (!throwErrors) {
+          return null;
+        }
+        throw er;
+      }
+    };
+    module.exports = parse;
+  });
+
+  // node_modules/semver/functions/valid.js
+  var require_valid = __commonJS(function(exports, module) {
+    var parse = require_parse();
+    var valid = (version, options) => {
+      const v = parse(version, options);
+      return v ? v.version : null;
+    };
+    module.exports = valid;
+  });
+
+  // node_modules/semver/functions/clean.js
+  var require_clean = __commonJS(function(exports, module) {
+    var parse = require_parse();
+    var clean = (version, options) => {
+      const s = parse(version.trim().replace(/^[=v]+/, ""), options);
+      return s ? s.version : null;
+    };
+    module.exports = clean;
+  });
+
+  // node_modules/semver/functions/inc.js
+  var require_inc = __commonJS(function(exports, module) {
+    var SemVer = require_semver();
+    var inc = (version, release, options, identifier, identifierBase) => {
+      if (typeof options === "string") {
+        identifierBase = identifier;
+        identifier = options;
+        options = undefined;
+      }
+      try {
+        return new SemVer(version instanceof SemVer ? version.version : version, options).inc(release, identifier, identifierBase).version;
+      } catch (er) {
+        return null;
+      }
+    };
+    module.exports = inc;
+  });
+
+  // node_modules/semver/functions/diff.js
+  var require_diff = __commonJS(function(exports, module) {
+    var parse = require_parse();
+    var diff = (version1, version2) => {
+      const v1 = parse(version1, null, true);
+      const v2 = parse(version2, null, true);
+      const comparison = v1.compare(v2);
+      if (comparison === 0) {
+        return null;
+      }
+      const v1Higher = comparison > 0;
+      const highVersion = v1Higher ? v1 : v2;
+      const lowVersion = v1Higher ? v2 : v1;
+      const highHasPre = !!highVersion.prerelease.length;
+      const lowHasPre = !!lowVersion.prerelease.length;
+      if (lowHasPre && !highHasPre) {
+        if (!lowVersion.patch && !lowVersion.minor) {
+          return "major";
+        }
+        if (lowVersion.compareMain(highVersion) === 0) {
+          if (lowVersion.minor && !lowVersion.patch) {
+            return "minor";
+          }
+          return "patch";
+        }
+      }
+      const prefix = highHasPre ? "pre" : "";
+      if (v1.major !== v2.major) {
+        return prefix + "major";
+      }
+      if (v1.minor !== v2.minor) {
+        return prefix + "minor";
+      }
+      if (v1.patch !== v2.patch) {
+        return prefix + "patch";
+      }
+      return "prerelease";
+    };
+    module.exports = diff;
+  });
+
+  // node_modules/semver/functions/major.js
+  var require_major = __commonJS(function(exports, module) {
+    var SemVer = require_semver();
+    var major = (a, loose) => new SemVer(a, loose).major;
+    module.exports = major;
+  });
+
+  // node_modules/semver/functions/minor.js
+  var require_minor = __commonJS(function(exports, module) {
+    var SemVer = require_semver();
+    var minor = (a, loose) => new SemVer(a, loose).minor;
+    module.exports = minor;
+  });
+
+  // node_modules/semver/functions/patch.js
+  var require_patch = __commonJS(function(exports, module) {
+    var SemVer = require_semver();
+    var patch = (a, loose) => new SemVer(a, loose).patch;
+    module.exports = patch;
+  });
+
+  // node_modules/semver/functions/prerelease.js
+  var require_prerelease = __commonJS(function(exports, module) {
+    var parse = require_parse();
+    var prerelease = (version, options) => {
+      const parsed = parse(version, options);
+      return parsed && parsed.prerelease.length ? parsed.prerelease : null;
+    };
+    module.exports = prerelease;
+  });
+
+  // node_modules/semver/functions/compare.js
+  var require_compare = __commonJS(function(exports, module) {
+    var SemVer = require_semver();
+    var compare = (a, b, loose) => new SemVer(a, loose).compare(new SemVer(b, loose));
+    module.exports = compare;
+  });
+
+  // node_modules/semver/functions/rcompare.js
+  var require_rcompare = __commonJS(function(exports, module) {
+    var compare = require_compare();
+    var rcompare = (a, b, loose) => compare(b, a, loose);
+    module.exports = rcompare;
+  });
+
+  // node_modules/semver/functions/compare-loose.js
+  var require_compare_loose = __commonJS(function(exports, module) {
+    var compare = require_compare();
+    var compareLoose = (a, b) => compare(a, b, true);
+    module.exports = compareLoose;
+  });
+
+  // node_modules/semver/functions/compare-build.js
+  var require_compare_build = __commonJS(function(exports, module) {
+    var SemVer = require_semver();
+    var compareBuild = (a, b, loose) => {
+      const versionA = new SemVer(a, loose);
+      const versionB = new SemVer(b, loose);
+      return versionA.compare(versionB) || versionA.compareBuild(versionB);
+    };
+    module.exports = compareBuild;
+  });
+
+  // node_modules/semver/functions/sort.js
+  var require_sort = __commonJS(function(exports, module) {
+    var compareBuild = require_compare_build();
+    var sort = (list, loose) => list.sort((a, b) => compareBuild(a, b, loose));
+    module.exports = sort;
+  });
+
+  // node_modules/semver/functions/rsort.js
+  var require_rsort = __commonJS(function(exports, module) {
+    var compareBuild = require_compare_build();
+    var rsort = (list, loose) => list.sort((a, b) => compareBuild(b, a, loose));
+    module.exports = rsort;
+  });
+
+  // node_modules/semver/functions/gt.js
+  var require_gt = __commonJS(function(exports, module) {
+    var compare = require_compare();
+    var gt = (a, b, loose) => compare(a, b, loose) > 0;
+    module.exports = gt;
+  });
+
+  // node_modules/semver/functions/lt.js
+  var require_lt = __commonJS(function(exports, module) {
+    var compare = require_compare();
+    var lt = (a, b, loose) => compare(a, b, loose) < 0;
+    module.exports = lt;
+  });
+
+  // node_modules/semver/functions/eq.js
+  var require_eq = __commonJS(function(exports, module) {
+    var compare = require_compare();
+    var eq = (a, b, loose) => compare(a, b, loose) === 0;
+    module.exports = eq;
+  });
+
+  // node_modules/semver/functions/neq.js
+  var require_neq = __commonJS(function(exports, module) {
+    var compare = require_compare();
+    var neq = (a, b, loose) => compare(a, b, loose) !== 0;
+    module.exports = neq;
+  });
+
+  // node_modules/semver/functions/gte.js
+  var require_gte = __commonJS(function(exports, module) {
+    var compare = require_compare();
+    var gte = (a, b, loose) => compare(a, b, loose) >= 0;
+    module.exports = gte;
+  });
+
+  // node_modules/semver/functions/lte.js
+  var require_lte = __commonJS(function(exports, module) {
+    var compare = require_compare();
+    var lte = (a, b, loose) => compare(a, b, loose) <= 0;
+    module.exports = lte;
+  });
+
+  // node_modules/semver/functions/cmp.js
+  var require_cmp = __commonJS(function(exports, module) {
+    var eq = require_eq();
+    var neq = require_neq();
+    var gt = require_gt();
+    var gte = require_gte();
+    var lt = require_lt();
+    var lte = require_lte();
+    var cmp = (a, op, b, loose) => {
+      switch (op) {
+        case "===":
+          if (typeof a === "object") {
+            a = a.version;
+          }
+          if (typeof b === "object") {
+            b = b.version;
+          }
+          return a === b;
+        case "!==":
+          if (typeof a === "object") {
+            a = a.version;
+          }
+          if (typeof b === "object") {
+            b = b.version;
+          }
+          return a !== b;
+        case "":
+        case "=":
+        case "==":
+          return eq(a, b, loose);
+        case "!=":
+          return neq(a, b, loose);
+        case ">":
+          return gt(a, b, loose);
+        case ">=":
+          return gte(a, b, loose);
+        case "<":
+          return lt(a, b, loose);
+        case "<=":
+          return lte(a, b, loose);
+        default:
+          throw new TypeError(`Invalid operator: ${op}`);
+      }
+    };
+    module.exports = cmp;
+  });
+
+  // node_modules/semver/functions/coerce.js
+  var require_coerce = __commonJS(function(exports, module) {
+    var SemVer = require_semver();
+    var parse = require_parse();
+    var { safeRe: re, t } = require_re();
+    var coerce = (version, options) => {
+      if (version instanceof SemVer) {
+        return version;
+      }
+      if (typeof version === "number") {
+        version = String(version);
+      }
+      if (typeof version !== "string") {
+        return null;
+      }
+      options = options || {};
+      let match = null;
+      if (!options.rtl) {
+        match = version.match(options.includePrerelease ? re[t.COERCEFULL] : re[t.COERCE]);
+      } else {
+        const coerceRtlRegex = options.includePrerelease ? re[t.COERCERTLFULL] : re[t.COERCERTL];
+        let next;
+        while ((next = coerceRtlRegex.exec(version)) && (!match || match.index + match[0].length !== version.length)) {
+          if (!match || next.index + next[0].length !== match.index + match[0].length) {
+            match = next;
+          }
+          coerceRtlRegex.lastIndex = next.index + next[1].length + next[2].length;
+        }
+        coerceRtlRegex.lastIndex = -1;
+      }
+      if (match === null) {
+        return null;
+      }
+      const major = match[2];
+      const minor = match[3] || "0";
+      const patch = match[4] || "0";
+      const prerelease = options.includePrerelease && match[5] ? `-${match[5]}` : "";
+      const build = options.includePrerelease && match[6] ? `+${match[6]}` : "";
+      return parse(`${major}.${minor}.${patch}${prerelease}${build}`, options);
+    };
+    module.exports = coerce;
+  });
+
+  // node_modules/semver/functions/truncate.js
+  var require_truncate = __commonJS(function(exports, module) {
+    var parse = require_parse();
+    var constants = require_constants();
+    var SemVer = require_semver();
+    var truncate = (version, truncation, options) => {
+      if (!constants.RELEASE_TYPES.includes(truncation)) {
+        return null;
+      }
+      const clonedVersion = cloneInputVersion(version, options);
+      return clonedVersion && doTruncation(clonedVersion, truncation);
+    };
+    var cloneInputVersion = (version, options) => {
+      const versionStringToParse = version instanceof SemVer ? version.version : version;
+      return parse(versionStringToParse, options);
+    };
+    var doTruncation = (version, truncation) => {
+      if (isPrerelease(truncation)) {
+        return version.version;
+      }
+      version.prerelease = [];
+      switch (truncation) {
+        case "major":
+          version.minor = 0;
+          version.patch = 0;
+          break;
+        case "minor":
+          version.patch = 0;
+          break;
+      }
+      return version.format();
+    };
+    var isPrerelease = (type) => {
+      return type.startsWith("pre");
+    };
+    module.exports = truncate;
+  });
+
+  // node_modules/semver/internal/lrucache.js
+  var require_lrucache = __commonJS(function(exports, module) {
+    class LRUCache {
+      constructor() {
+        this.max = 1000;
+        this.map = new Map;
+      }
+      get(key) {
+        const value = this.map.get(key);
+        if (value === undefined) {
+          return;
+        } else {
+          this.map.delete(key);
+          this.map.set(key, value);
+          return value;
+        }
+      }
+      delete(key) {
+        return this.map.delete(key);
+      }
+      set(key, value) {
+        const deleted = this.delete(key);
+        if (!deleted && value !== undefined) {
+          if (this.map.size >= this.max) {
+            const firstKey = this.map.keys().next().value;
+            this.delete(firstKey);
+          }
+          this.map.set(key, value);
+        }
+        return this;
+      }
+    }
+    module.exports = LRUCache;
+  });
+
+  // node_modules/semver/classes/range.js
+  var require_range = __commonJS(function(exports, module) {
+    var SPACE_CHARACTERS = /\s+/g;
+
+    class Range {
+      constructor(range, options) {
+        options = parseOptions(options);
+        if (range instanceof Range) {
+          if (range.loose === !!options.loose && range.includePrerelease === !!options.includePrerelease) {
+            return range;
+          } else {
+            return new Range(range.raw, options);
+          }
+        }
+        if (range instanceof Comparator) {
+          this.raw = range.value;
+          this.set = [[range]];
+          this.formatted = undefined;
+          return this;
+        }
+        this.options = options;
+        this.loose = !!options.loose;
+        this.includePrerelease = !!options.includePrerelease;
+        this.raw = range.trim().replace(SPACE_CHARACTERS, " ");
+        this.set = this.raw.split("||").map((r) => this.parseRange(r.trim())).filter((c) => c.length);
+        if (!this.set.length) {
+          throw new TypeError(`Invalid SemVer Range: ${this.raw}`);
+        }
+        if (this.set.length > 1) {
+          const first = this.set[0];
+          this.set = this.set.filter((c) => !isNullSet(c[0]));
+          if (this.set.length === 0) {
+            this.set = [first];
+          } else if (this.set.length > 1) {
+            for (const c of this.set) {
+              if (c.length === 1 && isAny(c[0])) {
+                this.set = [c];
+                break;
+              }
+            }
+          }
+        }
+        this.formatted = undefined;
+      }
+      get range() {
+        if (this.formatted === undefined) {
+          this.formatted = "";
+          for (let i = 0;i < this.set.length; i++) {
+            if (i > 0) {
+              this.formatted += "||";
+            }
+            const comps = this.set[i];
+            for (let k = 0;k < comps.length; k++) {
+              if (k > 0) {
+                this.formatted += " ";
+              }
+              this.formatted += comps[k].toString().trim();
+            }
+          }
+        }
+        return this.formatted;
+      }
+      format() {
+        return this.range;
+      }
+      toString() {
+        return this.range;
+      }
+      parseRange(range) {
+        range = range.replace(BUILDSTRIPRE, "");
+        const memoOpts = (this.options.includePrerelease && FLAG_INCLUDE_PRERELEASE) | (this.options.loose && FLAG_LOOSE);
+        const memoKey = memoOpts + ":" + range;
+        const cached = cache.get(memoKey);
+        if (cached) {
+          return cached;
+        }
+        const loose = this.options.loose;
+        const hr = loose ? re[t.HYPHENRANGELOOSE] : re[t.HYPHENRANGE];
+        range = range.replace(hr, hyphenReplace(this.options.includePrerelease));
+        debug("hyphen replace", range);
+        range = range.replace(re[t.COMPARATORTRIM], comparatorTrimReplace);
+        debug("comparator trim", range);
+        range = range.replace(re[t.TILDETRIM], tildeTrimReplace);
+        debug("tilde trim", range);
+        range = range.replace(re[t.CARETTRIM], caretTrimReplace);
+        debug("caret trim", range);
+        let rangeList = range.split(" ").map((comp) => parseComparator(comp, this.options)).join(" ").split(/\s+/).map((comp) => replaceGTE0(comp, this.options));
+        if (loose) {
+          rangeList = rangeList.filter((comp) => {
+            debug("loose invalid filter", comp, this.options);
+            return !!comp.match(re[t.COMPARATORLOOSE]);
+          });
+        }
+        debug("range list", rangeList);
+        const rangeMap = new Map;
+        const comparators = rangeList.map((comp) => new Comparator(comp, this.options));
+        for (const comp of comparators) {
+          if (isNullSet(comp)) {
+            return [comp];
+          }
+          rangeMap.set(comp.value, comp);
+        }
+        if (rangeMap.size > 1 && rangeMap.has("")) {
+          rangeMap.delete("");
+        }
+        const result = [...rangeMap.values()];
+        cache.set(memoKey, result);
+        return result;
+      }
+      intersects(range, options) {
+        if (!(range instanceof Range)) {
+          throw new TypeError("a Range is required");
+        }
+        return this.set.some((thisComparators) => {
+          return isSatisfiable(thisComparators, options) && range.set.some((rangeComparators) => {
+            return isSatisfiable(rangeComparators, options) && thisComparators.every((thisComparator) => {
+              return rangeComparators.every((rangeComparator) => {
+                return thisComparator.intersects(rangeComparator, options);
+              });
+            });
+          });
+        });
+      }
+      test(version) {
+        if (!version) {
+          return false;
+        }
+        if (typeof version === "string") {
+          try {
+            version = new SemVer(version, this.options);
+          } catch (er) {
+            return false;
+          }
+        }
+        for (let i = 0;i < this.set.length; i++) {
+          if (testSet(this.set[i], version, this.options)) {
+            return true;
+          }
+        }
+        return false;
+      }
+    }
+    module.exports = Range;
+    var LRU = require_lrucache();
+    var cache = new LRU;
+    var parseOptions = require_parse_options();
+    var Comparator = require_comparator();
+    var debug = require_debug();
+    var SemVer = require_semver();
+    var {
+      safeRe: re,
+      src,
+      t,
+      comparatorTrimReplace,
+      tildeTrimReplace,
+      caretTrimReplace
+    } = require_re();
+    var { FLAG_INCLUDE_PRERELEASE, FLAG_LOOSE } = require_constants();
+    var BUILDSTRIPRE = new RegExp(src[t.BUILD], "g");
+    var isNullSet = (c) => c.value === "<0.0.0-0";
+    var isAny = (c) => c.value === "";
+    var isSatisfiable = (comparators, options) => {
+      let result = true;
+      const remainingComparators = comparators.slice();
+      let testComparator = remainingComparators.pop();
+      while (result && remainingComparators.length) {
+        result = remainingComparators.every((otherComparator) => {
+          return testComparator.intersects(otherComparator, options);
+        });
+        testComparator = remainingComparators.pop();
+      }
+      return result;
+    };
+    var parseComparator = (comp, options) => {
+      comp = comp.replace(re[t.BUILD], "");
+      debug("comp", comp, options);
+      comp = replaceCarets(comp, options);
+      debug("caret", comp);
+      comp = replaceTildes(comp, options);
+      debug("tildes", comp);
+      comp = replaceXRanges(comp, options);
+      debug("xrange", comp);
+      comp = replaceStars(comp, options);
+      debug("stars", comp);
+      return comp;
+    };
+    var isX = (id) => !id || id.toLowerCase() === "x" || id === "*";
+    var invalidXRangeOrder = (M, m, p) => isX(M) && !isX(m) || isX(m) && p && !isX(p);
+    var replaceTildes = (comp, options) => {
+      return comp.trim().split(/\s+/).map((c) => replaceTilde(c, options)).join(" ");
+    };
+    var replaceTilde = (comp, options) => {
+      const r = options.loose ? re[t.TILDELOOSE] : re[t.TILDE];
+      const z = options.includePrerelease ? "-0" : "";
+      return comp.replace(r, (_, M, m, p, pr) => {
+        debug("tilde", comp, _, M, m, p, pr);
+        let ret;
+        if (isX(M)) {
+          ret = "";
+        } else if (isX(m)) {
+          ret = `>=${M}.0.0${z} <${+M + 1}.0.0-0`;
+        } else if (isX(p)) {
+          ret = `>=${M}.${m}.0${z} <${M}.${+m + 1}.0-0`;
+        } else if (pr) {
+          debug("replaceTilde pr", pr);
+          ret = `>=${M}.${m}.${p}-${pr} <${M}.${+m + 1}.0-0`;
+        } else {
+          ret = `>=${M}.${m}.${p} <${M}.${+m + 1}.0-0`;
+        }
+        debug("tilde return", ret);
+        return ret;
+      });
+    };
+    var replaceCarets = (comp, options) => {
+      return comp.trim().split(/\s+/).map((c) => replaceCaret(c, options)).join(" ");
+    };
+    var replaceCaret = (comp, options) => {
+      debug("caret", comp, options);
+      const r = options.loose ? re[t.CARETLOOSE] : re[t.CARET];
+      const z = options.includePrerelease ? "-0" : "";
+      return comp.replace(r, (_, M, m, p, pr) => {
+        debug("caret", comp, _, M, m, p, pr);
+        let ret;
+        if (isX(M)) {
+          ret = "";
+        } else if (isX(m)) {
+          ret = `>=${M}.0.0${z} <${+M + 1}.0.0-0`;
+        } else if (isX(p)) {
+          if (M === "0") {
+            ret = `>=${M}.${m}.0${z} <${M}.${+m + 1}.0-0`;
+          } else {
+            ret = `>=${M}.${m}.0${z} <${+M + 1}.0.0-0`;
+          }
+        } else if (pr) {
+          debug("replaceCaret pr", pr);
+          if (M === "0") {
+            if (m === "0") {
+              ret = `>=${M}.${m}.${p}-${pr} <${M}.${m}.${+p + 1}-0`;
+            } else {
+              ret = `>=${M}.${m}.${p}-${pr} <${M}.${+m + 1}.0-0`;
+            }
+          } else {
+            ret = `>=${M}.${m}.${p}-${pr} <${+M + 1}.0.0-0`;
+          }
+        } else {
+          debug("no pr");
+          if (M === "0") {
+            if (m === "0") {
+              ret = `>=${M}.${m}.${p} <${M}.${m}.${+p + 1}-0`;
+            } else {
+              ret = `>=${M}.${m}.${p} <${M}.${+m + 1}.0-0`;
+            }
+          } else {
+            ret = `>=${M}.${m}.${p} <${+M + 1}.0.0-0`;
+          }
+        }
+        debug("caret return", ret);
+        return ret;
+      });
+    };
+    var replaceXRanges = (comp, options) => {
+      debug("replaceXRanges", comp, options);
+      return comp.split(/\s+/).map((c) => replaceXRange(c, options)).join(" ");
+    };
+    var replaceXRange = (comp, options) => {
+      comp = comp.trim();
+      const r = options.loose ? re[t.XRANGELOOSE] : re[t.XRANGE];
+      return comp.replace(r, (ret, gtlt, M, m, p, pr) => {
+        debug("xRange", comp, ret, gtlt, M, m, p, pr);
+        if (invalidXRangeOrder(M, m, p)) {
+          return comp;
+        }
+        const xM = isX(M);
+        const xm = xM || isX(m);
+        const xp = xm || isX(p);
+        const anyX = xp;
+        if (gtlt === "=" && anyX) {
+          gtlt = "";
+        }
+        pr = options.includePrerelease ? "-0" : "";
+        if (xM) {
+          if (gtlt === ">" || gtlt === "<") {
+            ret = "<0.0.0-0";
+          } else {
+            ret = "*";
+          }
+        } else if (gtlt && anyX) {
+          if (xm) {
+            m = 0;
+          }
+          p = 0;
+          if (gtlt === ">") {
+            gtlt = ">=";
+            if (xm) {
+              M = +M + 1;
+              m = 0;
+              p = 0;
+            } else {
+              m = +m + 1;
+              p = 0;
+            }
+          } else if (gtlt === "<=") {
+            gtlt = "<";
+            if (xm) {
+              M = +M + 1;
+            } else {
+              m = +m + 1;
+            }
+          }
+          if (gtlt === "<") {
+            pr = "-0";
+          }
+          ret = `${gtlt + M}.${m}.${p}${pr}`;
+        } else if (xm) {
+          ret = `>=${M}.0.0${pr} <${+M + 1}.0.0-0`;
+        } else if (xp) {
+          ret = `>=${M}.${m}.0${pr} <${M}.${+m + 1}.0-0`;
+        }
+        debug("xRange return", ret);
+        return ret;
+      });
+    };
+    var replaceStars = (comp, options) => {
+      debug("replaceStars", comp, options);
+      return comp.trim().replace(re[t.STAR], "");
+    };
+    var replaceGTE0 = (comp, options) => {
+      debug("replaceGTE0", comp, options);
+      return comp.trim().replace(re[options.includePrerelease ? t.GTE0PRE : t.GTE0], "");
+    };
+    var hyphenReplace = (incPr) => ($0, from, fM, fm, fp, fpr, fb, to, tM, tm, tp, tpr) => {
+      if (isX(fM)) {
+        from = "";
+      } else if (isX(fm)) {
+        from = `>=${fM}.0.0${incPr ? "-0" : ""}`;
+      } else if (isX(fp)) {
+        from = `>=${fM}.${fm}.0${incPr ? "-0" : ""}`;
+      } else if (fpr) {
+        from = `>=${from}`;
+      } else {
+        from = `>=${from}${incPr ? "-0" : ""}`;
+      }
+      if (isX(tM)) {
+        to = "";
+      } else if (isX(tm)) {
+        to = `<${+tM + 1}.0.0-0`;
+      } else if (isX(tp)) {
+        to = `<${tM}.${+tm + 1}.0-0`;
+      } else if (tpr) {
+        to = `<=${tM}.${tm}.${tp}-${tpr}`;
+      } else if (incPr) {
+        to = `<${tM}.${tm}.${+tp + 1}-0`;
+      } else {
+        to = `<=${to}`;
+      }
+      return `${from} ${to}`.trim();
+    };
+    var testSet = (set, version, options) => {
+      for (let i = 0;i < set.length; i++) {
+        if (!set[i].test(version)) {
+          return false;
+        }
+      }
+      if (version.prerelease.length && !options.includePrerelease) {
+        for (let i = 0;i < set.length; i++) {
+          debug(set[i].semver);
+          if (set[i].semver === Comparator.ANY) {
+            continue;
+          }
+          if (set[i].semver.prerelease.length > 0) {
+            const allowed = set[i].semver;
+            if (allowed.major === version.major && allowed.minor === version.minor && allowed.patch === version.patch) {
+              return true;
+            }
+          }
+        }
+        return false;
+      }
+      return true;
+    };
+  });
+
+  // node_modules/semver/classes/comparator.js
+  var require_comparator = __commonJS(function(exports, module) {
+    var ANY = Symbol("SemVer ANY");
+
+    class Comparator {
+      static get ANY() {
+        return ANY;
+      }
+      constructor(comp, options) {
+        options = parseOptions(options);
+        if (comp instanceof Comparator) {
+          if (comp.loose === !!options.loose) {
+            return comp;
+          } else {
+            comp = comp.value;
+          }
+        }
+        comp = comp.trim().split(/\s+/).join(" ");
+        debug("comparator", comp, options);
+        this.options = options;
+        this.loose = !!options.loose;
+        this.parse(comp);
+        if (this.semver === ANY) {
+          this.value = "";
+        } else {
+          this.value = this.operator + this.semver.version;
+        }
+        debug("comp", this);
+      }
+      parse(comp) {
+        const r = this.options.loose ? re[t.COMPARATORLOOSE] : re[t.COMPARATOR];
+        const m = comp.match(r);
+        if (!m) {
+          throw new TypeError(`Invalid comparator: ${comp}`);
+        }
+        this.operator = m[1] !== undefined ? m[1] : "";
+        if (this.operator === "=") {
+          this.operator = "";
+        }
+        if (!m[2]) {
+          this.semver = ANY;
+        } else {
+          this.semver = new SemVer(m[2], this.options.loose);
+        }
+      }
+      toString() {
+        return this.value;
+      }
+      test(version) {
+        debug("Comparator.test", version, this.options.loose);
+        if (this.semver === ANY || version === ANY) {
+          return true;
+        }
+        if (typeof version === "string") {
+          try {
+            version = new SemVer(version, this.options);
+          } catch (er) {
+            return false;
+          }
+        }
+        return cmp(version, this.operator, this.semver, this.options);
+      }
+      intersects(comp, options) {
+        if (!(comp instanceof Comparator)) {
+          throw new TypeError("a Comparator is required");
+        }
+        if (this.operator === "") {
+          if (this.value === "") {
+            return true;
+          }
+          return new Range(comp.value, options).test(this.value);
+        } else if (comp.operator === "") {
+          if (comp.value === "") {
+            return true;
+          }
+          return new Range(this.value, options).test(comp.semver);
+        }
+        options = parseOptions(options);
+        if (options.includePrerelease && (this.value === "<0.0.0-0" || comp.value === "<0.0.0-0")) {
+          return false;
+        }
+        if (!options.includePrerelease && (this.value.startsWith("<0.0.0") || comp.value.startsWith("<0.0.0"))) {
+          return false;
+        }
+        if (this.operator.startsWith(">") && comp.operator.startsWith(">")) {
+          return true;
+        }
+        if (this.operator.startsWith("<") && comp.operator.startsWith("<")) {
+          return true;
+        }
+        if (this.semver.version === comp.semver.version && this.operator.includes("=") && comp.operator.includes("=")) {
+          return true;
+        }
+        if (cmp(this.semver, "<", comp.semver, options) && this.operator.startsWith(">") && comp.operator.startsWith("<")) {
+          return true;
+        }
+        if (cmp(this.semver, ">", comp.semver, options) && this.operator.startsWith("<") && comp.operator.startsWith(">")) {
+          return true;
+        }
+        return false;
+      }
+    }
+    module.exports = Comparator;
+    var parseOptions = require_parse_options();
+    var { safeRe: re, t } = require_re();
+    var cmp = require_cmp();
+    var debug = require_debug();
+    var SemVer = require_semver();
+    var Range = require_range();
+  });
+
+  // node_modules/semver/functions/satisfies.js
+  var require_satisfies = __commonJS(function(exports, module) {
+    var Range = require_range();
+    var satisfies = (version, range, options) => {
+      try {
+        range = new Range(range, options);
+      } catch (er) {
+        return false;
+      }
+      return range.test(version);
+    };
+    module.exports = satisfies;
+  });
+
+  // node_modules/semver/ranges/to-comparators.js
+  var require_to_comparators = __commonJS(function(exports, module) {
+    var Range = require_range();
+    var toComparators = (range, options) => new Range(range, options).set.map((comp) => comp.map((c) => c.value).join(" ").trim().split(" "));
+    module.exports = toComparators;
+  });
+
+  // node_modules/semver/ranges/max-satisfying.js
+  var require_max_satisfying = __commonJS(function(exports, module) {
+    var SemVer = require_semver();
+    var Range = require_range();
+    var maxSatisfying = (versions, range, options) => {
+      let max = null;
+      let maxSV = null;
+      let rangeObj = null;
+      try {
+        rangeObj = new Range(range, options);
+      } catch (er) {
+        return null;
+      }
+      versions.forEach((v) => {
+        if (rangeObj.test(v)) {
+          if (!max || maxSV.compare(v) === -1) {
+            max = v;
+            maxSV = new SemVer(max, options);
+          }
+        }
+      });
+      return max;
+    };
+    module.exports = maxSatisfying;
+  });
+
+  // node_modules/semver/ranges/min-satisfying.js
+  var require_min_satisfying = __commonJS(function(exports, module) {
+    var SemVer = require_semver();
+    var Range = require_range();
+    var minSatisfying = (versions, range, options) => {
+      let min = null;
+      let minSV = null;
+      let rangeObj = null;
+      try {
+        rangeObj = new Range(range, options);
+      } catch (er) {
+        return null;
+      }
+      versions.forEach((v) => {
+        if (rangeObj.test(v)) {
+          if (!min || minSV.compare(v) === 1) {
+            min = v;
+            minSV = new SemVer(min, options);
+          }
+        }
+      });
+      return min;
+    };
+    module.exports = minSatisfying;
+  });
+
+  // node_modules/semver/ranges/min-version.js
+  var require_min_version = __commonJS(function(exports, module) {
+    var SemVer = require_semver();
+    var Range = require_range();
+    var gt = require_gt();
+    var minVersion = (range, loose) => {
+      range = new Range(range, loose);
+      let minver = new SemVer("0.0.0");
+      if (range.test(minver)) {
+        return minver;
+      }
+      minver = new SemVer("0.0.0-0");
+      if (range.test(minver)) {
+        return minver;
+      }
+      minver = null;
+      for (let i = 0;i < range.set.length; ++i) {
+        const comparators = range.set[i];
+        let setMin = null;
+        comparators.forEach((comparator) => {
+          const compver = new SemVer(comparator.semver.version);
+          switch (comparator.operator) {
+            case ">":
+              if (compver.prerelease.length === 0) {
+                compver.patch++;
+              } else {
+                compver.prerelease.push(0);
+              }
+              compver.raw = compver.format();
+            case "":
+            case ">=":
+              if (!setMin || gt(compver, setMin)) {
+                setMin = compver;
+              }
+              break;
+            case "<":
+            case "<=":
+              break;
+            default:
+              throw new Error(`Unexpected operation: ${comparator.operator}`);
+          }
+        });
+        if (setMin && (!minver || gt(minver, setMin))) {
+          minver = setMin;
+        }
+      }
+      if (minver && range.test(minver)) {
+        return minver;
+      }
+      return null;
+    };
+    module.exports = minVersion;
+  });
+
+  // node_modules/semver/ranges/valid.js
+  var require_valid2 = __commonJS(function(exports, module) {
+    var Range = require_range();
+    var validRange = (range, options) => {
+      try {
+        return new Range(range, options).range || "*";
+      } catch (er) {
+        return null;
+      }
+    };
+    module.exports = validRange;
+  });
+
+  // node_modules/semver/ranges/outside.js
+  var require_outside = __commonJS(function(exports, module) {
+    var SemVer = require_semver();
+    var Comparator = require_comparator();
+    var { ANY } = Comparator;
+    var Range = require_range();
+    var satisfies = require_satisfies();
+    var gt = require_gt();
+    var lt = require_lt();
+    var lte = require_lte();
+    var gte = require_gte();
+    var outside = (version, range, hilo, options) => {
+      version = new SemVer(version, options);
+      range = new Range(range, options);
+      let gtfn, ltefn, ltfn, comp, ecomp;
+      switch (hilo) {
+        case ">":
+          gtfn = gt;
+          ltefn = lte;
+          ltfn = lt;
+          comp = ">";
+          ecomp = ">=";
+          break;
+        case "<":
+          gtfn = lt;
+          ltefn = gte;
+          ltfn = gt;
+          comp = "<";
+          ecomp = "<=";
+          break;
+        default:
+          throw new TypeError('Must provide a hilo val of "<" or ">"');
+      }
+      if (satisfies(version, range, options)) {
+        return false;
+      }
+      for (let i = 0;i < range.set.length; ++i) {
+        const comparators = range.set[i];
+        let high = null;
+        let low = null;
+        comparators.forEach((comparator) => {
+          if (comparator.semver === ANY) {
+            comparator = new Comparator(">=0.0.0");
+          }
+          high = high || comparator;
+          low = low || comparator;
+          if (gtfn(comparator.semver, high.semver, options)) {
+            high = comparator;
+          } else if (ltfn(comparator.semver, low.semver, options)) {
+            low = comparator;
+          }
+        });
+        if (high.operator === comp || high.operator === ecomp) {
+          return false;
+        }
+        if ((!low.operator || low.operator === comp) && ltefn(version, low.semver)) {
+          return false;
+        } else if (low.operator === ecomp && ltfn(version, low.semver)) {
+          return false;
+        }
+      }
+      return true;
+    };
+    module.exports = outside;
+  });
+
+  // node_modules/semver/ranges/gtr.js
+  var require_gtr = __commonJS(function(exports, module) {
+    var outside = require_outside();
+    var gtr = (version, range, options) => outside(version, range, ">", options);
+    module.exports = gtr;
+  });
+
+  // node_modules/semver/ranges/ltr.js
+  var require_ltr = __commonJS(function(exports, module) {
+    var outside = require_outside();
+    var ltr = (version, range, options) => outside(version, range, "<", options);
+    module.exports = ltr;
+  });
+
+  // node_modules/semver/ranges/intersects.js
+  var require_intersects = __commonJS(function(exports, module) {
+    var Range = require_range();
+    var intersects = (r1, r2, options) => {
+      r1 = new Range(r1, options);
+      r2 = new Range(r2, options);
+      return r1.intersects(r2, options);
+    };
+    module.exports = intersects;
+  });
+
+  // node_modules/semver/ranges/simplify.js
+  var require_simplify = __commonJS(function(exports, module) {
+    var satisfies = require_satisfies();
+    var compare = require_compare();
+    module.exports = (versions, range, options) => {
+      const set = [];
+      let first = null;
+      let prev = null;
+      const v = versions.sort((a, b) => compare(a, b, options));
+      for (const version of v) {
+        const included = satisfies(version, range, options);
+        if (included) {
+          prev = version;
+          if (!first) {
+            first = version;
+          }
+        } else {
+          if (prev) {
+            set.push([first, prev]);
+          }
+          prev = null;
+          first = null;
+        }
+      }
+      if (first) {
+        set.push([first, null]);
+      }
+      const ranges = [];
+      for (const [min, max] of set) {
+        if (min === max) {
+          ranges.push(min);
+        } else if (!max && min === v[0]) {
+          ranges.push("*");
+        } else if (!max) {
+          ranges.push(`>=${min}`);
+        } else if (min === v[0]) {
+          ranges.push(`<=${max}`);
+        } else {
+          ranges.push(`${min} - ${max}`);
+        }
+      }
+      const simplified = ranges.join(" || ");
+      const original = typeof range.raw === "string" ? range.raw : String(range);
+      return simplified.length < original.length ? simplified : range;
+    };
+  });
+
+  // node_modules/semver/ranges/subset.js
+  var require_subset = __commonJS(function(exports, module) {
+    var Range = require_range();
+    var Comparator = require_comparator();
+    var { ANY } = Comparator;
+    var satisfies = require_satisfies();
+    var compare = require_compare();
+    var subset = (sub, dom, options = {}) => {
+      if (sub === dom) {
+        return true;
+      }
+      sub = new Range(sub, options);
+      dom = new Range(dom, options);
+      let sawNonNull = false;
+      OUTER:
+        for (const simpleSub of sub.set) {
+          for (const simpleDom of dom.set) {
+            const isSub = simpleSubset(simpleSub, simpleDom, options);
+            sawNonNull = sawNonNull || isSub !== null;
+            if (isSub) {
+              continue OUTER;
+            }
+          }
+          if (sawNonNull) {
+            return false;
+          }
+        }
+      return true;
+    };
+    var minimumVersionWithPreRelease = [new Comparator(">=0.0.0-0")];
+    var minimumVersion = [new Comparator(">=0.0.0")];
+    var simpleSubset = (sub, dom, options) => {
+      if (sub === dom) {
+        return true;
+      }
+      if (sub.length === 1 && sub[0].semver === ANY) {
+        if (dom.length === 1 && dom[0].semver === ANY) {
+          return true;
+        } else if (options.includePrerelease) {
+          sub = minimumVersionWithPreRelease;
+        } else {
+          sub = minimumVersion;
+        }
+      }
+      if (dom.length === 1 && dom[0].semver === ANY) {
+        if (options.includePrerelease) {
+          return true;
+        } else {
+          dom = minimumVersion;
+        }
+      }
+      const eqSet = new Set;
+      let gt, lt;
+      for (const c of sub) {
+        if (c.operator === ">" || c.operator === ">=") {
+          gt = higherGT(gt, c, options);
+        } else if (c.operator === "<" || c.operator === "<=") {
+          lt = lowerLT(lt, c, options);
+        } else {
+          eqSet.add(c.semver);
+        }
+      }
+      if (eqSet.size > 1) {
+        return null;
+      }
+      let gtltComp;
+      if (gt && lt) {
+        gtltComp = compare(gt.semver, lt.semver, options);
+        if (gtltComp > 0) {
+          return null;
+        } else if (gtltComp === 0 && (gt.operator !== ">=" || lt.operator !== "<=")) {
+          return null;
+        }
+      }
+      for (const eq of eqSet) {
+        if (gt && !satisfies(eq, String(gt), options)) {
+          return null;
+        }
+        if (lt && !satisfies(eq, String(lt), options)) {
+          return null;
+        }
+        for (const c of dom) {
+          if (!satisfies(eq, String(c), options)) {
+            return false;
+          }
+        }
+        return true;
+      }
+      let higher, lower;
+      let hasDomLT, hasDomGT;
+      let needDomLTPre = lt && !options.includePrerelease && lt.semver.prerelease.length ? lt.semver : false;
+      let needDomGTPre = gt && !options.includePrerelease && gt.semver.prerelease.length ? gt.semver : false;
+      if (needDomLTPre && needDomLTPre.prerelease.length === 1 && lt.operator === "<" && needDomLTPre.prerelease[0] === 0) {
+        needDomLTPre = false;
+      }
+      for (const c of dom) {
+        hasDomGT = hasDomGT || c.operator === ">" || c.operator === ">=";
+        hasDomLT = hasDomLT || c.operator === "<" || c.operator === "<=";
+        if (gt) {
+          if (needDomGTPre) {
+            if (c.semver.prerelease && c.semver.prerelease.length && c.semver.major === needDomGTPre.major && c.semver.minor === needDomGTPre.minor && c.semver.patch === needDomGTPre.patch) {
+              needDomGTPre = false;
+            }
+          }
+          if (c.operator === ">" || c.operator === ">=") {
+            higher = higherGT(gt, c, options);
+            if (higher === c && higher !== gt) {
+              return false;
+            }
+          } else if (gt.operator === ">=" && !c.test(gt.semver)) {
+            return false;
+          }
+        }
+        if (lt) {
+          if (needDomLTPre) {
+            if (c.semver.prerelease && c.semver.prerelease.length && c.semver.major === needDomLTPre.major && c.semver.minor === needDomLTPre.minor && c.semver.patch === needDomLTPre.patch) {
+              needDomLTPre = false;
+            }
+          }
+          if (c.operator === "<" || c.operator === "<=") {
+            lower = lowerLT(lt, c, options);
+            if (lower === c && lower !== lt) {
+              return false;
+            }
+          } else if (lt.operator === "<=" && !c.test(lt.semver)) {
+            return false;
+          }
+        }
+        if (!c.operator && (lt || gt) && gtltComp !== 0) {
+          return false;
+        }
+      }
+      if (gt && hasDomLT && !lt && gtltComp !== 0) {
+        return false;
+      }
+      if (lt && hasDomGT && !gt && gtltComp !== 0) {
+        return false;
+      }
+      if (needDomGTPre || needDomLTPre) {
+        return false;
+      }
+      return true;
+    };
+    var higherGT = (a, b, options) => {
+      if (!a) {
+        return b;
+      }
+      const comp = compare(a.semver, b.semver, options);
+      return comp > 0 ? a : comp < 0 ? b : b.operator === ">" && a.operator === ">=" ? b : a;
+    };
+    var lowerLT = (a, b, options) => {
+      if (!a) {
+        return b;
+      }
+      const comp = compare(a.semver, b.semver, options);
+      return comp < 0 ? a : comp > 0 ? b : b.operator === "<" && a.operator === "<=" ? b : a;
+    };
+    module.exports = subset;
+  });
+
+  // node_modules/semver/index.js
+  var require_semver2 = __commonJS(function(exports, module) {
+    var internalRe = require_re();
+    var constants = require_constants();
+    var SemVer = require_semver();
+    var identifiers = require_identifiers();
+    var parse = require_parse();
+    var valid = require_valid();
+    var clean = require_clean();
+    var inc = require_inc();
+    var diff = require_diff();
+    var major = require_major();
+    var minor = require_minor();
+    var patch = require_patch();
+    var prerelease = require_prerelease();
+    var compare = require_compare();
+    var rcompare = require_rcompare();
+    var compareLoose = require_compare_loose();
+    var compareBuild = require_compare_build();
+    var sort = require_sort();
+    var rsort = require_rsort();
+    var gt = require_gt();
+    var lt = require_lt();
+    var eq = require_eq();
+    var neq = require_neq();
+    var gte = require_gte();
+    var lte = require_lte();
+    var cmp = require_cmp();
+    var coerce = require_coerce();
+    var truncate = require_truncate();
+    var Comparator = require_comparator();
+    var Range = require_range();
+    var satisfies = require_satisfies();
+    var toComparators = require_to_comparators();
+    var maxSatisfying = require_max_satisfying();
+    var minSatisfying = require_min_satisfying();
+    var minVersion = require_min_version();
+    var validRange = require_valid2();
+    var outside = require_outside();
+    var gtr = require_gtr();
+    var ltr = require_ltr();
+    var intersects = require_intersects();
+    var simplifyRange = require_simplify();
+    var subset = require_subset();
+    module.exports = {
+      parse,
+      valid,
+      clean,
+      inc,
+      diff,
+      major,
+      minor,
+      patch,
+      prerelease,
+      compare,
+      rcompare,
+      compareLoose,
+      compareBuild,
+      sort,
+      rsort,
+      gt,
+      lt,
+      eq,
+      neq,
+      gte,
+      lte,
+      cmp,
+      coerce,
+      truncate,
+      Comparator,
+      Range,
+      satisfies,
+      toComparators,
+      maxSatisfying,
+      minSatisfying,
+      minVersion,
+      validRange,
+      outside,
+      gtr,
+      ltr,
+      intersects,
+      simplifyRange,
+      subset,
+      SemVer,
+      re: internalRe.re,
+      src: internalRe.src,
+      tokens: internalRe.t,
+      SEMVER_SPEC_VERSION: constants.SEMVER_SPEC_VERSION,
+      RELEASE_TYPES: constants.RELEASE_TYPES,
+      compareIdentifiers: identifiers.compareIdentifiers,
+      rcompareIdentifiers: identifiers.rcompareIdentifiers
+    };
+  });
+
+  // node_modules/@noble/hashes/utils.js
+  /*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
+  function isBytes(a) {
+    return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
+  }
+  function abytes(value, length, title = "") {
+    const bytes = isBytes(value);
+    const len = value?.length;
+    const needsLen = length !== undefined;
+    if (!bytes || needsLen && len !== length) {
+      const prefix = title && `"${title}" `;
+      const ofLen = needsLen ? ` of length ${length}` : "";
+      const got = bytes ? `length=${len}` : `type=${typeof value}`;
+      throw new Error(prefix + "expected Uint8Array" + ofLen + ", got " + got);
+    }
+    return value;
+  }
+  function aexists(instance, checkFinished = true) {
+    if (instance.destroyed)
+      throw new Error("Hash instance has been destroyed");
+    if (checkFinished && instance.finished)
+      throw new Error("Hash#digest() has already been called");
+  }
+  function aoutput(out, instance) {
+    abytes(out, undefined, "digestInto() output");
+    const min = instance.outputLen;
+    if (out.length < min) {
+      throw new Error('"digestInto() output" expected to be of length >=' + min);
+    }
+  }
+  function clean(...arrays) {
+    for (let i = 0;i < arrays.length; i++) {
+      arrays[i].fill(0);
+    }
+  }
+  function createView(arr) {
+    return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
+  }
+  function rotr(word, shift) {
+    return word << 32 - shift | word >>> shift;
+  }
+  function createHasher(hashCons, info = {}) {
+    const hashC = (msg, opts) => hashCons(opts).update(msg).digest();
+    const tmp = hashCons(undefined);
+    hashC.outputLen = tmp.outputLen;
+    hashC.blockLen = tmp.blockLen;
+    hashC.create = (opts) => hashCons(opts);
+    Object.assign(hashC, info);
+    return Object.freeze(hashC);
+  }
+  var oidNist = (suffix) => ({
+    oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
+  });
+
+  // node_modules/@noble/hashes/_md.js
+  function Chi(a, b, c) {
+    return a & b ^ ~a & c;
+  }
+  function Maj(a, b, c) {
+    return a & b ^ a & c ^ b & c;
+  }
+
+  class HashMD {
+    blockLen;
+    outputLen;
+    padOffset;
+    isLE;
+    buffer;
+    view;
+    finished = false;
+    length = 0;
+    pos = 0;
+    destroyed = false;
+    constructor(blockLen, outputLen, padOffset, isLE) {
+      this.blockLen = blockLen;
+      this.outputLen = outputLen;
+      this.padOffset = padOffset;
+      this.isLE = isLE;
+      this.buffer = new Uint8Array(blockLen);
+      this.view = createView(this.buffer);
+    }
+    update(data) {
+      aexists(this);
+      abytes(data);
+      const { view, buffer, blockLen } = this;
+      const len = data.length;
+      for (let pos = 0;pos < len; ) {
+        const take = Math.min(blockLen - this.pos, len - pos);
+        if (take === blockLen) {
+          const dataView = createView(data);
+          for (;blockLen <= len - pos; pos += blockLen)
+            this.process(dataView, pos);
+          continue;
+        }
+        buffer.set(data.subarray(pos, pos + take), this.pos);
+        this.pos += take;
+        pos += take;
+        if (this.pos === blockLen) {
+          this.process(view, 0);
+          this.pos = 0;
+        }
+      }
+      this.length += data.length;
+      this.roundClean();
+      return this;
+    }
+    digestInto(out) {
+      aexists(this);
+      aoutput(out, this);
+      this.finished = true;
+      const { buffer, view, blockLen, isLE } = this;
+      let { pos } = this;
+      buffer[pos++] = 128;
+      clean(this.buffer.subarray(pos));
+      if (this.padOffset > blockLen - pos) {
+        this.process(view, 0);
+        pos = 0;
+      }
+      for (let i = pos;i < blockLen; i++)
+        buffer[i] = 0;
+      view.setBigUint64(blockLen - 8, BigInt(this.length * 8), isLE);
+      this.process(view, 0);
+      const oview = createView(out);
+      const len = this.outputLen;
+      if (len % 4)
+        throw new Error("_sha2: outputLen must be aligned to 32bit");
+      const outLen = len / 4;
+      const state = this.get();
+      if (outLen > state.length)
+        throw new Error("_sha2: outputLen bigger than state");
+      for (let i = 0;i < outLen; i++)
+        oview.setUint32(4 * i, state[i], isLE);
+    }
+    digest() {
+      const { buffer, outputLen } = this;
+      this.digestInto(buffer);
+      const res = buffer.slice(0, outputLen);
+      this.destroy();
+      return res;
+    }
+    _cloneInto(to) {
+      to ||= new this.constructor;
+      to.set(...this.get());
+      const { blockLen, buffer, length, finished, destroyed, pos } = this;
+      to.destroyed = destroyed;
+      to.finished = finished;
+      to.length = length;
+      to.pos = pos;
+      if (length % blockLen)
+        to.buffer.set(buffer);
+      return to;
+    }
+    clone() {
+      return this._cloneInto();
+    }
+  }
+  var SHA256_IV = /* @__PURE__ */ Uint32Array.from([
+    1779033703,
+    3144134277,
+    1013904242,
+    2773480762,
+    1359893119,
+    2600822924,
+    528734635,
+    1541459225
+  ]);
+
+  // node_modules/@noble/hashes/sha2.js
+  var SHA256_K = /* @__PURE__ */ Uint32Array.from([
+    1116352408,
+    1899447441,
+    3049323471,
+    3921009573,
+    961987163,
+    1508970993,
+    2453635748,
+    2870763221,
+    3624381080,
+    310598401,
+    607225278,
+    1426881987,
+    1925078388,
+    2162078206,
+    2614888103,
+    3248222580,
+    3835390401,
+    4022224774,
+    264347078,
+    604807628,
+    770255983,
+    1249150122,
+    1555081692,
+    1996064986,
+    2554220882,
+    2821834349,
+    2952996808,
+    3210313671,
+    3336571891,
+    3584528711,
+    113926993,
+    338241895,
+    666307205,
+    773529912,
+    1294757372,
+    1396182291,
+    1695183700,
+    1986661051,
+    2177026350,
+    2456956037,
+    2730485921,
+    2820302411,
+    3259730800,
+    3345764771,
+    3516065817,
+    3600352804,
+    4094571909,
+    275423344,
+    430227734,
+    506948616,
+    659060556,
+    883997877,
+    958139571,
+    1322822218,
+    1537002063,
+    1747873779,
+    1955562222,
+    2024104815,
+    2227730452,
+    2361852424,
+    2428436474,
+    2756734187,
+    3204031479,
+    3329325298
+  ]);
+  var SHA256_W = /* @__PURE__ */ new Uint32Array(64);
+
+  class SHA2_32B extends HashMD {
+    constructor(outputLen) {
+      super(64, outputLen, 8, false);
+    }
+    get() {
+      const { A, B, C, D, E, F, G, H } = this;
+      return [A, B, C, D, E, F, G, H];
+    }
+    set(A, B, C, D, E, F, G, H) {
+      this.A = A | 0;
+      this.B = B | 0;
+      this.C = C | 0;
+      this.D = D | 0;
+      this.E = E | 0;
+      this.F = F | 0;
+      this.G = G | 0;
+      this.H = H | 0;
+    }
+    process(view, offset) {
+      for (let i = 0;i < 16; i++, offset += 4)
+        SHA256_W[i] = view.getUint32(offset, false);
+      for (let i = 16;i < 64; i++) {
+        const W15 = SHA256_W[i - 15];
+        const W2 = SHA256_W[i - 2];
+        const s0 = rotr(W15, 7) ^ rotr(W15, 18) ^ W15 >>> 3;
+        const s1 = rotr(W2, 17) ^ rotr(W2, 19) ^ W2 >>> 10;
+        SHA256_W[i] = s1 + SHA256_W[i - 7] + s0 + SHA256_W[i - 16] | 0;
+      }
+      let { A, B, C, D, E, F, G, H } = this;
+      for (let i = 0;i < 64; i++) {
+        const sigma1 = rotr(E, 6) ^ rotr(E, 11) ^ rotr(E, 25);
+        const T1 = H + sigma1 + Chi(E, F, G) + SHA256_K[i] + SHA256_W[i] | 0;
+        const sigma0 = rotr(A, 2) ^ rotr(A, 13) ^ rotr(A, 22);
+        const T2 = sigma0 + Maj(A, B, C) | 0;
+        H = G;
+        G = F;
+        F = E;
+        E = D + T1 | 0;
+        D = C;
+        C = B;
+        B = A;
+        A = T1 + T2 | 0;
+      }
+      A = A + this.A | 0;
+      B = B + this.B | 0;
+      C = C + this.C | 0;
+      D = D + this.D | 0;
+      E = E + this.E | 0;
+      F = F + this.F | 0;
+      G = G + this.G | 0;
+      H = H + this.H | 0;
+      this.set(A, B, C, D, E, F, G, H);
+    }
+    roundClean() {
+      clean(SHA256_W);
+    }
+    destroy() {
+      this.set(0, 0, 0, 0, 0, 0, 0, 0);
+      clean(this.buffer);
+    }
+  }
+
+  class _SHA256 extends SHA2_32B {
+    A = SHA256_IV[0] | 0;
+    B = SHA256_IV[1] | 0;
+    C = SHA256_IV[2] | 0;
+    D = SHA256_IV[3] | 0;
+    E = SHA256_IV[4] | 0;
+    F = SHA256_IV[5] | 0;
+    G = SHA256_IV[6] | 0;
+    H = SHA256_IV[7] | 0;
+    constructor() {
+      super(32);
+    }
+  }
+  var sha256 = /* @__PURE__ */ createHasher(() => new _SHA256, /* @__PURE__ */ oidNist(1));
+
+  // src/platform-crypto.ts
+  function randomUuid(source = crypto) {
+    const bytes = source.getRandomValues(new Uint8Array(16));
+    bytes[6] = bytes[6] & 15 | 64;
+    bytes[8] = bytes[8] & 63 | 128;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  async function sha2562(bytes) {
+    return Array.from(sha256(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
   // src/core/errors.ts
   var errorCodes = [
     "VIEWER_LIMIT_EXCEEDED",
@@ -70,12 +2273,13 @@
         "databasePersisted",
         "businessResult",
         "retryable",
-        "operationId"
+        "operationId",
+        "disabledReason"
       ]) {
         const item = value(key);
         if (item === undefined)
           continue;
-        const valid = key === "failureKind" ? ["request-rejected", "sql-rejected", "precondition-rejected", "service"].includes(item) : key === "executionState" ? ["not-started", "rolled-back", "committed", "unknown"].includes(item) : key === "resultState" ? ["not-applied", "unconfirmed"].includes(item) : key === "resultKind" ? ["database", "identity"].includes(item) : key === "identityStage" ? ["save", "register", "sync"].includes(item) : key === "renameStage" || key === "deleteStage" ? ["pending", "applied", "unconfirmed", "conflict"].includes(item) : key === "identitySaved" || key === "databasePersisted" ? item === true : key === "databaseScope" ? ["char", "chat"].includes(item) : key === "initializationStage" ? ["root-prepare", "target-save", "root-finalize"].includes(item) : key === "businessResult" ? ["not-started", "not-saved", "saved", "unknown"].includes(item) : key === "retryable" ? typeof item === "boolean" : typeof item === "string";
+        const valid = key === "failureKind" ? ["request-rejected", "sql-rejected", "precondition-rejected", "service"].includes(item) : key === "executionState" ? ["not-started", "rolled-back", "committed", "unknown"].includes(item) : key === "resultState" ? ["not-applied", "unconfirmed"].includes(item) : key === "resultKind" ? ["database", "identity"].includes(item) : key === "identityStage" ? ["save", "register", "sync"].includes(item) : key === "renameStage" || key === "deleteStage" ? ["pending", "applied", "unconfirmed", "conflict"].includes(item) : key === "identitySaved" || key === "databasePersisted" ? item === true : key === "databaseScope" ? ["char", "chat"].includes(item) : key === "initializationStage" ? ["root-prepare", "target-save", "root-finalize"].includes(item) : key === "businessResult" ? ["not-started", "not-saved", "saved", "unknown"].includes(item) : key === "retryable" ? typeof item === "boolean" : key === "disabledReason" ? item === "not-configured" : typeof item === "string";
         if (!valid)
           return;
         Object.assign(result, { [key]: item });
@@ -178,14 +2382,15 @@
   }
 
   // src/protocol.ts
-  var PROTOCOL_VERSION = 23;
-  var BUILD_ID = "ed0dbf74-fe72-4506-bf12-a7d9f958b227";
+  var PROTOCOL_VERSION = 27;
+  var BUILD_ID = "26e9d06c-2b03-4ec1-9e35-6fda46d32a25";
   var extensionEntryPath = undefined;
   var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
   var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;
   var EXTENSION_PATH = `/scripts/extensions/${EXTENSION_TEMPLATE_PATH}/`;
   var WORKER_URL = `${EXTENSION_PATH}sqlite-worker.js`;
   var DEDICATED_WORKER_URL = `${EXTENSION_PATH}sqlite-dedicated-worker.js`;
+  var EXECUTION_PROBE_URL = `${EXTENSION_PATH}sqlite-probe.js`;
   var isUuid = (value) => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
   var bindingKey = (b) => JSON.stringify([b.storageId, b.configGeneration, b.scope ?? "global", b.charDbId ?? null, b.chatDbId ?? null]);
   var identityBindingKey = (b) => JSON.stringify([
@@ -252,9 +2457,7 @@
         const key = chatKey(entity), old = reference(await records.get(key));
         if (old?.id && old.id !== id)
           fail("IDENTITY_CONFLICT", "该文件已确认或提议另一 UUID，不能另建身份。");
-        if (old?.id === id)
-          return;
-        const next = {
+        const next = old?.id === id ? old : {
           id,
           generation: (old?.generation ?? 0) + 1,
           confirmed: false,
@@ -262,7 +2465,7 @@
           ...old?.referenceId ? { referenceId: old.referenceId } : {},
           parent: binding.charDbId
         };
-        await records.put(key, next, old ?? null);
+        await records.putChatProposal({ ...binding, scope: "chat", chatDbId: id }, entity, next, old ?? null);
       }));
     }
     prepareRole(binding, entity, ensureTarget, create = true) {
@@ -284,7 +2487,7 @@
             });
           if (!create)
             return;
-          const id = crypto.randomUUID();
+          const id = randomUuid();
           this.checkTarget(binding, id, false);
           const next = {
             id,
@@ -697,9 +2900,9 @@
           return structuredClone(existing);
         const info = await records.referenceInfo(oldEntity, kind === "chat");
         if (!info && await records.referenceInfo(newEntity, kind === "chat"))
-          return { taskId: crypto.randomUUID(), kind, oldEntity, newEntity, stage: "applied" };
+          return { taskId: randomUuid(), kind, oldEntity, newEntity, stage: "applied" };
         const ticket = {
-          taskId: crypto.randomUUID(),
+          taskId: randomUuid(),
           kind,
           oldEntity,
           newEntity,
@@ -1563,12 +3766,16 @@
     transient = false;
     initializationCommitted = false;
     dirty = false;
+    unsaved = false;
     saveTimer;
     saveTask;
     savesSealed = false;
     firstSaveHooks;
     fileBaseline;
+    loadFailure;
+    backgroundFailure;
     tail = Promise.resolve();
+    onUnsavedChanged;
     constructor(SQL, storage, onBackgroundSaveFailed, saveDebounceMs = 1000) {
       this.SQL = SQL;
       this.storage = storage;
@@ -1578,8 +3785,20 @@
     get availability() {
       return this.state;
     }
+    get loadFailureStage() {
+      return this.loadFailure;
+    }
     get hasPendingFirstCommit() {
       return this.transient && this.initializationCommitted;
+    }
+    get unsavedChanges() {
+      return this.unsaved;
+    }
+    markUnsaved(value) {
+      if (this.unsaved === value)
+        return;
+      this.unsaved = value;
+      this.onUnsavedChanged?.();
     }
     sealBackgroundSaves() {
       this.savesSealed = true;
@@ -1597,6 +3816,73 @@
     drain() {
       return this.enqueue(async () => {});
     }
+    async waitForMaintenanceSave(timeoutMs = 1e4) {
+      const deadline = Date.now() + timeoutMs;
+      const timeout = () => new ServiceError({
+        code: "RESULT_UNCONFIRMED",
+        resultState: "not-applied",
+        retryable: false,
+        message: "数据仍在保存，本次修复没有开始；请等待保存完成后重新扫描。"
+      });
+      for (;; ) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0)
+          throw timeout();
+        let timer;
+        try {
+          await Promise.race([
+            this.tail,
+            new Promise((_, reject) => {
+              timer = setTimeout(() => reject(timeout()), remaining);
+            })
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+        if (this.backgroundFailure && !this.saveTask && (this.dirty || this.state !== "ready"))
+          throw new ServiceError({
+            ...this.backgroundFailure,
+            code: "RESULT_UNCONFIRMED",
+            resultState: "not-applied",
+            retryable: false,
+            message: `已有修改未能保存，本次修复没有开始；${this.state === "ready" ? "内存数据仍可读取，请先处理保存问题。" : "请先处理保存问题并确认文件内容。"}`
+          });
+        if (this.state !== "ready")
+          return;
+        if (this.transient && !this.initializationCommitted)
+          return;
+        if (!this.dirty)
+          break;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(20, remaining)));
+      }
+      const readback = this.enqueue(async () => {
+        if (this.state !== "ready")
+          return;
+        if (this.dirty)
+          throw timeout();
+        const saved = await this.storage.read();
+        const expected = this.ready().export();
+        this.configure(this.ready());
+        if (!saved || saved.length !== expected.length || saved.some((value, index) => value !== expected[index]))
+          throw new ServiceError({
+            code: "RESULT_UNCONFIRMED",
+            resultState: "not-applied",
+            retryable: false,
+            message: "保存后的文件与当前数据不一致，本次修复没有开始；请重新扫描。"
+          });
+      });
+      let timer;
+      try {
+        await Promise.race([
+          readback,
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(timeout()), Math.max(0, deadline - Date.now()));
+          })
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
     close() {
       this.sealBackgroundSaves();
       return this.enqueue(async () => {
@@ -1609,6 +3895,7 @@
       this.db = undefined;
       this.state = "disabled";
       this.dirty = false;
+      this.unsaved = false;
       this.firstSaveHooks = undefined;
       db?.close();
     }
@@ -1627,11 +3914,13 @@
       this.dirty = false;
       this.firstSaveHooks = undefined;
       this.fileBaseline = undefined;
+      this.backgroundFailure = undefined;
       const db = this.db;
       this.db = undefined;
       try {
         db?.close();
       } catch {}
+      this.markUnsaved(false);
     }
     ready() {
       if (this.state !== "ready" || !this.db)
@@ -1675,6 +3964,7 @@
         }, "write", "unknown");
       }
       this.transient = false;
+      this.markUnsaved(false);
       try {
         this.fileBaseline = await this.storage.metadata?.();
       } catch (error) {
@@ -1715,12 +4005,14 @@
             await this.firstSaveHooks?.afterSave?.();
             this.firstSaveHooks = undefined;
             this.dirty = false;
+            this.backgroundFailure = undefined;
           } catch (error) {
             if (error instanceof PersistenceFailure) {
               stage = error.stage;
               fileState = error.fileState;
             }
             const data = errorData(error), memoryAvailable = this.availability === "ready";
+            this.backgroundFailure = data;
             const failure = {
               stage,
               fileState,
@@ -1791,6 +4083,8 @@
     }
     async load(mode = "existing") {
       this.disable();
+      this.loadFailure = undefined;
+      let phase = "read";
       try {
         const snapshot = this.storage.readSnapshot ? await this.storage.readSnapshot() : { bytes: await this.storage.read() };
         const bytes = snapshot.bytes;
@@ -1798,6 +4092,7 @@
           throw new Error("已有数据库文件缺失，不能自动重建或确认原操作结果。");
         if (mode === "transient" && bytes !== null)
           throw new Error("首次初始化位置已有文件，拒绝覆盖。");
+        phase = "database";
         if (bytes && bytes.length === 0)
           throw new Error("已有数据库文件为空。");
         this.db = new this.SQL.Database(bytes);
@@ -1810,11 +4105,14 @@
             await this.persist(this.db, true, true);
           else
             this.transient = true;
-        } else
+        } else {
+          phase = "read";
           this.fileBaseline = snapshot.metadata ?? await this.storage.metadata?.();
+        }
         this.state = "ready";
         this.savesSealed = false;
       } catch (error) {
+        this.loadFailure = phase;
         this.disable();
         if (error instanceof ServiceError)
           throw error;
@@ -1849,6 +4147,38 @@
           retryable: fileRetryable(error)
         });
       }
+    }
+    replaceForMaintenance(commands, create = false) {
+      const snapshot = structuredClone(commands);
+      return this.enqueue(async () => {
+        if (this.dirty || this.saveTask || this.hasPendingFirstCommit)
+          throw new ServiceError({
+            code: "RESULT_UNCONFIRMED",
+            resultState: "not-applied",
+            message: "仍有尚未保存的数据，本次重置没有开始。"
+          });
+        const replacement = new this.SQL.Database;
+        wrapSQLiteErrors(replacement);
+        this.configure(replacement);
+        try {
+          replacement.run("BEGIN");
+          for (const command of snapshot)
+            this.executeCommand(replacement, command);
+          replacement.run("COMMIT");
+          this.disable();
+          this.db = replacement;
+          this.state = "ready";
+          await this.persist(replacement, create, true);
+          this.savesSealed = false;
+          this.loadFailure = undefined;
+        } catch (error) {
+          if (this.db === replacement)
+            this.disable();
+          else
+            replacement.close();
+          throw error;
+        }
+      });
     }
     assertFileExisting() {
       return this.enqueue(() => this.checkFile());
@@ -2018,6 +4348,7 @@
           }
           return { persisted: true };
         }
+        this.markUnsaved(true);
         this.scheduleSave();
         try {
           onComplete();
@@ -2209,7 +4540,226 @@
     }
   }
 
+  // src/storage-database.ts
+  var connection;
+  function openStorageDatabase() {
+    return connection ??= new Promise((resolve, reject) => {
+      const request = indexedDB.open("st-sqlite-helper-storage", 2);
+      let rejected = false;
+      const fail = (error) => {
+        rejected = true;
+        reject(new ServiceError({
+          code: "CONFIG_FAILED",
+          message: "无法打开本地存储设置，请查看详情。",
+          causeError: detail(error)
+        }));
+      };
+      request.onupgradeneeded = () => {
+        for (const name of ["configuration", "files"])
+          if (!request.result.objectStoreNames.contains(name))
+            request.result.createObjectStore(name);
+      };
+      request.onerror = () => fail(request.error);
+      request.onblocked = () => fail("本地存储升级被旧页面阻塞，请关闭其他旧页面后刷新。");
+      request.onsuccess = () => {
+        const db = request.result;
+        if (rejected) {
+          db.close();
+          return;
+        }
+        db.onversionchange = () => {
+          db.close();
+          connection = undefined;
+        };
+        resolve(db);
+      };
+    }).catch((error) => {
+      connection = undefined;
+      throw error;
+    });
+  }
+
   // src/worker/storage.ts
+  var PROBE_FILE_PREFIX = "__st_sqlite_helper_probe__/";
+  var indexedDbSource = (source) => ("mode" in source) && source.mode === "indexeddb";
+  function storageDirectory(source) {
+    if ("storageId" in source) {
+      if (source.mode === "indexeddb")
+        throw new Error("IndexedDB 存储没有目录句柄。");
+      return source.directory;
+    }
+    return source;
+  }
+  var storageName = (source) => indexedDbSource(source) ? "IndexedDB" : storageDirectory(source).name;
+  async function filesTransaction(mode, operation) {
+    const db = await openStorageDatabase();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("files", mode);
+      let value;
+      tx.oncomplete = () => resolve(value);
+      tx.onabort = () => reject(tx.error ?? new Error("IndexedDB 文件事务失败。"));
+      operation(tx.objectStore("files"), (result) => {
+        value = result;
+      });
+    });
+  }
+  function indexedDbFileKeys() {
+    return filesTransaction("readonly", (store, result) => {
+      const keys = [];
+      const request = store.openKeyCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor)
+          return result(keys);
+        if (typeof cursor.key === "string" && !cursor.key.startsWith(PROBE_FILE_PREFIX))
+          keys.push(cursor.key);
+        cursor.continue();
+      };
+    });
+  }
+  async function indexedDbRecord(path) {
+    const entry = await filesTransaction("readonly", (store, result) => {
+      const request = store.openCursor(path);
+      request.onsuccess = () => result(request.result ? { value: request.result.value } : undefined);
+    });
+    if (entry === undefined)
+      return;
+    const value = entry.value;
+    if (value === null || typeof value !== "object" || !("bytes" in value) || !(value.bytes instanceof Uint8Array) || !("lastModified" in value) || typeof value.lastModified !== "number" || !Number.isFinite(value.lastModified))
+      throw new Error("IndexedDB 数据库文件记录格式无效，原文件未被替换。");
+    return { bytes: value.bytes, lastModified: value.lastModified };
+  }
+  async function writeIndexedDbFile(path, bytes, create) {
+    const record = { bytes: bytes.slice(), lastModified: Date.now() };
+    if (create)
+      return filesTransaction("readwrite", (store) => {
+        store.put(record, path);
+      });
+    let missing = false;
+    await filesTransaction("readwrite", (store) => {
+      const request = store.getKey(path);
+      request.onsuccess = () => {
+        if (request.result === undefined)
+          missing = true;
+        else
+          store.put(record, path);
+      };
+    });
+    if (missing)
+      throw new DOMException("数据库文件不存在。", "NotFoundError");
+  }
+  function deleteIndexedDbFile(path) {
+    return filesTransaction("readwrite", (store) => {
+      store.delete(path);
+    });
+  }
+  async function readStorageFile(source, path) {
+    if (indexedDbSource(source)) {
+      const record = await indexedDbRecord(path);
+      if (record === undefined)
+        throw new DOMException("数据库文件不存在。", "NotFoundError");
+      return { relativePath: path, size: record.bytes.length, lastModified: record.lastModified, bytes: record.bytes };
+    }
+    let parent = storageDirectory(source);
+    const parts = path.split("/");
+    for (const part of parts.slice(0, -1))
+      parent = await parent.getDirectoryHandle(part, { create: false });
+    const file = await (await parent.getFileHandle(parts.at(-1), { create: false })).getFile();
+    return {
+      relativePath: path,
+      size: file.size,
+      lastModified: file.lastModified,
+      bytes: new Uint8Array(await file.arrayBuffer())
+    };
+  }
+  async function storageEntryExists(source, path, kind) {
+    if (indexedDbSource(source)) {
+      if (kind === "directory")
+        return (await indexedDbFileKeys()).some((key) => key.startsWith(`${path}/`));
+      return filesTransaction("readonly", (store, result) => {
+        const request = store.getKey(path);
+        request.onsuccess = () => result(request.result !== undefined);
+      });
+    }
+    try {
+      let directory = storageDirectory(source);
+      const parts = path.split("/");
+      if (kind === "directory") {
+        for (const part of parts)
+          directory = await directory.getDirectoryHandle(part, { create: false });
+        for await (const _entry of directory.entries())
+          return true;
+        return false;
+      }
+      for (const part of parts.slice(0, -1))
+        directory = await directory.getDirectoryHandle(part, { create: false });
+      await (await directory.getFileHandle(parts.at(-1), { create: false })).getFile();
+      return true;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "NotFoundError")
+        return false;
+      throw error;
+    }
+  }
+
+  class IndexedDbStorage {
+    charDbId;
+    chatDbId;
+    path;
+    constructor(charDbId, chatDbId) {
+      this.charDbId = charDbId;
+      this.chatDbId = chatDbId;
+      this.path = databasePath(charDbId, chatDbId);
+    }
+    async readSnapshot() {
+      const record = await indexedDbRecord(this.path);
+      if (record === undefined)
+        return { bytes: null };
+      return {
+        bytes: record.bytes,
+        metadata: {
+          directoryName: "IndexedDB",
+          name: this.path.split("/").at(-1),
+          size: record.bytes.length,
+          lastModified: record.lastModified,
+          relativePath: this.path
+        }
+      };
+    }
+    async read() {
+      return (await this.readSnapshot()).bytes;
+    }
+    async metadata() {
+      const file = await this.readSnapshot();
+      if (!file.metadata)
+        throw new DOMException("数据库文件不存在。", "NotFoundError");
+      return file.metadata;
+    }
+    async assertExisting() {
+      if (!(await this.metadata()).size)
+        throw new Error("已有数据库文件为空。");
+    }
+    write(bytes, options = {}) {
+      return writeIndexedDbFile(this.path, bytes, options.create === true);
+    }
+    async remove() {
+      if (!isUuid(this.charDbId) || this.chatDbId !== undefined && !isUuid(this.chatDbId))
+        throw new ServiceError({
+          code: "INVALID_REQUEST",
+          message: "文件清理必须指定有效的角色或聊天 UUID，不能删除 root。"
+        });
+      await deleteIndexedDbFile(this.path);
+      if (await storageEntryExists({ storageId: "", mode: "indexeddb" }, this.path, "file"))
+        throw new ServiceError({
+          code: "RESULT_UNCONFIRMED",
+          resultState: "unconfirmed",
+          message: "文件删除后仍存在，清理结果尚未确认。"
+        });
+    }
+  }
+  function createStorage(source, charDbId, chatDbId, opfs = false) {
+    return indexedDbSource(source) ? new IndexedDbStorage(charDbId, chatDbId) : new DirectoryStorage(storageDirectory(source), charDbId, chatDbId, opfs || "mode" in source && source.mode === "opfs");
+  }
   async function directoryPermission(directory) {
     if (!("queryPermission" in directory))
       return "granted";
@@ -2355,7 +4905,23 @@
     }
   }
   var domError = (error, name) => error instanceof DOMException && error.name === name;
-  async function removeStorageEntry(directory, segments, kind) {
+  async function removeStorageEntry(source, segments, kind) {
+    if (indexedDbSource(source)) {
+      const path = segments.join("/");
+      if (kind === "directory")
+        return await storageEntryExists(source, path, kind) ? "not-empty" : "missing";
+      if (!await storageEntryExists(source, path, kind))
+        return "missing";
+      await deleteIndexedDbFile(path);
+      if (await storageEntryExists(source, path, kind))
+        throw new ServiceError({
+          code: "RESULT_UNCONFIRMED",
+          resultState: "unconfirmed",
+          message: "条目删除后仍存在，删除结果尚未确认。"
+        });
+      return "removed";
+    }
+    const directory = storageDirectory(source);
     let parent = directory;
     try {
       for (const segment of segments.slice(0, -1))
@@ -2401,7 +4967,8 @@
   // src/worker/configuration-repository.ts
   function validateConfiguration(value) {
     const handle = (h) => h?.kind === "directory" && typeof h.getFileHandle === "function" && typeof h.isSameEntry === "function";
-    if (!value || !handle(value.directory) || typeof value.storageId !== "string" || !value.storageId || !Number.isSafeInteger(value.configGeneration) || value.configGeneration < 1 || !Array.isArray(value.spaces) || value.spaces.length === 0 || value.mode !== undefined && !["opfs", "directory"].includes(value.mode) || value.autoReloadEnabled !== undefined && typeof value.autoReloadEnabled !== "boolean" || value.spaces.some((s) => !s || typeof s.storageId !== "string" || !s.storageId || !handle(s.directory) || s.mode !== undefined && !["opfs", "directory"].includes(s.mode)) || value.savedDirectory !== undefined && (!handle(value.savedDirectory.directory) || (value.savedDirectory.mode ?? "directory") !== "directory" || !value.spaces.some((s) => s.storageId === value.savedDirectory.storageId && (s.mode ?? "directory") === "directory")) || new Set(value.spaces.map((s) => s.storageId)).size !== value.spaces.length || !value.spaces.some((s) => s.storageId === value.storageId)) {
+    const space = (s) => !!s && typeof s.storageId === "string" && !!s.storageId && (s.mode === "indexeddb" ? s.directory === undefined : (s.mode === undefined || s.mode === "opfs" || s.mode === "directory") && handle(s.directory));
+    if (!value || !space(value) || typeof value.storageId !== "string" || !value.storageId || !Number.isSafeInteger(value.configGeneration) || value.configGeneration < 1 || !Array.isArray(value.spaces) || value.spaces.length === 0 || value.mode !== undefined && !["opfs", "directory", "indexeddb"].includes(value.mode) || value.autoReloadEnabled !== undefined && typeof value.autoReloadEnabled !== "boolean" || value.spaces.some((s) => !space(s)) || value.savedDirectory !== undefined && (!handle(value.savedDirectory.directory) || (value.savedDirectory.mode ?? "directory") !== "directory" || !value.spaces.some((s) => s.storageId === value.savedDirectory.storageId && (s.mode ?? "directory") === "directory")) || new Set(value.spaces.map((s) => s.storageId)).size !== value.spaces.length || !value.spaces.some((s) => s.storageId === value.storageId)) {
       throw new ServiceError({ code: "CONFIG_FAILED", message: "已保存目录配置无效，拒绝静默替换存储身份。" });
     }
   }
@@ -2412,43 +4979,9 @@
   });
 
   class IndexedDbConfiguration {
-    connection;
-    open() {
-      if (!this.connection)
-        this.connection = new Promise((resolve, reject) => {
-          const request = indexedDB.open("st-sqlite-helper-storage", 1);
-          let rejected = false;
-          request.onupgradeneeded = () => {
-            request.result.createObjectStore("configuration");
-          };
-          request.onerror = () => {
-            rejected = true;
-            reject(failed(request.error));
-          };
-          request.onblocked = () => {
-            rejected = true;
-            reject(failed("IndexedDB 升级被阻塞。"));
-          };
-          request.onsuccess = () => {
-            if (rejected) {
-              request.result.close();
-              return;
-            }
-            request.result.onversionchange = () => {
-              request.result.close();
-              this.connection = undefined;
-            };
-            resolve(request.result);
-          };
-        }).catch((error) => {
-          this.connection = undefined;
-          throw error;
-        });
-      return this.connection;
-    }
     async read() {
       try {
-        const db = await this.open();
+        const db = await openStorageDatabase();
         return await new Promise((resolve, reject) => {
           const transaction = db.transaction("configuration", "readonly");
           const request = transaction.objectStore("configuration").get("current");
@@ -2466,7 +4999,7 @@
     }
     async write(configuration) {
       try {
-        const db = await this.open();
+        const db = await openStorageDatabase();
         await new Promise((resolve, reject) => {
           const transaction = db.transaction("configuration", "readwrite");
           const request = transaction.objectStore("configuration").put(configuration, "current");
@@ -2592,14 +5125,19 @@
         throw failed2("目标创建记录无效。");
       return { origin: row[0], state: row[1] };
     }
-    async registerGenerated(binding) {
+    async generatedCommands(binding) {
       const old = await this.read(binding);
       if (old) {
         if (old.origin !== "generated")
           throw failed2("新编号与旧数据库冲突。");
-        return;
+        return [];
       }
-      await this.root.transaction([{ sql: `INSERT INTO ${TARGETS} VALUES(?,?,?,'generated','never')`, binds: key(binding) }], undefined, { management: true });
+      return [{ sql: `INSERT INTO ${TARGETS} VALUES(?,?,?,'generated','never')`, binds: key(binding) }];
+    }
+    async registerGenerated(binding) {
+      const commands = await this.generatedCommands(binding);
+      if (commands.length)
+        await this.root.transaction(commands, undefined, { management: true });
     }
     async legacy(binding) {
       await this.root.transaction([{ sql: `INSERT INTO ${TARGETS} VALUES(?,?,?,'legacy','ready')`, binds: key(binding) }], undefined, { management: true });
@@ -2860,12 +5398,12 @@
     return capture(input, false);
   }
 
-  // src/dvs/sql.ts
+  // src/dvs2/ext/tables/sql.ts
   function quoteIdentifier(value) {
     return `"${value.replaceAll('"', '""')}"`;
   }
 
-  // src/dvs/schema.ts
+  // src/dvs2/ext/tables/schema.ts
   var DVS_VERSION_TABLE_SQL = 'CREATE TABLE IF NOT EXISTS "_dvs_version" (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version TEXT NOT NULL)';
   var DVS_GC_COUNTER_TABLE_SQL = `CREATE TABLE "_dvs_gc_counter" (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), successful_updates INTEGER NOT NULL CHECK (typeof(successful_updates) = 'integer' AND successful_updates >= 0))`;
   function indexTableName(name) {
@@ -2997,7 +5535,7 @@
       status: "unknown"
     };
     try {
-      const metadata = await new DirectoryStorage(directory, charDbId, chatDbId).metadata();
+      const metadata = await createStorage(directory, charDbId, chatDbId).metadata();
       return { ...file, status: "exists", size: metadata.size };
     } catch (error) {
       return {
@@ -3016,6 +5554,31 @@
   var SQLITE_HEADER = "SQLite format 3\x00";
   async function scanInventory(directory) {
     const result = { entries: [], issues: [] };
+    if (indexedDbSource(directory)) {
+      try {
+        const directories = new Set;
+        for (const path of (await indexedDbFileKeys()).sort()) {
+          const parts = path.split("/");
+          for (let i = 1;i < parts.length; i++)
+            directories.add(parts.slice(0, i).join("/"));
+          const item = { relativePath: path, kind: "file" };
+          result.entries.push(item);
+          try {
+            const file = await readStorageFile(directory, path);
+            item.size = file.size;
+            const header = file.bytes.subarray(0, 16);
+            item.sqlite = header.length === 16 && String.fromCharCode(...header) === SQLITE_HEADER;
+          } catch (error) {
+            item.reason = detail(error).message;
+          }
+        }
+        result.entries.push(...[...directories].map((relativePath) => ({ relativePath, kind: "directory" })));
+        result.entries.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+      } catch (error) {
+        result.issues.push({ relativePath: "", reason: detail(error).message });
+      }
+      return result;
+    }
     const walk = async (handle, prefix, entry) => {
       let children;
       try {
@@ -3053,7 +5616,7 @@
         }
       }
     };
-    await walk(directory, "");
+    await walk(storageDirectory(directory), "");
     return result;
   }
   async function scanDatabase(db, directory, charDbId, chatDbId) {
@@ -3111,6 +5674,7 @@
     } catch (error) {
       result.status = "unknown";
       result.reason = detail(error).message;
+      result.failure = db.loadFailureStage ?? "database";
     }
     return result;
   }
@@ -3118,16 +5682,7 @@
     const segments = checkRelativePath(relativePath, "read");
     if (typeof segments === "string")
       throw new ServiceError({ code: "INVALID_REQUEST", message: segments });
-    let parent = directory;
-    for (const segment of segments.slice(0, -1))
-      parent = await parent.getDirectoryHandle(segment, { create: false });
-    const file = await (await parent.getFileHandle(segments.at(-1), { create: false })).getFile();
-    return {
-      relativePath,
-      size: file.size,
-      lastModified: file.lastModified,
-      bytes: new Uint8Array(await file.arrayBuffer())
-    };
+    return readStorageFile(directory, relativePath);
   }
 
   // src/worker/entity-deletion-records.ts
@@ -3505,10 +6060,20 @@
         return this.putReference(c, validateReference(value, c.chat), expected === null ? null : validateReference(expected, c.chat));
       throw invalid4("只支持角色或聊天引用记录。");
     }
-    async putReference(c, value, expected) {
+    async putChatProposal(binding, entity, value, expected) {
+      await this.ready();
+      const c = coordinate(entity, true), next = validateReference(value, true);
+      const commands = await this.referenceCommands(c, next, expected === null ? null : validateReference(expected, true));
+      commands.push(...await this.targets.generatedCommands(binding));
+      if (!commands.length)
+        return;
+      await saveEntities(this.root, commands);
+      await this.checkReference(c, next);
+    }
+    async referenceCommands(c, value, expected) {
       const old = await currentReference(this.root, c);
       if (old && this.sameReference(old, value))
-        return;
+        return [];
       if (expected ? !old || !this.sameReference(old, expected) : !!old)
         throw entityConflict("当前文件引用已改变。");
       if (value.referenceId !== undefined && value.referenceId !== old?.referenceId || old && value.generation < old.generation)
@@ -3555,7 +6120,16 @@
           sql: `INSERT INTO ${ROLES}(avatar_name,char_dbid,generation,confirmed,origin) VALUES(?,?,?,?,?) ON CONFLICT(avatar_name) WHERE state='active' DO UPDATE SET char_dbid=excluded.char_dbid,generation=excluded.generation,confirmed=excluded.confirmed,origin=excluded.origin WHERE generation=0`,
           binds: [c.avatar, value.id, value.generation, Number(value.confirmed), value.origin]
         });
+      return commands;
+    }
+    async putReference(c, value, expected) {
+      const commands = await this.referenceCommands(c, value, expected);
+      if (!commands.length)
+        return;
       await saveEntities(this.root, commands);
+      await this.checkReference(c, value);
+    }
+    async checkReference(c, value) {
       const actual = await currentReference(this.root, c);
       if (!actual || !this.sameReference(actual, value))
         throw damaged3("对象保存后读回不一致。");
@@ -3614,6 +6188,2283 @@
     return chats.has(`${char}/${part.chatDbId}`) || target("chat", char, part.chatDbId);
   }
 
+  // src/scan-association-rules.ts
+  var sameId = (a, b) => a?.toLowerCase() === b?.toLowerCase();
+  function classifyScanDatabase(database, origin) {
+    if (!database)
+      return "unknown";
+    if (database.status === "missing")
+      return "missing";
+    if (database.status === "unknown")
+      return database.failure === "database" ? "unavailable" : "unknown";
+    const identity = database.identity;
+    if (typeof identity === "object" && (identity.scope !== (database.chatDbId ? "chat" : "char") || !sameId(identity.charDbId, database.charDbId) || !sameId(identity.chatDbId, database.chatDbId)))
+      return "needs-repair";
+    if (database.meta === "invalid" || identity === "invalid" || !identity && origin === "generated")
+      return "needs-repair";
+    return "usable";
+  }
+  var repairDatabaseUsable = (database, origin) => classifyScanDatabase(database, origin) === "usable";
+  function decideChatAssociation(facts) {
+    const { original, observed } = facts;
+    if (original?.state === "usable")
+      return { kind: "use", id: original.id };
+    if (original?.state === "missing" && facts.neverCreated && (!observed || sameId(original.id, observed.id)))
+      return { kind: "use", id: original.id };
+    if (original?.state === "needs-repair")
+      return { kind: "blocked", reason: "original-needs-repair" };
+    if (original?.state === "unknown")
+      return { kind: "blocked", reason: "original-unknown" };
+    if (observed?.state === "usable")
+      return facts.observedOwnedElsewhere ? { kind: "blocked", reason: "observed-owned-elsewhere" } : { kind: "use", id: observed.id };
+    return { kind: "blocked", reason: "no-usable-database" };
+  }
+
+  // src/worker/scan-repair.ts
+  var changed = (message = "扫描后数据发生变化，本项未执行。请重新扫描。") => ({
+    status: "skipped",
+    message,
+    registrationChanged: false
+  });
+  var recordKeys = [
+    "scope",
+    "referenceId",
+    "parentReferenceId",
+    "avatar",
+    "file",
+    "id",
+    "parent",
+    "state",
+    "generation",
+    "confirmed",
+    "origin",
+    "initialization"
+  ];
+  var sameRecord = (a, b) => b === null ? a === undefined : !!a && recordKeys.every((key) => a[key] === b[key]);
+  var sameTarget = (a, b) => b === null ? a === undefined : !!a && ["scope", "charDbId", "chatDbId", "origin", "state"].every((key) => a[key] === b[key]);
+  function validateScanRepair(request) {
+    if (request?.scope === "char") {
+      if (!["check", "apply"].includes(request.phase) || typeof request.avatar !== "string" || !request.avatar || request.avatar.length > 4096 || request.avatar.includes("\x00") || !isUuid(request.charDbId) || request.expectedRole?.scope !== "char" || request.expectedRole.avatar !== request.avatar || request.expectedRole.id !== request.charDbId || !("expectedTarget" in request) || request.expectedTarget !== null && (request.expectedTarget?.scope !== "char" || request.expectedTarget.charDbId !== request.charDbId || request.expectedTarget.chatDbId !== undefined))
+        throw new ServiceError({ code: "INVALID_REQUEST", message: "角色登记修复需要固定角色文件、编号和原登记。" });
+      return;
+    }
+    if (request?.scope !== "chat")
+      throw new ServiceError({ code: "INVALID_REQUEST", message: "扫描修复范围无效。" });
+    if (!request || !["check", "apply"].includes(request.phase) || ![request.avatar, request.file].every((value) => typeof value === "string" && !!value && value.length <= 4096 && !value.includes("\x00")) || !isUuid(request.charDbId) || !isUuid(request.chatDbId) || !("expectedRole" in request) || !("expectedChat" in request) || !("expectedTarget" in request) || request.expectedRole !== null && (!request.expectedRole || request.expectedRole.scope !== "char" || request.expectedRole.avatar !== request.avatar) || request.expectedChat !== null && (!request.expectedChat || request.expectedChat.scope !== "chat" || request.expectedChat.avatar !== request.avatar || request.expectedChat.file !== request.file) || request.expectedTarget !== null && (!request.expectedTarget || request.expectedTarget.scope !== "chat" || request.expectedTarget.charDbId !== request.charDbId || request.expectedTarget.chatDbId !== request.chatDbId) || (request.phase === "apply" ? request.confirmedChatId !== request.chatDbId : request.confirmedChatId !== undefined))
+      throw new ServiceError({ code: "INVALID_REQUEST", message: "扫描修复需要固定聊天、原登记和已读回的目标编号。" });
+  }
+  async function repairScanRegistration(root, request, readDatabase, assertAvailable, invalidate = () => {}) {
+    validateScanRepair(request);
+    if (request.scope === "char")
+      return repairRoleRegistration(root, request, readDatabase, assertAvailable, invalidate);
+    assertAvailable();
+    const snapshot = await scanRecords(root, "");
+    if (snapshot.management !== "valid" || !snapshot.rootReadable)
+      return changed("插件记录有异常。请先修复管理库，再重新扫描。");
+    const roles = snapshot.records.filter((row) => row.scope === "char" && row.avatar === request.avatar && row.state === "active");
+    const role = roles[0];
+    const chats = snapshot.records.filter((row) => row.scope === "chat" && row.avatar === request.avatar && row.file === request.file && row.state !== "deleted");
+    const chat = chats[0];
+    const target = snapshot.targets.find((row) => row.scope === "chat" && row.charDbId === request.charDbId && row.chatDbId === request.chatDbId);
+    const parentTarget = snapshot.targets.find((row) => row.scope === "char" && row.charDbId === request.charDbId);
+    if (roles.length > 1 || chats.length > 1 || !sameRecord(role, request.expectedRole) || !sameRecord(chat, request.expectedChat) || !sameTarget(target, request.expectedTarget))
+      return changed();
+    if (role && (role.id !== null && role.id !== request.charDbId || role.state !== "active") || chat && (chat.parent !== request.charDbId || chat.state !== "active"))
+      return changed();
+    if ((!role?.id || !role.confirmed) && snapshot.records.some((row) => row.scope === "char" && row.state === "active" && row.referenceId !== role?.referenceId && row.id === request.charDbId))
+      return changed("已有其他角色使用这份数据，本项未执行。请重新扫描。");
+    if (role && snapshot.records.some((row) => row.scope === "chat" && row.parentReferenceId === role.referenceId && row.state !== "deleted" && row.parent !== request.charDbId))
+      return changed("现有聊天的父角色登记不一致，本项未执行。请重新扫描。");
+    if (snapshot.records.some((row) => row.scope === "chat" && row.state !== "deleted" && row.id === request.chatDbId && row.parent !== request.charDbId))
+      return changed("这份聊天数据的现有归属不一致，本项未执行。请重新扫描。");
+    const database = await readDatabase(request.charDbId, request.chatDbId);
+    const origin = target?.origin ?? (snapshot.records.some((row) => row.scope === "chat" && row.parent === request.charDbId && row.id === request.chatDbId && row.origin === "generated") ? "generated" : "legacy");
+    const never = database.status === "missing" && target?.origin === "generated" && target.state === "never" && chat?.id === request.chatDbId;
+    const originalId = chat?.confirmed ? chat.id : null;
+    const originalTarget = snapshot.targets.find((row) => row.scope === "chat" && row.charDbId === request.charDbId && row.chatDbId === originalId);
+    const original = originalId ? {
+      id: originalId,
+      state: classifyScanDatabase(originalId === request.chatDbId ? database : await readDatabase(request.charDbId, originalId), originalId === request.chatDbId ? origin : originalTarget?.origin ?? (snapshot.records.some((row) => row.scope === "chat" && row.parent === request.charDbId && row.id === originalId && row.origin === "generated") ? "generated" : "legacy"))
+    } : undefined;
+    const decision = decideChatAssociation({
+      original,
+      observed: { id: request.chatDbId, state: classifyScanDatabase(database, origin) },
+      neverCreated: never,
+      observedOwnedElsewhere: !!originalId && originalId !== request.chatDbId && snapshot.records.some((row) => row.scope === "chat" && row.state !== "deleted" && row.referenceId !== chat.referenceId && row.parent === request.charDbId && row.id === request.chatDbId)
+    });
+    if (decision.kind === "blocked")
+      return changed(decision.reason === "original-needs-repair" ? "原数据需要先修复结构，本项未改用其他数据。请重新扫描并处理对应的修复项目。" : decision.reason === "original-unknown" ? "原登记的数据尚不能确认，请重新扫描。" : decision.reason === "observed-owned-elsewhere" ? "另一份数据已有其他聊天登记，本项未改用该数据。请重新扫描。" : "本次不能恢复关联，原文件保留。请重新扫描，查看是否可以修复或重新开始使用。");
+    if (decision.id !== request.chatDbId)
+      return changed("原登记的数据仍可用，本项未改用另一份数据。请重新扫描。");
+    const parentOrigin = parentTarget?.origin ?? (snapshot.records.some((row) => row.scope === "char" && row.id === request.charDbId && row.origin === "generated") ? "generated" : "legacy");
+    const parentReady = parentTarget?.state !== "ready" && repairDatabaseUsable(await readDatabase(request.charDbId), parentOrigin);
+    assertAvailable();
+    if (request.phase === "check")
+      return { status: "checked", message: "已复核，可以恢复聊天关联。", registrationChanged: false };
+    const commands = [];
+    const guards = [
+      rawGuard(role ? `SELECT 1 FROM ${ROLES} WHERE role_id=? AND avatar_name=? AND char_dbid IS ? AND generation=? AND confirmed=? AND origin=? AND state='active'` : `SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM ${ROLES} WHERE avatar_name=? AND state='active')`, role ? [role.referenceId, role.avatar, role.id, role.generation, Number(role.confirmed), role.origin] : [request.avatar]),
+      rawGuard(chat ? `SELECT 1 FROM ${CHATS} WHERE chat_id=? AND role_id=? AND file_name=? AND chat_dbid IS ? AND parent_char_dbid=? AND generation=? AND confirmed=? AND origin=? AND state='active'` : `SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM ${CHATS} c JOIN ${ROLES} r USING(role_id) WHERE r.avatar_name=? AND c.file_name=? AND c.state<>'deleted')`, chat ? [
+        chat.referenceId,
+        chat.parentReferenceId,
+        chat.file,
+        chat.id,
+        chat.parent,
+        chat.generation,
+        Number(chat.confirmed),
+        chat.origin
+      ] : [request.avatar, request.file]),
+      rawGuard(target ? `SELECT 1 FROM ${TARGETS} WHERE scope='chat' AND char_dbid=? AND chat_dbid=? AND origin=? AND state=?` : `SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM ${TARGETS} WHERE scope='chat' AND char_dbid=? AND chat_dbid=?)`, [request.charDbId, request.chatDbId, ...target ? [target.origin, target.state] : []]),
+      rawGuard(parentTarget ? `SELECT 1 FROM ${TARGETS} WHERE scope='char' AND char_dbid=? AND chat_dbid='' AND origin=? AND state=?` : `SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM ${TARGETS} WHERE scope='char' AND char_dbid=? AND chat_dbid='')`, [request.charDbId, ...parentTarget ? [parentTarget.origin, parentTarget.state] : []])
+    ];
+    const roleChanged = !role?.id || !role.confirmed;
+    if (!role)
+      commands.push({
+        sql: `INSERT INTO ${ROLES}(avatar_name,char_dbid,generation,confirmed,origin,state) VALUES(?,?,1,1,?,'active')`,
+        binds: [request.avatar, request.charDbId, parentOrigin]
+      });
+    else if (roleChanged)
+      commands.push({
+        sql: `UPDATE ${ROLES} SET char_dbid=?,generation=?,confirmed=1 WHERE role_id=?`,
+        binds: [request.charDbId, role.generation + (role.id === request.charDbId ? 0 : 1), role.referenceId]
+      });
+    const chatChanged = !chat || chat.id !== request.chatDbId || !chat.confirmed;
+    if (!chat)
+      commands.push({
+        sql: `INSERT INTO ${CHATS}(role_id,file_name,chat_dbid,parent_char_dbid,generation,confirmed,origin,state) SELECT role_id,?,?,?,1,1,?,'active' FROM ${ROLES} WHERE avatar_name=? AND state='active'`,
+        binds: [request.file, request.chatDbId, request.charDbId, origin, request.avatar]
+      });
+    else if (chatChanged)
+      commands.push({
+        sql: `UPDATE ${CHATS} SET chat_dbid=?,generation=?,confirmed=1,origin=? WHERE chat_id=?`,
+        binds: [request.chatDbId, chat.generation + (chat.id === request.chatDbId ? 0 : 1), origin, chat.referenceId]
+      });
+    if (!target)
+      commands.push({
+        sql: `INSERT INTO ${TARGETS}(scope,char_dbid,chat_dbid,origin,state) VALUES('chat',?,?,?,'ready')`,
+        binds: [request.charDbId, request.chatDbId, origin]
+      });
+    else if (!never && target.state !== "ready")
+      commands.push({
+        sql: `UPDATE ${TARGETS} SET state='ready' WHERE scope='chat' AND char_dbid=? AND chat_dbid=?`,
+        binds: [request.charDbId, request.chatDbId]
+      });
+    if (parentReady)
+      commands.push(parentTarget ? {
+        sql: `UPDATE ${TARGETS} SET state='ready' WHERE scope='char' AND char_dbid=? AND chat_dbid=''`,
+        binds: [request.charDbId]
+      } : {
+        sql: `INSERT INTO ${TARGETS}(scope,char_dbid,chat_dbid,origin,state) VALUES('char',?,'',?,'ready')`,
+        binds: [request.charDbId, parentOrigin]
+      });
+    if (!commands.length)
+      return {
+        status: "unchanged",
+        message: "已有登记正确，无需修改插件记录。",
+        registrationChanged: false,
+        record: chat,
+        role,
+        target
+      };
+    await root.transaction([...guards, ...commands], undefined, {
+      management: true,
+      beforeExecute: () => {
+        assertAvailable();
+        if (roleChanged && role)
+          invalidate(role);
+        if (chatChanged && chat)
+          invalidate(chat);
+      }
+    });
+    const saved = await scanRecords(root, "");
+    const record = saved.records.find((row) => row.scope === "chat" && row.avatar === request.avatar && row.file === request.file && row.state === "active");
+    if (!saved.rootReadable || record?.id !== request.chatDbId || !record.confirmed || record.parent !== request.charDbId)
+      throw new ServiceError({
+        code: "RESULT_UNCONFIRMED",
+        resultState: "unconfirmed",
+        message: "插件记录已提交，但未能读回确认。请重新扫描。"
+      });
+    return {
+      status: "repaired",
+      message: "聊天关联和插件记录已修复。",
+      registrationChanged: true,
+      record,
+      role: saved.records.find((row) => row.scope === "char" && row.avatar === request.avatar && row.state === "active"),
+      target: saved.targets.find((row) => row.scope === "chat" && row.charDbId === request.charDbId && row.chatDbId === request.chatDbId)
+    };
+  }
+  async function repairRoleRegistration(root, request, readDatabase, assertAvailable, invalidate) {
+    assertAvailable();
+    const snapshot = await scanRecords(root, "");
+    if (!snapshot.rootReadable || snapshot.management !== "valid")
+      return changed("插件记录有异常。请先修复管理库，再重新扫描。");
+    const roles = snapshot.records.filter((row) => row.scope === "char" && row.avatar === request.avatar && row.state === "active");
+    const role = roles[0];
+    const target = snapshot.targets.find((row) => row.scope === "char" && row.charDbId === request.charDbId);
+    if (roles.length !== 1 || !sameRecord(role, request.expectedRole) || !sameTarget(target, request.expectedTarget))
+      return changed();
+    const origin = target?.origin ?? role.origin;
+    if (!repairDatabaseUsable(await readDatabase(request.charDbId), origin))
+      return changed("这份数据还不能直接使用，本项没有修改登记。请重新扫描，按新的检查结果处理。");
+    assertAvailable();
+    if (request.phase === "check")
+      return { status: "checked", message: "已复核，可以修复角色登记。", registrationChanged: false };
+    const commands = [];
+    if (!target)
+      commands.push({ sql: `INSERT INTO ${TARGETS} VALUES('char',?,'',?,'ready')`, binds: [request.charDbId, origin] });
+    else if (target.state !== "ready")
+      commands.push({
+        sql: `UPDATE ${TARGETS} SET state='ready' WHERE scope='char' AND char_dbid=? AND chat_dbid=''`,
+        binds: [request.charDbId]
+      });
+    if (!role.confirmed)
+      commands.push({ sql: `UPDATE ${ROLES} SET confirmed=1 WHERE role_id=?`, binds: [role.referenceId] });
+    if (!commands.length)
+      return {
+        status: "unchanged",
+        message: "已有登记正确，无需修改插件记录。",
+        registrationChanged: false,
+        record: role,
+        role,
+        target
+      };
+    await root.transaction([
+      rawGuard(`SELECT 1 FROM ${ROLES} WHERE role_id=? AND avatar_name=? AND char_dbid=? AND generation=? AND confirmed=? AND origin=? AND state='active'`, [role.referenceId, role.avatar, role.id, role.generation, Number(role.confirmed), role.origin]),
+      rawGuard(target ? `SELECT 1 FROM ${TARGETS} WHERE scope='char' AND char_dbid=? AND chat_dbid='' AND origin=? AND state=?` : `SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM ${TARGETS} WHERE scope='char' AND char_dbid=? AND chat_dbid='')`, [request.charDbId, ...target ? [target.origin, target.state] : []]),
+      ...commands
+    ], undefined, {
+      management: true,
+      beforeExecute: () => {
+        assertAvailable();
+        if (!role.confirmed)
+          invalidate(role);
+      }
+    });
+    const saved = await scanRecords(root, "");
+    const record = saved.records.find((row) => row.scope === "char" && row.referenceId === role.referenceId);
+    if (!saved.rootReadable || record?.initialization !== "ready" || !record.confirmed)
+      throw new ServiceError({
+        code: "RESULT_UNCONFIRMED",
+        resultState: "unconfirmed",
+        message: "插件记录已提交，但未能读回确认。请重新扫描。"
+      });
+    return {
+      status: "repaired",
+      message: "角色的插件记录已修复。",
+      registrationChanged: true,
+      record,
+      role: record,
+      target: saved.targets.find((row) => row.scope === "char" && row.charDbId === request.charDbId)
+    };
+  }
+
+  // src/management-repair-rules.ts
+  var MANAGEMENT_COLUMNS = {
+    __stsh_meta: ["key", "value"],
+    __stsh_targets: ["scope", "char_dbid", "chat_dbid", "origin", "state"],
+    __stsh_roles: ["role_id", "avatar_name", "char_dbid", "generation", "confirmed", "origin", "state"],
+    __stsh_chats: [
+      "chat_id",
+      "role_id",
+      "file_name",
+      "chat_dbid",
+      "parent_char_dbid",
+      "generation",
+      "confirmed",
+      "origin",
+      "state"
+    ]
+  };
+  var managementValueKey = (value) => JSON.stringify(value, (_key, cell) => cell instanceof Uint8Array ? { bytes: Array.from(cell) } : cell);
+  var text = (value) => typeof value === "string" && !!value && value.length <= 4096 && !value.includes("\x00");
+  var integer = (value, min) => typeof value === "number" && Number.isSafeInteger(value) && value >= min;
+  var origin = (value) => value === "generated" || value === "legacy";
+  var roleValid = (row) => integer(row[0], 1) && text(row[1]) && (row[2] === null || isUuid(row[2])) && integer(row[3], 0) && typeof row[4] === "number" && [0, 1].includes(row[4]) && origin(row[5]) && ["active", "deleted"].includes(String(row[6])) && (row[3] !== 0 || row[2] === null && row[4] === 0);
+  var chatValid = (row) => integer(row[0], 1) && text(row[2]) && (row[3] === null || isUuid(row[3])) && isUuid(row[4]) && integer(row[5], 1) && typeof row[6] === "number" && [0, 1].includes(row[6]) && origin(row[7]) && ["active", "retained", "deleted"].includes(String(row[8]));
+  var effectiveManagementTarget = (target, roles, chats) => ({
+    ...target,
+    origin: target.origin === "generated" || (target.scope === "char" ? roles.some((row) => row[2] === target.charDbId && row[5] === "generated") : chats.some((row) => row[4] === target.charDbId && row[3] === target.chatDbId && row[7] === "generated")) ? "generated" : "legacy"
+  });
+  function projectManagementStructure(facts) {
+    const result = {
+      replaceTables: [],
+      rows: {},
+      missing: {
+        roleIdentity: !facts.tables.__stsh_roles?.columns.includes("char_dbid"),
+        chatIdentity: !facts.tables.__stsh_chats?.columns.includes("chat_dbid"),
+        chatParent: !facts.tables.__stsh_chats?.columns.includes("parent_char_dbid"),
+        targetsTable: !facts.objects.some((object) => object.name === "__stsh_targets" && object.type === "table")
+      }
+    };
+    const block = (code, object) => ({
+      ...result,
+      blocked: { code, ...object ? { object } : {} }
+    });
+    if (facts.unreadable.length)
+      return block("unreadable", facts.unreadable[0]);
+    if (facts.objects.some((o) => o.name.startsWith("__st_sle_helper_")))
+      return block("legacy-format");
+    if (!facts.objects.some((o) => o.name.startsWith("__stsh_")))
+      return { ...result, empty: true };
+    if (facts.objects.some((o) => o.name.startsWith("__stsh_") && o.expectedType === undefined && !["index", "trigger"].includes(o.type)))
+      return block("unknown-management-object");
+    for (const name of Object.keys(MANAGEMENT_COLUMNS)) {
+      const table = facts.tables[name], object = facts.objects.find((o) => o.name === name);
+      if (!object?.type) {
+        if (name === "__stsh_targets") {
+          result.rows[name] = [];
+          result.replaceTables.push(name);
+          continue;
+        }
+        return block("missing-table", name);
+      }
+      if (object.type !== "table")
+        return block("object-kind", name);
+      if (!table)
+        return block("unreadable", name);
+      const required = MANAGEMENT_COLUMNS[name];
+      const missing = required.filter((column) => !table.columns.includes(column));
+      if (missing.length && table.rows.length && !(name === "__stsh_chats" && missing.every((column) => ["role_id", "parent_char_dbid", "chat_dbid"].includes(column))) && !(name === "__stsh_roles" && missing.length === 1 && missing[0] === "char_dbid") && !(name === "__stsh_targets" && missing.length === 1 && missing[0] === "state"))
+        return block("missing-columns", name);
+      result.rows[name] = table.rows.map((row) => required.map((column) => {
+        const index = table.columns.indexOf(column);
+        return index < 0 ? null : row[index];
+      }));
+      if (!object.matches)
+        result.replaceTables.push(name);
+    }
+    return result;
+  }
+  function decideManagementRepair(facts) {
+    const result = {
+      kind: "none",
+      replaceTables: [],
+      recreateObjects: [],
+      rows: {},
+      reasons: [],
+      recordChanges: 0,
+      recordsToCheck: [],
+      targetsToCheck: [],
+      insertTargets: []
+    };
+    const block = (code, object) => {
+      result.kind = "blocked";
+      result.reasons.push({ code, ...object ? { object } : {} });
+      return result;
+    };
+    const projection = projectManagementStructure(facts);
+    result.rows = projection.rows;
+    result.replaceTables = projection.replaceTables;
+    if (projection.blocked)
+      return block(projection.blocked.code, projection.blocked.object);
+    if (projection.empty)
+      return result;
+    const recovered = recoverManagementIdentities({
+      roles: projection.rows.__stsh_roles,
+      chats: projection.rows.__stsh_chats,
+      targets: projection.rows.__stsh_targets,
+      missing: projection.missing
+    }, { recordChecks: facts.recordChecks, targetFiles: facts.targetFiles });
+    result.rows = { ...projection.rows, ...recovered.rows };
+    result.replaceTables.push(...recovered.replaceTables);
+    result.recordChanges += recovered.recordChanges;
+    result.reasons.push(...recovered.reasons);
+    result.recordsToCheck = recovered.recordsToCheck;
+    result.targetsToCheck.push(...recovered.targetsToCheck);
+    const normalized = normalizeManagementRecords(result.rows, projection.missing, recovered.roleIdentityRedirect, facts.targetFiles);
+    result.rows = normalized.rows;
+    result.replaceTables.push(...normalized.replaceTables);
+    result.recordChanges += normalized.recordChanges;
+    result.reasons.push(...normalized.reasons);
+    result.targetsToCheck.push(...normalized.targetsToCheck);
+    if (normalized.blocked)
+      return block(normalized.blocked.code, normalized.blocked.object);
+    const targets = supplementManagementTargets(normalized.rows, projection.missing.targetsTable, facts.targetFiles);
+    result.rows = { ...normalized.rows, ...targets.rows };
+    result.insertTargets = targets.insertTargets;
+    result.recordChanges += targets.recordChanges;
+    result.reasons.push(...targets.reasons);
+    result.targetsToCheck.push(...targets.targetsToCheck);
+    if (targets.blocked)
+      return block(targets.blocked.code, targets.blocked.object);
+    const classified = classifyManagementRepair({
+      rows: result.rows,
+      replaceTables: result.replaceTables,
+      recordChanges: result.recordChanges,
+      reasons: result.reasons,
+      insertTargets: result.insertTargets
+    }, normalized.counts, { tables: facts.tables, objects: facts.objects, externalForeignKeys: facts.externalForeignKeys });
+    return { ...result, ...classified };
+  }
+  function recoverManagementIdentities(input, facts) {
+    const result = {
+      rows: {
+        __stsh_roles: input.roles.map((row) => [...row]),
+        __stsh_chats: input.chats.map((row) => [...row]),
+        __stsh_targets: input.targets.map((row) => [...row])
+      },
+      replaceTables: [],
+      recordChanges: 0,
+      reasons: [],
+      recordsToCheck: [],
+      targetsToCheck: []
+    };
+    const rawRoles = result.rows.__stsh_roles, rawChats = result.rows.__stsh_chats;
+    const requireTarget = (requested) => {
+      const target = effectiveManagementTarget(requested, rawRoles, rawChats);
+      if (!result.targetsToCheck.some((item) => managementValueKey(item) === managementValueKey(target)))
+        result.targetsToCheck.push(target);
+      return facts.targetFiles.find((item) => managementValueKey(item.target) === managementValueKey(target))?.state;
+    };
+    const recordEvidence = (record) => {
+      result.recordsToCheck.push(record);
+      return facts.recordChecks.find((item) => item.record.scope === record.scope && item.record.referenceId === record.referenceId && item.record.avatar === record.avatar && item.record.file === record.file);
+    };
+    const roleIdentityRedirect = new Map;
+    for (const row of rawRoles)
+      if (!isUuid(row[2])) {
+        const children = rawChats.filter((chat) => chat[1] === row[0]);
+        const parents = new Set(children.map((chat) => chat[4]).filter(isUuid));
+        if (children.length && parents.size === 1 && children.every((chat) => isUuid(chat[4]))) {
+          const oldKey = managementValueKey(row[2]), replacement = [...parents][0];
+          const redirects = roleIdentityRedirect.get(oldKey) ?? new Set;
+          redirects.add(replacement);
+          roleIdentityRedirect.set(oldKey, redirects);
+          row[2] = replacement;
+          result.recordChanges++;
+          result.replaceTables.push("__stsh_roles");
+          result.reasons.push({ code: "restore-parent", object: "__stsh_roles" });
+        }
+      }
+    const removedTargets = new Set;
+    const chatIdentityColumnMissing = input.missing.chatIdentity;
+    for (const row of rawChats)
+      if (!isUuid(row[4]) && input.missing.chatParent) {
+        const parent = rawRoles.find((role) => role[0] === row[1]);
+        if (parent && isUuid(parent[2]))
+          row[4] = parent[2];
+      }
+    for (let index = rawChats.length - 1;index >= 0; index--) {
+      const row = rawChats[index];
+      if (chatValid(row) && !(chatIdentityColumnMissing && row[3] === null))
+        continue;
+      const role = rawRoles.find((role) => role[0] === row[1]);
+      if (!role || !integer(row[0], Number.MIN_SAFE_INTEGER) || !text(role[1]) || !text(row[2]))
+        continue;
+      const coordinate = {
+        scope: "chat",
+        referenceId: row[0],
+        avatar: role[1],
+        file: row[2],
+        id: row[3],
+        parent: row[4]
+      };
+      const evidence = recordEvidence(coordinate);
+      const peerIds = new Set(rawChats.filter((other) => other !== row && other[1] === row[1] && other[2] === row[2] && other[4] === row[4] && other[5] === row[5] && other[6] === row[6] && other[7] === row[7] && other[8] === row[8] && isUuid(other[3])).map((other) => other[3]));
+      const candidate = peerIds.size === 1 ? [...peerIds][0] : evidence?.observation?.status === "same" && isUuid(evidence.observation.observedId) ? evidence.observation.observedId : undefined;
+      if (!isUuid(row[3]) && (row[3] !== null || chatIdentityColumnMissing) && candidate && isUuid(row[4]) && origin(row[7]) && requireTarget({ scope: "chat", charDbId: row[4], chatDbId: candidate, origin: row[7] }) === "ready") {
+        row[3] = candidate;
+        result.recordChanges++;
+        result.replaceTables.push("__stsh_chats");
+        result.reasons.push({ code: "restore-identity", object: "__stsh_chats" });
+        continue;
+      }
+      if (evidence?.observation?.status === "deleted" && evidence.files === "absent" && !rawChats.some((other) => other !== row && other[3] === row[3] && other[4] === row[4])) {
+        for (const target of result.rows.__stsh_targets)
+          if (target[0] === "chat" && target[1] === row[4] && target[2] === row[3])
+            removedTargets.add(target);
+        rawChats.splice(index, 1);
+        result.recordChanges++;
+        result.replaceTables.push("__stsh_chats");
+        result.reasons.push({ code: "remove-unused-record", object: "__stsh_chats" });
+      }
+    }
+    for (let index = rawRoles.length - 1;index >= 0; index--) {
+      const row = rawRoles[index];
+      if (roleValid(row) || !integer(row[0], Number.MIN_SAFE_INTEGER) || !text(row[1]))
+        continue;
+      const evidence = recordEvidence({
+        scope: "char",
+        referenceId: row[0],
+        avatar: row[1],
+        id: row[2]
+      });
+      if (evidence?.observation?.status === "deleted" && evidence.files === "absent" && !rawChats.some((chat) => chat[1] === row[0] || chat[4] === row[2]) && !rawRoles.some((other) => other !== row && other[2] === row[2])) {
+        for (const target of result.rows.__stsh_targets)
+          if (target[1] === row[2])
+            removedTargets.add(target);
+        rawRoles.splice(index, 1);
+        result.recordChanges++;
+        result.replaceTables.push("__stsh_roles");
+        result.reasons.push({ code: "remove-unused-record", object: "__stsh_roles" });
+      }
+    }
+    if (removedTargets.size) {
+      result.rows.__stsh_targets = result.rows.__stsh_targets.filter((row) => !removedTargets.has(row));
+      result.recordChanges += removedTargets.size;
+      result.replaceTables.push("__stsh_targets");
+    }
+    return { ...result, roleIdentityRedirect };
+  }
+  function normalizeManagementRecords(input, missing, roleIdentityRedirect, targetFiles) {
+    const result = {
+      rows: Object.fromEntries(Object.entries(input).map(([name, rows]) => [name, rows.map((row) => [...row])])),
+      replaceTables: [],
+      recordChanges: 0,
+      reasons: [],
+      targetsToCheck: []
+    };
+    const dedupInputSizes = new Map(Object.keys(MANAGEMENT_COLUMNS).map((name) => [name, result.rows[name].length]));
+    let versionChanged = false, restoredParents = 0, metaCount = 0;
+    const product = () => ({
+      ...result,
+      counts: { before: dedupInputSizes, meta: metaCount, versionChanged, restoredParents }
+    });
+    const block = (code, object) => ({
+      ...product(),
+      blocked: { code, ...object ? { object } : {} }
+    });
+    const requireTarget = (requested) => {
+      const target = effectiveManagementTarget(requested, result.rows.__stsh_roles, result.rows.__stsh_chats);
+      if (!result.targetsToCheck.some((item) => managementValueKey(item) === managementValueKey(target)))
+        result.targetsToCheck.push(target);
+      return targetFiles.find((item) => managementValueKey(item.target) === managementValueKey(target))?.state;
+    };
+    const meta = result.rows.__stsh_meta;
+    if (meta.some((row) => typeof row[0] !== "string" || typeof row[1] !== "string"))
+      return block("invalid-record", "__stsh_meta");
+    const metaKeys = new Map;
+    for (const row of meta) {
+      const old = metaKeys.get(row[0]);
+      if (old && old[1] !== row[1])
+        return block("conflicting-records", "__stsh_meta");
+      metaKeys.set(row[0], row);
+    }
+    const version = metaKeys.get("schema_version")?.[1];
+    let parsedVersion;
+    try {
+      parsedVersion = typeof version === "string" ? JSON.parse(version) : undefined;
+    } catch {}
+    if (typeof parsedVersion === "number" && Number.isSafeInteger(parsedVersion) && parsedVersion >= 0 && parsedVersion !== 6)
+      return block("unknown-version", "__stsh_meta");
+    const normalizedMeta = [...metaKeys.values()];
+    metaCount = metaKeys.size;
+    versionChanged = version !== "6";
+    if (versionChanged) {
+      const existing = normalizedMeta.find((row) => row[0] === "schema_version");
+      if (existing)
+        existing[1] = "6";
+      else
+        normalizedMeta.push(["schema_version", "6"]);
+    }
+    result.rows.__stsh_meta = normalizedMeta;
+    const targets = result.rows.__stsh_targets;
+    const uniqueTargets = new Map;
+    let pendingTarget = false;
+    for (const row of targets) {
+      if (!isUuid(row[1])) {
+        const derived = roleIdentityRedirect.get(managementValueKey(row[1]));
+        const parents = row[0] === "chat" ? new Set(result.rows.__stsh_chats.filter((chat) => chat[3] === row[2] && isUuid(chat[4])).map((chat) => chat[4])) : derived;
+        if (parents?.size === 1) {
+          row[1] = [...parents][0];
+          result.recordChanges++;
+          result.replaceTables.push("__stsh_targets");
+        }
+      }
+      if (!["char", "chat"].includes(String(row[0])) || !isUuid(row[1]) || (row[0] === "char" ? row[2] !== "" : !isUuid(row[2])) || !origin(row[3]))
+        return block("invalid-record", "__stsh_targets");
+      if (!["never", "creating", "ready"].includes(String(row[4]))) {
+        const state = requireTarget({
+          scope: row[0],
+          charDbId: row[1],
+          ...row[0] === "chat" ? { chatDbId: row[2] } : {},
+          origin: row[3]
+        });
+        if (state !== "ready")
+          pendingTarget = true;
+        else {
+          row[4] = "ready";
+          result.recordChanges++;
+          result.replaceTables.push("__stsh_targets");
+          result.reasons.push({ code: "restore-target", object: "__stsh_targets" });
+        }
+      }
+      const key = managementValueKey(row.slice(0, 3)), old = uniqueTargets.get(key);
+      if (old && managementValueKey(old) !== managementValueKey(row))
+        return block("conflicting-records", "__stsh_targets");
+      uniqueTargets.set(key, row);
+    }
+    result.rows.__stsh_targets = [...uniqueTargets.values()];
+    if (pendingTarget)
+      return block("invalid-record", "__stsh_targets");
+    const roles = result.rows.__stsh_roles;
+    const roleIds = new Map, roleValues = new Map, roleRedirect = new Map;
+    for (const row of [...roles].sort((a, b) => Number(a[0]) - Number(b[0]))) {
+      if (missing.roleIdentity && row[2] === null)
+        return block("missing-columns", "__stsh_roles");
+      if (!roleValid(row))
+        return block("invalid-record", "__stsh_roles");
+      const id = row[0], oldId = roleIds.get(id);
+      if (oldId && managementValueKey(oldId) !== managementValueKey(row))
+        return block("conflicting-records", "__stsh_roles");
+      roleIds.set(id, row);
+      const key = managementValueKey(row.slice(1)), equivalent = roleValues.get(key);
+      if (equivalent)
+        roleRedirect.set(id, equivalent[0]);
+      else
+        roleValues.set(key, row);
+    }
+    const normalizedRoles = [...roleValues.values()];
+    const activeAvatars = new Set;
+    for (const row of normalizedRoles)
+      if (row[6] === "active") {
+        if (activeAvatars.has(row[1]))
+          return block("conflicting-records", "__stsh_roles");
+        activeAvatars.add(row[1]);
+      }
+    result.rows.__stsh_roles = normalizedRoles;
+    const chats = result.rows.__stsh_chats;
+    const chatIds = new Map, chatValues = new Map;
+    for (const row of [...chats].sort((a, b) => Number(a[0]) - Number(b[0]))) {
+      if (!chatValid(row) || missing.chatIdentity && row[3] === null)
+        return block("invalid-record", "__stsh_chats");
+      const id = row[0], oldId = chatIds.get(id);
+      if (oldId && managementValueKey(oldId) !== managementValueKey(row))
+        return block("conflicting-records", "__stsh_chats");
+      chatIds.set(id, [...row]);
+      const oldRoleId = row[1], redirected = typeof oldRoleId === "number" ? roleRedirect.get(oldRoleId) ?? oldRoleId : undefined;
+      let parent = normalizedRoles.find((role) => role[0] === redirected);
+      if (!parent) {
+        const candidates = normalizedRoles.filter((role) => role[2] === row[4]);
+        if (candidates.length !== 1)
+          return block("unresolved-parent", "__stsh_chats");
+        parent = candidates[0];
+      }
+      if (parent[2] !== row[4])
+        return block("unresolved-parent", "__stsh_chats");
+      if (row[1] !== parent[0]) {
+        row[1] = parent[0];
+        restoredParents++;
+      }
+      const key = managementValueKey(row.slice(1));
+      if (!chatValues.has(key))
+        chatValues.set(key, row);
+    }
+    const normalizedChats = [...chatValues.values()], activeChats = new Set;
+    for (const row of normalizedChats)
+      if (row[8] !== "deleted") {
+        const key = managementValueKey(row.slice(1, 3));
+        if (activeChats.has(key))
+          return block("conflicting-records", "__stsh_chats");
+        activeChats.add(key);
+      }
+    result.rows.__stsh_chats = normalizedChats;
+    return product();
+  }
+  function supplementManagementTargets(input, targetsTableMissing, targetFiles) {
+    const { __stsh_roles: normalizedRoles, __stsh_chats: normalizedChats } = input;
+    const result = {
+      rows: { __stsh_targets: input.__stsh_targets.map((row) => [...row]) },
+      insertTargets: [],
+      recordChanges: 0,
+      reasons: [],
+      targetsToCheck: []
+    };
+    const requireTarget = (target) => {
+      result.targetsToCheck.push(target);
+      return targetFiles.find((item) => managementValueKey(item.target) === managementValueKey(target))?.state;
+    };
+    const block = (code, object) => ({
+      ...result,
+      blocked: { code, ...object ? { object } : {} }
+    });
+    let unresolvedMissingTarget = false;
+    const references = [
+      ...normalizedRoles.filter((row) => isUuid(row[2])).map((row) => ({ scope: "char", charDbId: row[2], origin: row[5] })),
+      ...normalizedChats.filter((row) => isUuid(row[3])).map((row) => ({
+        scope: "chat",
+        charDbId: row[4],
+        chatDbId: row[3],
+        origin: row[7]
+      }))
+    ];
+    const grouped = new Map;
+    for (const reference of references) {
+      const key = managementValueKey([
+        reference.scope,
+        reference.charDbId,
+        reference.scope === "chat" ? reference.chatDbId : ""
+      ]);
+      const old = grouped.get(key);
+      grouped.set(key, old?.origin === "generated" ? old : reference);
+    }
+    for (const reference of grouped.values()) {
+      if (result.rows.__stsh_targets.some((row) => row[0] === reference.scope && row[1] === reference.charDbId && row[2] === (reference.scope === "chat" ? reference.chatDbId : "")))
+        continue;
+      const fileState = requireTarget(reference);
+      if (fileState === "ready") {
+        const row = [
+          reference.scope,
+          reference.charDbId,
+          reference.scope === "chat" ? reference.chatDbId : "",
+          reference.origin,
+          "ready"
+        ];
+        result.rows.__stsh_targets.push(row);
+        result.insertTargets.push(row);
+        result.recordChanges++;
+        result.reasons.push({ code: "restore-target", object: "__stsh_targets" });
+      } else if (targetsTableMissing)
+        unresolvedMissingTarget = true;
+    }
+    if (unresolvedMissingTarget)
+      return block("invalid-record", "__stsh_targets");
+    return result;
+  }
+  function classifyManagementRepair(changes, counts, facts) {
+    const result = {
+      ...changes,
+      replaceTables: [...changes.replaceTables],
+      reasons: [...changes.reasons],
+      recreateObjects: [],
+      kind: "none"
+    };
+    const block = (code, object) => ({
+      ...result,
+      kind: "blocked",
+      reasons: [...result.reasons, { code, ...object ? { object } : {} }]
+    });
+    for (const name of Object.keys(MANAGEMENT_COLUMNS)) {
+      const before = counts.before.get(name), after = name === "__stsh_meta" ? counts.meta : result.rows[name].length;
+      if (after < before) {
+        result.recordChanges += before - after;
+        result.replaceTables.push(name);
+        result.reasons.push({ code: "merge-duplicates", object: name });
+      }
+    }
+    if (counts.restoredParents) {
+      result.recordChanges += counts.restoredParents;
+      result.replaceTables.push("__stsh_chats");
+      result.reasons.push({ code: "restore-parent", object: "__stsh_chats" });
+    }
+    if (counts.versionChanged) {
+      result.reasons.push({ code: "repair-version", object: "__stsh_meta" });
+    }
+    if (result.replaceTables.includes("__stsh_roles"))
+      result.replaceTables.push("__stsh_chats");
+    result.replaceTables = [...new Set(result.replaceTables)];
+    for (const name of result.replaceTables) {
+      if (facts.tables[name]?.columns.some((column) => !MANAGEMENT_COLUMNS[name].includes(column)))
+        return block("extra-columns", name);
+      const dependency = facts.externalForeignKeys.find((item) => item.parent === name);
+      if (dependency)
+        return block("external-foreign-key", dependency.table);
+      result.reasons.push({ code: "rebuild-table", object: name });
+    }
+    const definitions = facts.objects.filter((object) => object.expectedType && object.expectedType !== "table");
+    for (const object of definitions) {
+      if (object.type && object.type !== object.expectedType)
+        return block("object-kind", object.name);
+      if (!object.matches || result.replaceTables.includes(object.table) || result.replaceTables.length && object.expectedType === "view") {
+        result.recreateObjects.push(object.name);
+        result.reasons.push({ code: "repair-object", object: object.name });
+      }
+    }
+    result.kind = result.replaceTables.length ? "rebuild" : result.recreateObjects.length || counts.versionChanged || result.insertTargets.length ? "light" : "none";
+    return result;
+  }
+
+  // src/worker/management-repair.ts
+  var quote2 = (name) => `"${name.replaceAll('"', '""')}"`;
+  var specs = SCHEMA6.map((sql) => ({
+    sql,
+    name: sql.split(" ")[sql.startsWith("CREATE UNIQUE") ? 3 : 2],
+    type: sql.includes(" VIEW ") ? "view" : sql.includes(" INDEX ") ? "index" : "table"
+  }));
+  var tableNames = Object.keys(MANAGEMENT_COLUMNS);
+  async function readManagementRepairFacts(root) {
+    const facts = {
+      objects: [],
+      tables: {},
+      unreadable: [],
+      externalForeignKeys: [],
+      sequences: {},
+      targetFiles: [],
+      recordChecks: [],
+      diagnostics: []
+    };
+    try {
+      if (root.availability !== "ready")
+        throw Error("unavailable");
+      await root.assertFileExisting();
+      const objects = (await root.query({ sql: "SELECT name,type,tbl_name,sql FROM sqlite_master ORDER BY type,name" })).rows;
+      facts.objects = objects.map((row) => ({
+        name: String(row[0]),
+        type: String(row[1]),
+        table: String(row[2]),
+        sql: row[3] === null ? null : String(row[3])
+      }));
+      for (const spec of specs) {
+        const object = facts.objects.find((item) => item.name === spec.name);
+        if (object) {
+          object.expectedType = spec.type;
+          object.matches = object.type === spec.type && object.sql !== null && sameDefinition(object.sql, spec.sql);
+        } else
+          facts.objects.push({
+            name: spec.name,
+            type: "",
+            table: spec.type === "index" ? spec.sql.match(/ ON (\w+)/)?.[1] ?? "" : spec.name,
+            sql: null,
+            expectedType: spec.type,
+            matches: false
+          });
+      }
+      if (!objects.some((row) => String(row[0]).startsWith("__stsh_") || String(row[0]).startsWith("__st_sle_helper_")))
+        facts.objects = facts.objects.filter((item) => item.type);
+      for (const name of tableNames) {
+        if (!facts.objects.some((item) => item.name === name && item.type === "table"))
+          continue;
+        try {
+          const columns = (await root.query({ sql: "SELECT name FROM pragma_table_xinfo(?) ORDER BY cid", binds: [name] })).rows.map((row) => String(row[0]));
+          const rows = (await root.query({ sql: `SELECT ${columns.map(quote2).join(",")} FROM ${quote2(name)}` })).rows;
+          rows.sort((a, b) => managementValueKey(a).localeCompare(managementValueKey(b)));
+          facts.tables[name] = { columns, rows };
+        } catch (error) {
+          facts.unreadable.push(name);
+          facts.diagnostics.push({ object: name, error: errorData(error) });
+        }
+      }
+      for (const object of facts.objects.filter((item) => item.type === "table" && !tableNames.includes(item.name) && !item.name.startsWith("sqlite_"))) {
+        const refs = (await root.query({ sql: 'SELECT "table" FROM pragma_foreign_key_list(?)', binds: [object.name] })).rows;
+        for (const row of refs)
+          if (tableNames.includes(String(row[0])))
+            facts.externalForeignKeys.push({ table: object.name, parent: String(row[0]) });
+      }
+      if (objects.some((row) => row[0] === "sqlite_sequence")) {
+        const rows = (await root.query({ sql: "SELECT name,seq FROM sqlite_sequence WHERE name IN ('__stsh_roles','__stsh_chats')" })).rows;
+        for (const [name, value] of rows) {
+          if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+            facts.unreadable.push("sqlite_sequence");
+            continue;
+          }
+          const key = name;
+          facts.sequences[key] = Math.max(facts.sequences[key] ?? 0, value);
+        }
+      }
+    } catch (error) {
+      facts.unreadable.push("global.sqlite");
+      facts.diagnostics.push({ object: "global.sqlite", error: errorData(error) });
+    }
+    return facts;
+  }
+  async function digest(value) {
+    return sha2562(new TextEncoder().encode(managementValueKey(value)));
+  }
+  async function inspect(root, options) {
+    const facts = await readManagementRepairFacts(root);
+    let decision = decideManagementRepair(facts);
+    for (const record of decision.recordsToCheck) {
+      const observation = options.observations?.find((item) => item.scope === record.scope && item.referenceId === record.referenceId && item.avatar === record.avatar && item.file === record.file && ["same", "deleted", "unknown"].includes(item.status));
+      let files = "unknown";
+      if (observation?.status === "unknown" && observation.reason)
+        facts.diagnostics.push({
+          object: `${record.scope === "char" ? "__stsh_roles" : "__stsh_chats"}:${record.referenceId}`,
+          error: { code: "LOAD_FAILED", message: observation.reason }
+        });
+      if (observation && observation.status !== "unknown" && options.readRecordFiles) {
+        try {
+          files = await options.readRecordFiles(record);
+        } catch (error) {
+          facts.diagnostics.push({
+            object: `${record.scope === "char" ? "__stsh_roles" : "__stsh_chats"}:${record.referenceId}`,
+            error: errorData(error)
+          });
+        }
+      }
+      facts.recordChecks.push({ record, ...observation ? { observation: { ...observation } } : {}, files });
+    }
+    const readTargets = async () => {
+      decision = decideManagementRepair(facts);
+      for (const target of decision.targetsToCheck) {
+        if (facts.targetFiles.some((item) => managementValueKey(item.target) === managementValueKey(target)))
+          continue;
+        let state = "unknown";
+        if (options.readTarget)
+          try {
+            const database = await options.readTarget(target), result = classifyScanDatabase(database, target.origin);
+            if (database.status === "unknown" && database.reason)
+              facts.diagnostics.push({
+                object: database.relativePath,
+                error: { code: "LOAD_FAILED", message: database.reason }
+              });
+            state = result === "usable" ? "ready" : result === "missing" ? "missing" : result === "needs-repair" ? "needs-repair" : "unknown";
+          } catch (error) {
+            facts.diagnostics.push({ object: databasePath(target.charDbId, target.chatDbId), error: errorData(error) });
+          }
+        facts.targetFiles.push({ target, state });
+      }
+    };
+    await readTargets();
+    await readTargets();
+    decision = decideManagementRepair(facts);
+    const plan = {
+      kind: decision.kind,
+      evidence: await digest(facts),
+      objects: [
+        ...new Set([
+          ...decision.replaceTables,
+          ...decision.recreateObjects,
+          ...decision.insertTargets.length ? ["__stsh_targets"] : []
+        ])
+      ],
+      reasons: decision.reasons,
+      recordChanges: decision.recordChanges,
+      ...decision.recordsToCheck.length ? { recordsToCheck: decision.recordsToCheck } : {},
+      ...facts.diagnostics?.length ? { diagnostics: facts.diagnostics } : {}
+    };
+    return { facts, decision, plan };
+  }
+  async function inspectManagementRepair(root, options = {}) {
+    return (await inspect(root, options)).plan;
+  }
+  function check(sql, binds = []) {
+    return { sql: `INSERT INTO temp.__stsh_repair_guard(value) SELECT CASE WHEN (${sql}) THEN 1 ELSE 0 END`, binds };
+  }
+  function rowChecks(name, columns, rows) {
+    const groups = new Map;
+    for (const row of rows) {
+      const key = managementValueKey(row), old = groups.get(key);
+      if (old)
+        old.count++;
+      else
+        groups.set(key, { row, count: 1 });
+    }
+    return [
+      check(`SELECT count(*)=? FROM ${name}`, [rows.length]),
+      ...Array.from(groups.values(), ({ row, count }) => check(`SELECT count(*)=? FROM ${name} WHERE ${columns.map((column) => `typeof(${quote2(column)})=typeof(?) AND quote(${quote2(column)})=quote(?) COLLATE BINARY`).join(" AND ")}`, [count, ...row.flatMap((value) => [value, value])]))
+    ];
+  }
+  function commandsFor(facts, decision) {
+    const commands = [{ sql: "CREATE TEMP TABLE __stsh_repair_guard(value INTEGER NOT NULL CHECK(value=1))" }];
+    const actual = facts.objects.filter((object) => object.type);
+    commands.push(check("SELECT count(*)=? FROM sqlite_master", [actual.length]));
+    for (const object of actual)
+      commands.push(check("SELECT count(*)=1 FROM sqlite_master WHERE name=? AND type=? AND tbl_name=? AND sql IS ?", [
+        object.name,
+        object.type,
+        object.table,
+        object.sql
+      ]));
+    for (const name of tableNames)
+      if (facts.tables[name])
+        commands.push(...rowChecks(quote2(name), facts.tables[name].columns, facts.tables[name].rows));
+    const replacement = new Set(decision.replaceTables);
+    const tempName = (name) => `${name}_repair_copy`;
+    const create = (name, temporary) => {
+      let sql = specs.find((spec) => spec.name === name).sql;
+      if (temporary) {
+        sql = sql.replace(`CREATE TABLE ${name} `, `CREATE TABLE ${quote2(tempName(name))} `);
+        if (name === "__stsh_chats" && replacement.has("__stsh_roles"))
+          sql = sql.replace("REFERENCES __stsh_roles(role_id)", `REFERENCES ${quote2(tempName("__stsh_roles"))}(role_id)`);
+      }
+      return { sql };
+    };
+    for (const name of tableNames)
+      if (replacement.has(name)) {
+        commands.push(create(name, true));
+        for (const row of decision.rows[name])
+          commands.push({
+            sql: `INSERT INTO ${quote2(tempName(name))}(${MANAGEMENT_COLUMNS[name].map(quote2).join(",")}) VALUES(${row.map(() => "?").join(",")})`,
+            binds: row
+          });
+        commands.push(...rowChecks(quote2(tempName(name)), MANAGEMENT_COLUMNS[name], decision.rows[name]));
+      }
+    const recreate = new Set(decision.recreateObjects);
+    for (const object of facts.objects)
+      if (object.expectedType === "view" && (replacement.size || recreate.has(object.name)) && object.type === "view")
+        commands.push({ sql: `DROP VIEW ${quote2(object.name)}` });
+    const extensions = facts.objects.filter((object) => !object.expectedType && object.sql && ["index", "trigger"].includes(object.type) && replacement.has(object.table));
+    for (const name of [...tableNames].reverse())
+      if (replacement.has(name) && facts.objects.some((object) => object.name === name && object.type === "table"))
+        commands.push({ sql: `DROP TABLE ${quote2(name)}` });
+    for (const name of tableNames)
+      if (replacement.has(name)) {
+        commands.push(create(name, false), {
+          sql: `INSERT INTO ${quote2(name)}(${MANAGEMENT_COLUMNS[name].map(quote2).join(",")}) SELECT ${MANAGEMENT_COLUMNS[name].map(quote2).join(",")} FROM ${quote2(tempName(name))}`
+        });
+        commands.push(...rowChecks(quote2(name), MANAGEMENT_COLUMNS[name], decision.rows[name]));
+      }
+    for (const name of ["__stsh_roles", "__stsh_chats"])
+      if (replacement.has(name) && facts.sequences[name] !== undefined) {
+        const value = facts.sequences[name];
+        commands.push({ sql: "UPDATE sqlite_sequence SET seq=MAX(seq,?) WHERE name=?", binds: [value, name] }, {
+          sql: "INSERT INTO sqlite_sequence(name,seq) SELECT ?,? WHERE NOT EXISTS(SELECT 1 FROM sqlite_sequence WHERE name=?)",
+          binds: [name, value, name]
+        });
+      }
+    for (const spec of specs)
+      if (spec.type !== "table" && (recreate.has(spec.name) || replacement.size && spec.type === "view")) {
+        const object = facts.objects.find((object) => object.name === spec.name);
+        if (spec.type === "index" && object?.type === "index" && !replacement.has(object.table))
+          commands.push({ sql: `DROP INDEX ${quote2(spec.name)}` });
+        commands.push({ sql: spec.sql });
+      }
+    for (const extension of extensions)
+      commands.push({ sql: extension.sql });
+    if (!replacement.has("__stsh_targets"))
+      for (const row of decision.insertTargets)
+        commands.push({
+          sql: "INSERT INTO __stsh_targets(scope,char_dbid,chat_dbid,origin,state) VALUES(?,?,?,?,?)",
+          binds: row
+        });
+    if (!replacement.has("__stsh_meta") && decision.reasons.some((reason) => reason.code === "repair-version"))
+      commands.push({ sql: "INSERT OR REPLACE INTO __stsh_meta(key,value) VALUES('schema_version','6')" });
+    commands.push(check(`SELECT count(*)=0 FROM pragma_foreign_key_check WHERE "table" IN ('__stsh_roles','__stsh_chats','__stsh_targets','__stsh_meta')`));
+    for (const name of [...tableNames].reverse())
+      if (replacement.has(name))
+        commands.push({ sql: `DROP TABLE ${quote2(tempName(name))}` });
+    commands.push({ sql: "DROP TABLE temp.__stsh_repair_guard" });
+    return commands;
+  }
+  async function applyManagementRepair(root, expected, options = {}) {
+    const current = await inspect(root, options);
+    if (current.plan.evidence !== expected?.evidence)
+      return { status: "skipped", plan: current.plan };
+    if (current.plan.kind === "blocked")
+      return { status: "blocked", plan: current.plan };
+    if (current.plan.kind === "none")
+      return { status: "unchanged", plan: current.plan };
+    await root.transaction(commandsFor(current.facts, current.decision), undefined, { management: true });
+    const saved = await readManagementRepairFacts(root), schema = await inspectSchema6(root);
+    if (schema.state !== "valid")
+      throw new ServiceError({
+        code: "RESULT_UNCONFIRMED",
+        resultState: "unconfirmed",
+        message: "管理库已提交，但结构读回未通过。请重新扫描。"
+      });
+    for (const name of tableNames) {
+      const rows = saved.tables[name].rows.map((row) => MANAGEMENT_COLUMNS[name].map((column) => row[saved.tables[name].columns.indexOf(column)]));
+      const expectedRows = current.decision.rows[name];
+      if (managementValueKey(rows.map(managementValueKey).sort()) !== managementValueKey(expectedRows.map(managementValueKey).sort()))
+        throw new ServiceError({
+          code: "RESULT_UNCONFIRMED",
+          resultState: "unconfirmed",
+          message: "管理库已保存，但保留记录读回不一致。请重新扫描。"
+        });
+    }
+    return { status: "repaired", plan: (await inspect(root, options)).plan };
+  }
+
+  // src/database-maintenance-rules.ts
+  function decideDatabaseMaintenance(target, snapshot, database, repair, observations = []) {
+    const records = snapshot.records.filter((r) => r.scope === target.scope && r.id?.toLowerCase() === (target.scope === "chat" ? target.chatDbId : target.charDbId).toLowerCase() && (target.scope === "char" || r.parent?.toLowerCase() === target.charDbId.toLowerCase()));
+    const plan = {
+      kind: "blocked",
+      target,
+      relativePath: databasePath(target.charDbId, target.scope === "chat" ? target.chatDbId : undefined),
+      records,
+      reasons: [],
+      loss: [],
+      file: database.status === "missing" ? "missing" : database.status === "checked" || database.failure === "database" ? "present" : "unknown",
+      ...repair ? { scopedRepair: repair } : {}
+    };
+    const block = (code) => {
+      plan.reasons = [{ code }];
+      return plan;
+    };
+    if (snapshot.management !== "valid")
+      return block("management-unavailable");
+    const identities = [
+      ...database.identity && database.identity !== "invalid" ? [database.identity] : [],
+      ...repair?.identities ?? []
+    ];
+    if (identities.some((identity) => snapshot.records.some((r) => r.confirmed && r.state !== "deleted" && r.scope === identity.scope && r.id === (identity.scope === "chat" ? identity.chatDbId : identity.charDbId) && (r.scope === "char" || r.parent === identity.charDbId)) && (identity.scope !== target.scope || identity.charDbId !== target.charDbId || (identity.chatDbId ?? "") !== (target.scope === "chat" ? target.chatDbId : ""))))
+      return block("identity-owned-elsewhere");
+    if (database.status === "checked" && repair?.kind === "none") {
+      plan.kind = "none";
+      return plan;
+    }
+    if (!records.length || !records.some((r) => r.state !== "deleted" && r.confirmed))
+      return block("owner-unconfirmed");
+    if (records.some((r) => r.state !== "deleted" && !observations.some((o) => o.scope === r.scope && o.referenceId === r.referenceId && o.avatar === r.avatar && o.file === r.file && o.status === "same" && (r.scope === "char" || o.observedId === r.id))))
+      return block("owner-readback-required");
+    if (database.status === "unknown" && database.failure !== "database")
+      return block("file-unreadable");
+    const registration = snapshot.targets.find((t) => t.scope === target.scope && t.charDbId === target.charDbId && (t.chatDbId ?? "") === (target.scope === "chat" ? target.chatDbId : ""));
+    if (database.status === "missing" && registration?.origin === "generated" && registration.state === "never") {
+      plan.kind = "none";
+      return plan;
+    }
+    const lostMetadata = repair?.kind === "blocked" && repair.reasons.length > 0 && repair.reasons.every((reason) => ["metadata-columns-unavailable", "metadata-value-unavailable", "metadata-conflict", "object-kind"].includes(reason.code));
+    if (database.status === "missing" || database.failure === "database" || repair?.kind === "reset-required" || lostMetadata) {
+      plan.kind = "reset";
+      plan.reasons = repair?.reasons ?? [{ code: database.status === "missing" ? "file-missing" : "file-damaged" }];
+      plan.loss = [
+        target.scope === "chat" ? "该聊天库中的全部插件业务数据和历史状态将重新开始；共用这份数据的聊天一起受影响，酒馆消息不变。" : "这份角色库中的插件业务数据将重新开始；其下聊天库和酒馆消息不变。"
+      ];
+      return plan;
+    }
+    plan.kind = repair?.kind === "repair" ? "repair" : repair?.kind === "none" ? "none" : "blocked";
+    plan.reasons = repair?.reasons ?? [{ code: "file-unreadable" }];
+    if (repair?.diagnostics?.length)
+      plan.diagnostics = repair.diagnostics;
+    return plan;
+  }
+
+  // src/global-reconstruction-rules.ts
+  var text2 = (v) => typeof v === "string" && !!v && !v.includes("\x00") && v.length <= 4096;
+  var integer2 = (v, minimum) => typeof v === "number" && Number.isSafeInteger(v) && v >= minimum;
+  function unambiguousRows(rows, key) {
+    const groups = new Map;
+    for (const row of rows) {
+      const k = key(row), group = groups.get(k) ?? [];
+      if (!group.some((old) => managementValueKey(old) === managementValueKey(row)))
+        group.push(row);
+      groups.set(k, group);
+    }
+    let lost = 0;
+    const retained = [...groups.values()].flatMap((group) => {
+      if (group.length === 1)
+        return group;
+      lost += group.length;
+      return [];
+    });
+    return { rows: retained, lost };
+  }
+  function recoverGlobalRoles(input) {
+    let lost = 0;
+    const validRows = input.roles.map((row) => [...row]).filter((r) => {
+      if (!isUuid(r[2])) {
+        const children = input.chats.filter((chat) => chat[1] === r[0]), parents = new Set(children.map((chat) => chat[4]).filter(isUuid));
+        if (children.length && parents.size === 1 && children.every((chat) => isUuid(chat[4])))
+          r[2] = [...parents][0];
+      }
+      const valid = integer2(r[0], 1) && text2(r[1]) && (r[2] === null && !input.identityColumnMissing || isUuid(r[2])) && integer2(r[3], 0) && typeof r[4] === "number" && [0, 1].includes(r[4]) && ["generated", "legacy"].includes(String(r[5])) && ["active", "deleted"].includes(String(r[6])) && (r[3] !== 0 || r[2] === null && r[4] === 0);
+      if (!valid)
+        lost++;
+      return valid;
+    });
+    const ids = unambiguousRows(validRows, (row) => String(row[0])), values = new Map, redirect = new Map;
+    for (const row of ids.rows.sort((a, b) => Number(a[0]) - Number(b[0]))) {
+      const key = managementValueKey(row.slice(1)), same = values.get(key);
+      if (same)
+        redirect.set(row[0], same[0]);
+      else
+        values.set(key, row);
+    }
+    const coordinates = unambiguousRows([...values.values()], (row) => row[6] === "active" ? String(row[1]) : `deleted:${row[0]}`);
+    return { rows: coordinates.rows, redirect, lost: lost + ids.lost + coordinates.lost };
+  }
+  function recoverGlobalChats(input) {
+    let lost = 0;
+    const validRows = input.chats.map((row) => [...row]).filter((r) => {
+      if (typeof r[1] === "number")
+        r[1] = input.roleRedirect.get(r[1]) ?? r[1];
+      let parent = input.roles.find((role) => role[0] === r[1]);
+      if (!parent && isUuid(r[4])) {
+        const candidates = input.roles.filter((role) => role[2] === r[4]);
+        if (candidates.length === 1) {
+          parent = candidates[0];
+          r[1] = parent[0];
+        }
+      }
+      if (parent && input.parentColumnMissing && isUuid(parent[2]))
+        r[4] = parent[2];
+      const valid = integer2(r[0], 1) && integer2(r[1], 1) && text2(r[2]) && (r[3] === null && !input.identityColumnMissing || isUuid(r[3])) && isUuid(r[4]) && integer2(r[5], 1) && typeof r[6] === "number" && [0, 1].includes(r[6]) && ["generated", "legacy"].includes(String(r[7])) && ["active", "retained", "deleted"].includes(String(r[8])) && parent?.[2] === r[4];
+      if (!valid)
+        lost++;
+      return valid;
+    });
+    const ids = unambiguousRows(validRows, (row) => String(row[0])), values = new Map;
+    for (const row of ids.rows.sort((a, b) => Number(a[0]) - Number(b[0]))) {
+      const key = managementValueKey(row.slice(1));
+      if (!values.has(key))
+        values.set(key, row);
+    }
+    const coordinates = unambiguousRows([...values.values()], (row) => row[8] === "deleted" ? `deleted:${row[0]}` : managementValueKey([row[1], row[2]]));
+    return { rows: coordinates.rows, lost: lost + ids.lost + coordinates.lost };
+  }
+  function reconstructGlobalRecords(facts, discovery) {
+    const result = {
+      blocked: [],
+      rows: { __stsh_meta: [], __stsh_targets: [], __stsh_roles: [], __stsh_chats: [] },
+      lost: 0
+    };
+    if (facts?.unreadable.length) {
+      result.blocked.push("file-unreadable");
+      return result;
+    }
+    if (discovery && !discovery.complete)
+      result.blocked.push("discovery-incomplete");
+    if (facts?.externalForeignKeys.length)
+      result.blocked.push("external-foreign-key");
+    if (facts?.objects.some((o) => o.name.startsWith("__st_sle_helper_")))
+      result.blocked.push("legacy-format");
+    if (facts?.objects.some((o) => o.name.startsWith("__stsh_") && !o.expectedType && !["index", "trigger"].includes(o.type)))
+      result.blocked.push("unknown-management-object");
+    const project = (name) => {
+      const table = facts?.tables[name];
+      if (!table)
+        return [];
+      return table.rows.map((row) => MANAGEMENT_COLUMNS[name].map((c) => row[table.columns.indexOf(c)] ?? null));
+    };
+    const unique = (rows, key) => {
+      const decision = unambiguousRows(rows, key);
+      result.lost += decision.lost;
+      return decision.rows;
+    };
+    const meta = project("__stsh_meta");
+    const versions = meta.filter((r) => r[0] === "schema_version").map((r) => r[1]);
+    if (versions.some((value) => {
+      try {
+        const version = typeof value === "string" ? JSON.parse(value) : value;
+        return typeof version === "number" && Number.isSafeInteger(version) && version >= 0 && version !== 6;
+      } catch {
+        return false;
+      }
+    }))
+      result.blocked.push("unknown-version");
+    result.rows.__stsh_meta = unique(meta.filter((r) => {
+      const valid = text2(r[0]) && typeof r[1] === "string";
+      if (!valid)
+        result.lost++;
+      return valid && r[0] !== "schema_version";
+    }), (r) => String(r[0]));
+    result.rows.__stsh_meta.push(["schema_version", "6"]);
+    const rawChats = project("__stsh_chats"), rawRoles = project("__stsh_roles");
+    const roles = recoverGlobalRoles({
+      roles: rawRoles,
+      chats: rawChats,
+      identityColumnMissing: !!facts?.tables.__stsh_roles && !facts.tables.__stsh_roles.columns.includes("char_dbid")
+    });
+    result.rows.__stsh_roles = roles.rows;
+    const chats = recoverGlobalChats({
+      chats: rawChats,
+      roles: roles.rows,
+      roleRedirect: roles.redirect,
+      identityColumnMissing: !!facts?.tables.__stsh_chats && !facts.tables.__stsh_chats.columns.includes("chat_dbid"),
+      parentColumnMissing: !facts?.tables.__stsh_chats?.columns.includes("parent_char_dbid")
+    });
+    result.rows.__stsh_chats = chats.rows;
+    result.lost += roles.lost + chats.lost;
+    let roleId = Math.max(facts?.sequences.__stsh_roles ?? 0, ...rawRoles.map((r) => integer2(r[0], 1) ? r[0] : 0), 0);
+    let chatId = Math.max(facts?.sequences.__stsh_chats ?? 0, ...rawChats.map((r) => integer2(r[0], 1) ? r[0] : 0), 0);
+    const matches = discovery?.matches ?? [];
+    for (const match of matches) {
+      if (!text2(match.avatar) || !text2(match.file) || !isUuid(match.parent) || !isUuid(match.chatId) || match.observedId !== match.chatId || match.rolePresent === false)
+        continue;
+      if (matches.some((m) => m.avatar === match.avatar && (m.parent !== match.parent || m.file === match.file && m.chatId !== match.chatId)))
+        continue;
+      let role = result.rows.__stsh_roles.find((r) => r[1] === match.avatar && r[6] === "active");
+      if (role && role[2] !== match.parent)
+        continue;
+      if (!role && match.rolePresent !== true)
+        continue;
+      if (!role) {
+        role = [++roleId, match.avatar, match.parent, 1, 1, "legacy", "active"];
+        result.rows.__stsh_roles.push(role);
+      }
+      if (!result.rows.__stsh_chats.some((r) => r[1] === role[0] && r[2] === match.file && r[8] !== "deleted"))
+        result.rows.__stsh_chats.push([
+          ++chatId,
+          role[0],
+          match.file,
+          match.chatId,
+          match.parent,
+          1,
+          1,
+          "legacy",
+          "active"
+        ]);
+    }
+    const targets = project("__stsh_targets").filter((r) => ["char", "chat"].includes(String(r[0])) && isUuid(r[1]) && (r[0] === "char" ? r[2] === "" : isUuid(r[2])) && ["generated", "legacy"].includes(String(r[3])) && ["never", "creating", "ready"].includes(String(r[4])));
+    result.rows.__stsh_targets = unique(targets, (r) => managementValueKey(r.slice(0, 3)));
+    for (const file of facts?.targetFiles ?? []) {
+      if (file.state !== "ready" && file.state !== "needs-repair")
+        continue;
+      const t = file.target;
+      const generated = t.origin === "generated" || result.rows.__stsh_roles.some((row) => t.scope === "char" && row[2] === t.charDbId && row[5] === "generated") || result.rows.__stsh_chats.some((row) => t.scope === "chat" && row[4] === t.charDbId && row[3] === t.chatDbId && row[7] === "generated");
+      if (!result.rows.__stsh_targets.some((r) => r[0] === t.scope && r[1] === t.charDbId && r[2] === (t.chatDbId ?? "")))
+        result.rows.__stsh_targets.push([
+          t.scope,
+          t.charDbId,
+          t.chatDbId ?? "",
+          generated ? "generated" : "legacy",
+          "ready"
+        ]);
+    }
+    if (!Number.isSafeInteger(roleId + 1) || !Number.isSafeInteger(chatId + 1))
+      result.blocked.push("reference-id-exhausted");
+    return result;
+  }
+
+  // src/worker/global-reconstruction.ts
+  var quote3 = (v) => `"${v.replaceAll('"', '""')}"`;
+  function reconstructionRecords(decision) {
+    const roles = decision.rows.__stsh_roles;
+    return [
+      ...roles.map((r) => ({
+        scope: "char",
+        referenceId: Number(r[0]),
+        avatar: String(r[1]),
+        id: r[2],
+        generation: Number(r[3]),
+        confirmed: r[4] === 1,
+        origin: r[5],
+        state: r[6],
+        taskReasons: [],
+        parentDependency: false,
+        shared: false
+      })),
+      ...decision.rows.__stsh_chats.map((r) => ({
+        scope: "chat",
+        referenceId: Number(r[0]),
+        parentReferenceId: Number(r[1]),
+        avatar: String(roles.find((role) => role[0] === r[1])[1]),
+        file: String(r[2]),
+        id: r[3],
+        parent: String(r[4]),
+        generation: Number(r[5]),
+        confirmed: r[6] === 1,
+        origin: r[7],
+        state: r[8],
+        taskReasons: [],
+        parentDependency: false,
+        shared: false
+      }))
+    ];
+  }
+  function reconstructionCommands(decision, facts) {
+    if (decision.blocked.length)
+      throw Error("管理登记仍有无法确定的依赖，未开始重建。");
+    const commands = [];
+    const owned = new Set(SCHEMA6.map((sql) => sql.split(" ")[sql.startsWith("CREATE UNIQUE") ? 3 : 2]));
+    for (const object of facts?.objects ?? [])
+      if (owned.has(object.name) && object.type && object.type !== "table")
+        commands.push({ sql: `DROP ${object.type.toUpperCase()} ${quote3(object.name)}` });
+    for (const name of ["__stsh_chats", "__stsh_roles", "__stsh_targets", "__stsh_meta"]) {
+      const object = facts?.objects.find((o) => o.name === name && o.type);
+      if (object)
+        commands.push({ sql: `DROP ${object.type.toUpperCase()} ${quote3(name)}` });
+    }
+    commands.push(...SCHEMA6.map((sql) => ({ sql })));
+    for (const [name, rows] of Object.entries(decision.rows))
+      for (const row of rows)
+        commands.push({
+          sql: `INSERT INTO ${quote3(name)}(${MANAGEMENT_COLUMNS[name].map(quote3).join(",")}) VALUES(${row.map(() => "?").join(",")})`,
+          binds: row
+        });
+    for (const object of facts?.objects ?? [])
+      if (!owned.has(object.name) && Object.hasOwn(MANAGEMENT_COLUMNS, object.table) && ["index", "trigger"].includes(object.type) && object.sql)
+        commands.push({ sql: object.sql });
+    for (const [name, value] of Object.entries(facts?.sequences ?? {}))
+      commands.push({ sql: "UPDATE sqlite_sequence SET seq=max(seq,?) WHERE name=?", binds: [value, name] }, {
+        sql: "INSERT INTO sqlite_sequence(name,seq) SELECT ?,? WHERE NOT EXISTS(SELECT 1 FROM sqlite_sequence WHERE name=?)",
+        binds: [name, value, name]
+      });
+    return commands;
+  }
+  async function readPreservedGlobal(root) {
+    const owned = new Set(SCHEMA6.map((sql) => sql.split(" ")[sql.startsWith("CREATE UNIQUE") ? 3 : 2]));
+    const objects = (await root.query({ sql: "SELECT name,type,sql FROM sqlite_master ORDER BY name" })).rows.filter((row) => !owned.has(String(row[0])) && !String(row[0]).startsWith("sqlite_") && row[2] !== null);
+    const tables = [];
+    for (const object of objects.filter((row) => row[1] === "table")) {
+      const name = String(object[0]), columns = (await root.query({ sql: "SELECT name FROM pragma_table_xinfo(?) ORDER BY cid", binds: [name] })).rows.map((row) => String(row[0]));
+      tables.push({
+        name,
+        columns,
+        rows: (await root.query({ sql: `SELECT ${columns.map(quote3).join(",")} FROM ${quote3(name)}` })).rows
+      });
+    }
+    return { objects, tables };
+  }
+  function contentChecks(table) {
+    const check = (sql, binds) => ({
+      sql: `INSERT INTO temp.__stsh_global_guard(value) SELECT CASE WHEN (${sql}) THEN 1 ELSE 0 END`,
+      binds
+    });
+    const groups = new Map;
+    for (const row of table.rows) {
+      const key = managementValueKey(row), group = groups.get(key);
+      if (group)
+        group.count++;
+      else
+        groups.set(key, { row, count: 1 });
+    }
+    return [
+      check(`SELECT count(*)=? FROM ${quote3(table.name)}`, [table.rows.length]),
+      ...[...groups.values()].map(({ row, count }) => check(`SELECT count(*)=? FROM ${quote3(table.name)} WHERE ${table.columns.map((column) => `typeof(${quote3(column)})=typeof(?) AND quote(${quote3(column)})=quote(?) COLLATE BINARY`).join(" AND ")}`, [count, ...row.flatMap((value) => [value, value])]))
+    ];
+  }
+  async function applyGlobalReconstruction(root, facts, discovery, reset, create = false) {
+    const decision = reconstructGlobalRecords(facts, discovery);
+    const commands = reconstructionCommands(decision, facts);
+    const preserved = !reset ? await readPreservedGlobal(root) : undefined;
+    if (preserved) {
+      const before = [
+        ...preserved.tables,
+        ...Object.entries(facts?.tables ?? {}).map(([name, table]) => ({
+          name,
+          columns: table.columns,
+          rows: table.rows
+        }))
+      ];
+      commands.unshift({ sql: "CREATE TEMP TABLE __stsh_global_guard(value INTEGER NOT NULL CHECK(value=1))" }, ...before.flatMap(contentChecks));
+      commands.push(...preserved.tables.flatMap(contentChecks), { sql: "DROP TABLE temp.__stsh_global_guard" });
+    }
+    if (reset)
+      await root.replaceForMaintenance(commands, create);
+    else
+      await root.transaction(commands, undefined, { management: true });
+    await root.refresh();
+    await assertSchema6(root);
+    for (const [name, rows] of Object.entries(decision.rows)) {
+      const actual = (await root.query({
+        sql: `SELECT ${MANAGEMENT_COLUMNS[name].map(quote3).join(",")} FROM ${quote3(name)}`
+      })).rows;
+      if (managementValueKey(actual.map(managementValueKey).sort()) !== managementValueKey(rows.map(managementValueKey).sort()))
+        throw new ServiceError({
+          code: "RESULT_UNCONFIRMED",
+          resultState: "unconfirmed",
+          message: "全局库已保存，但插件登记或设置读回不一致。请重新扫描。"
+        });
+    }
+    if (preserved) {
+      const saved = await readPreservedGlobal(root);
+      if (managementValueKey(saved.objects) !== managementValueKey(preserved.objects) || managementValueKey(saved.tables.map((table) => ({
+        name: table.name,
+        columns: table.columns,
+        rows: table.rows.map(managementValueKey).sort()
+      }))) !== managementValueKey(preserved.tables.map((table) => ({
+        name: table.name,
+        columns: table.columns,
+        rows: table.rows.map(managementValueKey).sort()
+      }))))
+        throw new ServiceError({
+          code: "RESULT_UNCONFIRMED",
+          resultState: "unconfirmed",
+          message: "全局库已保存，但业务表或用户结构读回不一致。请重新扫描。"
+        });
+    }
+  }
+
+  // src/dvs2/ext/tables/worldbook.ts
+  var import_semver = __toESM(require_semver2(), 1);
+  function strictVersion(version) {
+    const parsed = import_semver.parse(version, { loose: false });
+    if (!parsed || `${parsed.version}${parsed.build.length ? `+${parsed.build.join(".")}` : ""}` !== version)
+      throw new Error(`DVS DDL 版本必须是完整 SemVer major.minor.patch：${version}`);
+    return version;
+  }
+
+  // src/dvs2/ids.ts
+  function identifierBytes(value) {
+    if (!ArrayBuffer.isView(value) || Object.prototype.toString.call(value) !== "[object Uint8Array]" || value.byteLength !== 16)
+      throw new Error("DVS 标识必须是 16 字节 BLOB。");
+    return new Uint8Array(value);
+  }
+
+  // src/scoped-database-repair-rules.ts
+  var scopedValueKey = (value) => JSON.stringify(value, (_key, cell) => cell instanceof Uint8Array ? { bytes: Array.from(cell) } : cell);
+  var reason = (code, object) => ({ code, ...object ? { object } : {} });
+  var sameRows = (a, b) => scopedValueKey(a.map(scopedValueKey).sort()) === scopedValueKey(b.map(scopedValueKey).sort());
+  var project = (table, columns) => columns.every((column) => table.columns.includes(column)) ? table.rows.map((row) => columns.map((column) => row[table.columns.indexOf(column)])) : table.rows.length ? undefined : [];
+  var unique = (rows) => [...new Map(rows.map((row) => [scopedValueKey(row), row])).values()];
+  function helperMetadataIdentities(table) {
+    const identities = new Map;
+    for (const row of table ? project(table, ["key", "value"]) ?? [] : []) {
+      if (row[0] !== "identity" || typeof row[1] !== "string")
+        continue;
+      try {
+        const value = JSON.parse(row[1]);
+        if (!value || typeof value !== "object" || !isUuid(value.charDbId))
+          continue;
+        let identity;
+        if (value.scope === "char" && value.chatDbId === undefined)
+          identity = { scope: "char", charDbId: value.charDbId };
+        else if (value.scope === "chat" && isUuid(value.chatDbId))
+          identity = { scope: "chat", charDbId: value.charDbId, chatDbId: value.chatDbId };
+        else
+          continue;
+        identities.set(scopedValueKey(identity), identity);
+      } catch {}
+    }
+    return [...identities.values()].sort((a, b) => scopedValueKey(a).localeCompare(scopedValueKey(b)));
+  }
+  var validIdentifier = (value) => {
+    try {
+      identifierBytes(value);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  function decideHelperMetadata(table, identity) {
+    const expected = JSON.stringify(identity);
+    if (!table)
+      return { kind: "repair", rows: [["identity", expected]], reasons: [reason("restore-identity", "__stsh_meta")] };
+    const rows = project(table, ["key", "value"]);
+    if (!rows)
+      return { kind: "blocked", rows: [], reasons: [reason("metadata-columns-unavailable", table.name)] };
+    const values = new Map, nullKeys = [];
+    for (const row of rows) {
+      if (row[0] !== null && typeof row[0] !== "string" || typeof row[1] !== "string")
+        return { kind: "blocked", rows: [], reasons: [reason("metadata-value-unavailable", table.name)] };
+      if (row[0] === null) {
+        nullKeys.push(row);
+        continue;
+      }
+      const old = values.get(row[0]);
+      if (old && old[1] !== row[1]) {
+        if (row[0] !== "identity")
+          return { kind: "blocked", rows: [], reasons: [reason("metadata-conflict", table.name)] };
+        values.set("identity", ["identity", expected]);
+      } else
+        values.set(row[0], row);
+    }
+    const old = values.get("identity");
+    let parsed;
+    try {
+      const value = old ? JSON.parse(old[1]) : undefined;
+      if (value && typeof value === "object" && !Array.isArray(value))
+        parsed = value;
+    } catch {}
+    const matches = parsed?.scope === identity.scope && parsed.charDbId === identity.charDbId && parsed.chatDbId === identity.chatDbId;
+    if (!matches) {
+      const next = { ...parsed, ...identity };
+      if (identity.scope === "char")
+        delete next.chatDbId;
+      values.set("identity", ["identity", JSON.stringify(next)]);
+    }
+    const retained = [...values.values(), ...nullKeys];
+    const changed = !table.matches || !sameRows(rows, retained);
+    return {
+      kind: changed ? "repair" : "none",
+      rows: retained,
+      reasons: changed ? [reason("restore-identity", table.name)] : []
+    };
+  }
+  function decideDvsVersion(table) {
+    const rows = table ? project(table, ["singleton", "version"]) : undefined;
+    if (!rows?.length)
+      return { kind: "reset-required", rows: [], reasons: [reason("dvs-version-lost", "_dvs_version")] };
+    const versions = new Set;
+    for (const row of rows) {
+      try {
+        if (typeof row[1] !== "string")
+          throw Error();
+        strictVersion(row[1]);
+        versions.add(row[1]);
+      } catch {
+        return { kind: "reset-required", rows: [], reasons: [reason("dvs-version-lost", "_dvs_version")] };
+      }
+    }
+    if (versions.size !== 1)
+      return { kind: "reset-required", rows: [], reasons: [reason("dvs-version-conflict", "_dvs_version")] };
+    const retained = [[1, [...versions][0]]], changed = !table.matches || !sameRows(rows, retained);
+    return {
+      kind: changed ? "repair" : "none",
+      rows: retained,
+      reasons: changed ? [reason("rebuild-dvs-table", "_dvs_version")] : []
+    };
+  }
+  function decideDvsCounter(table) {
+    const rows = table ? project(table, ["singleton", "successful_updates"]) : undefined;
+    const valid = rows?.every((row) => row[0] === 1 && typeof row[1] === "number" && Number.isSafeInteger(row[1]) && row[1] >= 0);
+    const distinct = rows ? unique(rows) : [];
+    const retained = valid && distinct.length === 1 ? distinct : [[1, 0]];
+    const changed = !table?.matches || !rows || !sameRows(rows, retained);
+    return {
+      kind: changed ? "repair" : "none",
+      rows: retained,
+      reasons: changed ? [reason(valid && distinct.length === 1 ? "rebuild-dvs-table" : "reset-gc-counter", "_dvs_gc_counter")] : []
+    };
+  }
+  function normalizeDvsIndex(rows, entities) {
+    const rids = new Set(entities.rids.filter(validIdentifier).map(scopedValueKey));
+    const retained = unique(rows.filter((row) => validIdentifier(row[0]) && validIdentifier(row[1]) && (entities.state !== "known" || rids.has(scopedValueKey(row[1])))));
+    return { rows: retained, removed: rows.length - retained.length };
+  }
+  function decideDvsTables(facts) {
+    const result = { kind: "none", repairs: [], reasons: [] };
+    const dvs = facts.objects.filter((object) => object.name.startsWith("_dvs_"));
+    if (!dvs.length)
+      return result;
+    if (dvs.some((object) => object.type === "table" && !["_dvs_version", "_dvs_gc_counter"].includes(object.name) && !object.name.startsWith("_dvs_index_")))
+      return { kind: "blocked", repairs: [], reasons: [reason("unknown-dvs-structure")] };
+    for (const name of facts.expectedIndexes)
+      if (!facts.tables.some((table) => table.name === name))
+        return { kind: "reset-required", repairs: [], reasons: [reason("dvs-index-history-lost", name)] };
+    for (const [name, columns, decide] of [
+      ["_dvs_version", ["singleton", "version"], decideDvsVersion],
+      ["_dvs_gc_counter", ["singleton", "successful_updates"], decideDvsCounter]
+    ]) {
+      const decision = decide(facts.tables.find((table) => table.name === name));
+      result.reasons.push(...decision.reasons);
+      if (decision.kind === "reset-required" || decision.kind === "blocked")
+        return { kind: decision.kind, repairs: [], reasons: result.reasons };
+      if (decision.kind === "repair")
+        result.repairs.push({ name, columns, rows: decision.rows });
+    }
+    for (const table of facts.tables.filter((table) => table.name.startsWith("_dvs_index_"))) {
+      const rows = project(table, ["fid", "rid"]);
+      if (!rows)
+        return {
+          kind: "reset-required",
+          repairs: [],
+          reasons: [...result.reasons, reason("dvs-index-history-lost", table.name)]
+        };
+      const business = facts.tables.find((candidate) => candidate.name === table.name.slice("_dvs_index_".length));
+      const ridColumn = business?.columns.indexOf("rid") ?? -1;
+      const normalized = normalizeDvsIndex(rows, {
+        state: business && ridColumn >= 0 ? "known" : "unknown",
+        rids: business && ridColumn >= 0 ? business.rows.map((row) => row[ridColumn]) : []
+      });
+      if (!table.matches || !sameRows(rows, normalized.rows)) {
+        result.repairs.push({ name: table.name, columns: ["fid", "rid"], rows: normalized.rows });
+        result.reasons.push(reason(normalized.removed ? "remove-invalid-dvs-records" : "rebuild-dvs-table", table.name));
+      }
+    }
+    result.kind = result.repairs.length ? "repair" : "none";
+    return result;
+  }
+  function decideScopedRepair(facts, identity, options = {}) {
+    if (facts.readFailure)
+      return {
+        kind: facts.readFailure === "database" ? "reset-required" : "blocked",
+        repairs: [],
+        reasons: [reason(facts.readFailure === "database" ? "sqlite-unreadable" : "file-unreadable")]
+      };
+    const wrongObject = facts.objects.find((object) => (object.name === "__stsh_meta" || object.name === "_dvs_version" || object.name === "_dvs_gc_counter" || object.name.startsWith("_dvs_index_")) && object.type !== "table" && object.sql !== null);
+    if (wrongObject)
+      return { kind: "blocked", repairs: [], reasons: [reason("object-kind", wrongObject.name)] };
+    const meta = facts.tables.find((table) => table.name === "__stsh_meta");
+    const metadata = !meta && options.requireIdentity === false ? { kind: "none", rows: [], reasons: [] } : decideHelperMetadata(meta, identity);
+    if (metadata.kind === "blocked")
+      return { kind: "blocked", repairs: [], reasons: metadata.reasons };
+    const dvs = decideDvsTables(facts);
+    if (dvs.kind === "blocked" || dvs.kind === "reset-required")
+      return dvs;
+    const repairs = [
+      ...metadata.kind === "repair" ? [{ name: "__stsh_meta", columns: ["key", "value"], rows: metadata.rows }] : [],
+      ...dvs.repairs
+    ];
+    for (const repair of repairs) {
+      const table = facts.tables.find((table) => table.name === repair.name);
+      if (table?.columns.some((column) => !repair.columns.includes(column)))
+        return { kind: "blocked", repairs: [], reasons: [reason("extra-columns", repair.name)] };
+      const dependency = facts.externalForeignKeys.find((ref) => ref.parent === repair.name);
+      if (dependency)
+        return { kind: "blocked", repairs: [], reasons: [reason("external-foreign-key", dependency.table)] };
+    }
+    return { kind: repairs.length ? "repair" : "none", repairs, reasons: [...metadata.reasons, ...dvs.reasons] };
+  }
+
+  // src/worker/scoped-database-repair.ts
+  var quote4 = (value) => `"${value.replaceAll('"', '""')}"`;
+  function definition(name) {
+    if (name === "__stsh_meta")
+      return { sql: SCOPED_META_TABLE_SQL, columns: ["key", "value"] };
+    if (name === "_dvs_version")
+      return { sql: DVS_VERSION_TABLE_SQL, columns: ["singleton", "version"] };
+    if (name === "_dvs_gc_counter")
+      return { sql: DVS_GC_COUNTER_TABLE_SQL, columns: ["singleton", "successful_updates"] };
+    if (name.startsWith("_dvs_index_"))
+      return { sql: createIndexSql(name.slice("_dvs_index_".length)), columns: ["fid", "rid"] };
+  }
+  function validateIdentity(identity, options) {
+    if (!identity || !["char", "chat"].includes(identity.scope) || !isUuid(identity.charDbId) || (identity.scope === "chat" ? !isUuid(identity.chatDbId) : identity.chatDbId !== undefined) || options.expectedIndexes?.some((name) => typeof name !== "string" || !name.startsWith("_dvs_index_") || name.length < 12 || name.includes("\x00")))
+      throw new ServiceError({
+        code: "INVALID_REQUEST",
+        message: "单库修复需要固定角色／聊天身份和有效的已有索引声明。"
+      });
+  }
+  async function readScopedRepairFacts(db, options = {}) {
+    const facts = {
+      tables: [],
+      objects: [],
+      expectedIndexes: [...new Set(options.expectedIndexes ?? [])].sort(),
+      externalForeignKeys: [],
+      diagnostics: []
+    };
+    try {
+      if (db.availability !== "ready")
+        throw new ServiceError({ code: "LOAD_FAILED", message: "数据库尚未正常打开。" });
+      await db.assertFileExisting();
+      facts.objects = (await db.query({ sql: "SELECT name,type,tbl_name,sql FROM sqlite_master ORDER BY type,name" })).rows.map((row) => ({
+        name: String(row[0]),
+        type: String(row[1]),
+        table: String(row[2]),
+        sql: row[3] === null ? null : String(row[3])
+      }));
+      for (const object of facts.objects.filter((object) => object.type === "table" && !object.name.startsWith("sqlite_"))) {
+        try {
+          const columns = (await db.query({ sql: "SELECT name FROM pragma_table_xinfo(?) ORDER BY cid", binds: [object.name] })).rows.map((row) => String(row[0]));
+          const rows = (await db.query({ sql: `SELECT ${columns.map(quote4).join(",")} FROM ${quote4(object.name)}` })).rows;
+          rows.sort((a, b) => scopedValueKey(a).localeCompare(scopedValueKey(b)));
+          const expected = definition(object.name);
+          facts.tables.push({
+            ...object,
+            columns,
+            rows,
+            ...expected ? {
+              expectedColumns: expected.columns,
+              matches: object.sql !== null && sameDefinition(object.sql, expected.sql)
+            } : {}
+          });
+          const refs = (await db.query({ sql: 'SELECT "table" FROM pragma_foreign_key_list(?)', binds: [object.name] })).rows;
+          for (const row of refs)
+            if (definition(String(row[0])))
+              facts.externalForeignKeys.push({ table: object.name, parent: String(row[0]) });
+        } catch (error) {
+          facts.readFailure = "read";
+          facts.diagnostics.push({ object: object.name, error: errorData(error) });
+        }
+      }
+    } catch (error) {
+      facts.readFailure = db.loadFailureStage === "database" ? "database" : "read";
+      facts.diagnostics.push({ object: "database", error: errorData(error) });
+    }
+    return facts;
+  }
+  async function evidence(facts, identity, options) {
+    return sha2562(new TextEncoder().encode(scopedValueKey({ facts, identity, requireIdentity: options.requireIdentity !== false })));
+  }
+  async function inspect2(db, identity, options) {
+    validateIdentity(identity, options);
+    const facts = await readScopedRepairFacts(db, options), decision = decideScopedRepair(facts, identity, options);
+    const plan = {
+      kind: decision.kind,
+      evidence: await evidence(facts, identity, options),
+      objects: [
+        ...new Set([
+          ...decision.repairs.map((repair) => repair.name),
+          ...decision.reasons.flatMap((reason) => reason.object ? [reason.object] : [])
+        ])
+      ],
+      reasons: decision.reasons,
+      identities: helperMetadataIdentities(facts.tables.find((table) => table.name === "__stsh_meta")),
+      ...facts.diagnostics.length ? { diagnostics: facts.diagnostics } : {}
+    };
+    return { facts, decision, plan };
+  }
+  async function inspectScopedRepair(db, identity, options = {}) {
+    return (await inspect2(db, identity, options)).plan;
+  }
+  function guard2(sql, binds = []) {
+    return {
+      sql: `INSERT INTO temp.__stsh_scoped_repair_guard(value) SELECT CASE WHEN (${sql}) THEN 1 ELSE 0 END`,
+      binds
+    };
+  }
+  function guardRows(name, columns, rows) {
+    const groups = new Map;
+    for (const row of rows) {
+      const key = scopedValueKey(row), old = groups.get(key);
+      if (old)
+        old.count++;
+      else
+        groups.set(key, { row, count: 1 });
+    }
+    return [
+      guard2(`SELECT count(*)=? FROM ${quote4(name)}`, [rows.length]),
+      ...[...groups.values()].map(({ row, count }) => guard2(`SELECT count(*)=? FROM ${quote4(name)} WHERE ${columns.map((column) => `typeof(${quote4(column)})=typeof(?) AND quote(${quote4(column)})=quote(?) COLLATE BINARY`).join(" AND ")}`, [count, ...row.flatMap((value) => [value, value])]))
+    ];
+  }
+  function createTable(name, asName) {
+    const original = definition(name).sql.replace("IF NOT EXISTS ", "");
+    const sql = original.replace(`CREATE TABLE ${name === "__stsh_meta" ? name : quote4(name)} `, () => `CREATE TABLE ${quote4(asName)} `);
+    return { sql };
+  }
+  function compileRepairs(facts, repairs) {
+    const commands = [
+      { sql: "CREATE TEMP TABLE __stsh_scoped_repair_guard(value INTEGER NOT NULL CHECK(value=1))" }
+    ];
+    commands.push(guard2("SELECT count(*)=? FROM sqlite_master", [facts.objects.length]));
+    for (const object of facts.objects)
+      commands.push(guard2("SELECT count(*)=1 FROM sqlite_master WHERE name=? AND type=? AND tbl_name=? AND sql IS ?", [
+        object.name,
+        object.type,
+        object.table,
+        object.sql
+      ]));
+    for (const table of facts.tables)
+      commands.push(...guardRows(table.name, table.columns, table.rows));
+    const copies = repairs.map((repair, index) => ({ ...repair, copy: `__stsh_scoped_copy_${index}` }));
+    for (const repair of copies) {
+      commands.push(createTable(repair.name, repair.copy));
+      for (const row of repair.rows)
+        commands.push({
+          sql: `INSERT INTO ${quote4(repair.copy)}(${repair.columns.map(quote4).join(",")}) VALUES(${row.map(() => "?").join(",")})`,
+          binds: row
+        });
+      commands.push(...guardRows(repair.copy, repair.columns, repair.rows));
+    }
+    for (const repair of copies) {
+      if (facts.tables.some((table) => table.name === repair.name))
+        commands.push({ sql: `DROP TABLE ${quote4(repair.name)}` });
+      commands.push(createTable(repair.name, repair.name), {
+        sql: `INSERT INTO ${quote4(repair.name)}(${repair.columns.map(quote4).join(",")}) SELECT ${repair.columns.map(quote4).join(",")} FROM ${quote4(repair.copy)}`
+      });
+      const extensions = facts.objects.filter((object) => object.table === repair.name && object.sql && ["index", "trigger"].includes(object.type));
+      for (const object of extensions)
+        commands.push({ sql: object.sql });
+      commands.push(...guardRows(repair.name, repair.columns, repair.rows));
+    }
+    for (const table of facts.tables.filter((table) => !repairs.some((repair) => repair.name === table.name)))
+      commands.push(...guardRows(table.name, table.columns, table.rows));
+    for (const repair of copies)
+      commands.push({ sql: `DROP TABLE ${quote4(repair.copy)}` });
+    commands.push({ sql: "DROP TABLE temp.__stsh_scoped_repair_guard" });
+    return commands;
+  }
+  function verifyRetainedTables(before, after, repairs) {
+    const expectedTables = [
+      ...before.tables.filter((table) => !repairs.some((repair) => repair.name === table.name)),
+      ...repairs
+    ];
+    for (const table of expectedTables) {
+      const { rows: expectedRows, columns: expectedColumns } = table;
+      const actual = after.tables.find((actual) => actual.name === table.name);
+      if (!actual || scopedValueKey(actual.columns) !== scopedValueKey(expectedColumns) || scopedValueKey(actual.rows.map(scopedValueKey).sort()) !== scopedValueKey(expectedRows.map(scopedValueKey).sort()))
+        throw new ServiceError({
+          code: "RESULT_UNCONFIRMED",
+          resultState: "unconfirmed",
+          message: "数据库已保存，但保留内容读回不一致。请重新扫描。"
+        });
+    }
+    for (const object of before.objects.filter((object) => object.sql !== null && !repairs.some((repair) => repair.name === object.name))) {
+      const actual = after.objects.find((actual) => actual.name === object.name && actual.type === object.type);
+      if (!actual || actual.sql !== object.sql)
+        throw new ServiceError({
+          code: "RESULT_UNCONFIRMED",
+          resultState: "unconfirmed",
+          message: "数据库已保存，但用户索引、触发器或视图未能读回确认。请重新扫描。"
+        });
+    }
+  }
+  async function applyScopedRepair(db, request, options = {}) {
+    const current = await inspect2(db, request.identity, options);
+    if (current.plan.evidence !== request.expected?.evidence)
+      return { status: "skipped", plan: current.plan };
+    if (current.plan.kind === "none")
+      return { status: "unchanged", plan: current.plan };
+    if (current.plan.kind !== "repair")
+      return { status: current.plan.kind, plan: current.plan };
+    await db.transaction(compileRepairs(current.facts, current.decision.repairs), undefined, { management: true });
+    await db.refresh();
+    const saved = await inspect2(db, request.identity, options);
+    if (saved.plan.kind !== "none") {
+      const original = saved.plan.diagnostics?.[0]?.error;
+      throw new ServiceError({
+        ...original,
+        code: "RESULT_UNCONFIRMED",
+        resultState: "unconfirmed",
+        message: "数据库已保存，但修复读回未通过。请重新扫描。",
+        ...original ? { causeError: original.causeError ?? { name: "ReadbackError", message: original.message } } : {}
+      });
+    }
+    verifyRetainedTables(current.facts, saved.facts, current.decision.repairs);
+    return { status: "repaired", plan: saved.plan };
+  }
+
+  // src/worker/database-maintenance.ts
+  async function maintenanceDigest(value) {
+    const bytes = value instanceof Uint8Array ? value : new TextEncoder().encode(managementValueKey(value));
+    return sha2562(bytes);
+  }
+  async function snapshot(context) {
+    if (context.root?.availability === "ready")
+      return scanRecords(context.root, storageName(context.directory));
+    const db = await context.create({ scope: "global" });
+    try {
+      await db.openExisting();
+      return await scanRecords(db, storageName(context.directory));
+    } finally {
+      await db.close();
+    }
+  }
+  async function inspectDatabaseMaintenance(context, target, evidence) {
+    const db = await context.create(target);
+    try {
+      if (target.scope !== "global") {
+        const records = await snapshot(context);
+        const database = await scanDatabase(db, context.directory, target.charDbId, target.scope === "chat" ? target.chatDbId : undefined);
+        const registration = records.targets.find((t) => t.scope === target.scope && t.charDbId === target.charDbId && (t.chatDbId ?? "") === (target.scope === "chat" ? target.chatDbId : ""));
+        const requireIdentity = registration?.origin === "generated" || records.records.some((r) => r.origin === "generated" && r.id === (target.scope === "chat" ? target.chatDbId : target.charDbId) && (r.scope === "char" || r.parent === target.charDbId));
+        const repair = database.status === "checked" ? await inspectScopedRepair(db, target, { requireIdentity }) : undefined;
+        const decision = decideDatabaseMaintenance(target, records, database, repair, evidence.observations);
+        if (database.reason)
+          decision.diagnostics = [
+            ...decision.diagnostics ?? [],
+            { object: decision.relativePath, error: { code: "LOAD_FAILED", message: database.reason } }
+          ];
+        return {
+          plan: {
+            ...decision,
+            evidence: await maintenanceDigest({ records, database, repair, target, observations: evidence.observations })
+          }
+        };
+      }
+      let bytes;
+      try {
+        bytes = (await createStorage(context.directory).readSnapshot()).bytes;
+      } catch (error) {
+        return {
+          plan: {
+            kind: "blocked",
+            evidence: "",
+            target,
+            relativePath: GLOBAL_DATABASE,
+            records: [],
+            reasons: [{ code: "file-unreadable" }],
+            loss: [],
+            file: "unknown",
+            diagnostics: [{ object: GLOBAL_DATABASE, error: errorData(error) }]
+          }
+        };
+      }
+      let facts;
+      let damaged = bytes === null;
+      try {
+        if (bytes !== null) {
+          await db.openExisting();
+          facts = await readManagementRepairFacts(db);
+        }
+      } catch (error) {
+        if (db.loadFailureStage !== "database")
+          throw error;
+        damaged = true;
+      }
+      const hasManagement = facts?.objects.some((object) => object.type && object.name.startsWith("__stsh_"));
+      if (!damaged && (hasManagement || !evidence.discovery?.matches.length)) {
+        const management = await inspectManagementRepair(db, {
+          ...context.managementOptions,
+          observations: evidence.observations
+        });
+        if (management.kind !== "blocked")
+          return {
+            plan: {
+              kind: "none",
+              evidence: management.evidence,
+              target,
+              relativePath: GLOBAL_DATABASE,
+              records: [],
+              reasons: [],
+              loss: [],
+              file: "present"
+            }
+          };
+      }
+      const initial = reconstructGlobalRecords(facts, evidence.discovery);
+      const targets = reconstructionRecords(initial).flatMap((r) => r.id ? [
+        {
+          scope: r.scope,
+          charDbId: r.scope === "char" ? r.id : r.parent,
+          ...r.scope === "chat" ? { chatDbId: r.id } : {},
+          origin: r.origin
+        }
+      ] : []);
+      const supplemental = [];
+      for (const t of targets) {
+        if (supplemental.some((old) => databasePath(old.target.charDbId, old.target.chatDbId) === databasePath(t.charDbId, t.chatDbId)))
+          continue;
+        const scoped = await context.create(t.scope === "chat" ? { scope: "chat", charDbId: t.charDbId, chatDbId: t.chatDbId } : { scope: "char", charDbId: t.charDbId });
+        try {
+          const read = await scanDatabase(scoped, context.directory, t.charDbId, t.chatDbId);
+          supplemental.push({
+            target: t,
+            state: read.status === "checked" ? "ready" : read.status === "missing" ? "missing" : "unknown"
+          });
+        } finally {
+          await scoped.close();
+        }
+      }
+      const completeFacts = facts ?? {
+        objects: [],
+        tables: {},
+        unreadable: [],
+        externalForeignKeys: [],
+        sequences: {},
+        targetFiles: [],
+        recordChecks: []
+      };
+      completeFacts.targetFiles = supplemental;
+      const decision = reconstructGlobalRecords(completeFacts, evidence.discovery);
+      const kind = decision.blocked.length ? "blocked" : damaged ? "reset" : "reconstruct";
+      const extraColumns = Object.entries(facts?.tables ?? {}).flatMap(([name, table]) => table.columns.filter((column) => !MANAGEMENT_COLUMNS[name].includes(column)).map((column) => `${name}.${column}`));
+      const loss = damaged ? ["全局库中的业务数据和插件设置无法恢复，将重新开始；角色库、聊天库与酒馆消息保留。"] : [
+        `保留可读的全局业务数据、设置和能够确认的关联；无法恢复的登记${decision.lost ? `或设置条目（${decision.lost} 条）` : "内容"}将舍弃。无法关联的旧文件仍保留。`,
+        ...!facts?.tables.__stsh_meta ? ["原插件设置表已缺失，设置无法恢复，需要重新配置。"] : [],
+        ...extraColumns.length ? [
+          `插件登记中有 ${extraColumns.length} 个无法兼容的附加字段，其内容会从新登记中移除；完整原内容保存在备份中。`
+        ] : []
+      ];
+      const plan = {
+        kind,
+        evidence: await maintenanceDigest({
+          bytes: bytes === null ? null : await maintenanceDigest(bytes),
+          facts: completeFacts,
+          discovery: evidence.discovery
+        }),
+        target,
+        relativePath: GLOBAL_DATABASE,
+        records: reconstructionRecords(decision),
+        reasons: [
+          ...decision.blocked.map((code) => ({ code })),
+          ...extraColumns.map((object) => ({ code: "discard-extra-field", object }))
+        ],
+        loss,
+        file: bytes === null ? "missing" : "present",
+        ...facts?.diagnostics?.length ? { diagnostics: facts.diagnostics } : {}
+      };
+      return { plan, facts: completeFacts };
+    } finally {
+      await db.close();
+    }
+  }
+  async function maintenanceBackup(directory, plan) {
+    if (plan.file === "missing")
+      return {};
+    const file = await readScanFile(directory, plan.relativePath);
+    return { file, digest: await maintenanceDigest(file.bytes) };
+  }
+
+  // src/worker/identity-restart.ts
+  var hash = (value) => sha2562(new TextEncoder().encode(JSON.stringify(value)));
+  async function inspect3(root, request, hooks, allocate = true) {
+    hooks.assertAvailable();
+    const snapshot = await scanRecords(root, "");
+    const roles = snapshot.records.filter((record) => record.scope === "char" && record.avatar === request.avatar && record.state === "active");
+    const allChats = snapshot.records.filter((record) => record.scope === "chat" && record.avatar === request.avatar && record.state !== "deleted");
+    const chats = request.scope === "chat" ? allChats.filter((record) => record.file === request.file) : allChats;
+    const role = roles[0] ?? null;
+    const preservedFiles = new Set;
+    const databaseFacts = [];
+    const plan = {
+      kind: "blocked",
+      scope: request.scope,
+      avatar: request.avatar,
+      ...request.file ? { file: request.file } : {},
+      evidence: "",
+      expectedRole: role,
+      expectedChats: chats,
+      chats: [],
+      preservedFiles: [],
+      reasons: [],
+      loss: [],
+      observations: request.observations,
+      discovery: request.discovery,
+      chatFiles: request.chatFiles
+    };
+    const block = (code) => {
+      plan.reasons.push({ code });
+    };
+    if (snapshot.management !== "valid" || roles.length > 1 || !request.avatar || request.scope === "chat" && !request.file)
+      block("management-unavailable");
+    if (role?.taskReasons.length || chats.some((record) => record.taskReasons.length))
+      block("active-task");
+    const files = new Set(chats.flatMap((record) => record.file ? [record.file] : []));
+    if (request.scope === "role") {
+      if (!request.chatFiles || request.chatFiles.some((file) => typeof file !== "string" || !file || file.includes("\x00")))
+        block("chat-list-unavailable");
+      else
+        for (const file of request.chatFiles)
+          files.add(file);
+    }
+    if (request.scope === "chat" && request.file)
+      files.add(request.file);
+    if (request.scope === "role") {
+      for (const match of request.discovery?.matches ?? [])
+        if (match.avatar === request.avatar)
+          files.add(match.file);
+    }
+    if (request.scope === "chat" && (!role?.id || !isUuid(role.id)))
+      block("parent-unresolved");
+    if (request.scope === "role" && role?.id && isUuid(role.id))
+      block("role-identity-known");
+    if (request.scope === "role" && request.discovery?.complete !== true)
+      block("discovery-incomplete");
+    if (request.scope === "role" && !request.observations?.some((observation) => observation.scope === "char" && observation.avatar === request.avatar && observation.status === "same") && !request.discovery?.matches.some((match) => match.avatar === request.avatar && match.rolePresent === true))
+      block("owner-readback-required");
+    let recoverable = false;
+    for (const file of files) {
+      const matching = chats.filter((record) => record.file === file);
+      const observed = request.observations?.find((observation) => observation.scope === "chat" && (!matching.length || observation.referenceId === matching[0].referenceId) && observation.avatar === request.avatar && observation.file === file);
+      const found = request.discovery?.matches.filter((match) => match.avatar === request.avatar && match.file === file) ?? [];
+      if (observed?.status !== "same" && !found.length)
+        block("owner-readback-required");
+      const candidates = new Set;
+      for (const record of matching)
+        if (record.parent && record.id && isUuid(record.parent) && isUuid(record.id))
+          candidates.add(JSON.stringify([record.parent, record.id]));
+      if (role?.id && isUuid(role.id) && observed?.observedId && isUuid(observed.observedId))
+        candidates.add(JSON.stringify([role.id, observed.observedId]));
+      for (const match of found)
+        candidates.add(JSON.stringify([match.parent, match.chatId]));
+      let usable = 0;
+      for (const candidate of candidates) {
+        const [parent, id] = JSON.parse(candidate);
+        const database = await hooks.readDatabase(parent, id);
+        databaseFacts.push(database);
+        preservedFiles.add(databasePath(parent, id));
+        const origin = snapshot.targets.find((target) => target.scope === "chat" && target.charDbId === parent && target.chatDbId === id)?.origin;
+        if (repairDatabaseUsable(database, origin))
+          usable++;
+        else if (database.status === "unknown" && database.failure !== "database")
+          block("file-unreadable");
+      }
+      if (usable === 1)
+        recoverable = true;
+      if (matching.length === 1 && matching[0].confirmed && matching[0].id && databaseFacts.some((database) => database.charDbId === matching[0].parent && database.chatDbId === matching[0].id && repairDatabaseUsable(database, snapshot.targets.find((target) => target.charDbId === database.charDbId && target.chatDbId === database.chatDbId)?.origin)))
+        recoverable = true;
+    }
+    if (recoverable)
+      block("recoverable-association-first");
+    if (request.scope === "chat" && chats.length > 1)
+      block("conflicting-records");
+    if (!plan.reasons.length) {
+      plan.kind = "restart";
+      plan.newCharDbId = request.scope === "chat" ? role.id : allocate ? randomUuid() : undefined;
+      plan.chats = [...files].sort().map((file) => ({ file, chatDbId: allocate ? randomUuid() : "" }));
+      plan.loss = [
+        request.scope === "chat" ? "此聊天将开始使用新的插件数据，原有数据不会恢复对应关系；旧数据库文件保留。" : "这个角色及列出的聊天将开始使用新的插件数据，原有对应关系不再使用；旧数据库文件保留。"
+      ];
+    }
+    plan.preservedFiles = [...preservedFiles].sort();
+    plan.evidence = await hash({
+      scope: request.scope,
+      avatar: request.avatar,
+      file: request.file,
+      records: snapshot.records.filter((record) => record.avatar === request.avatar),
+      targets: snapshot.targets,
+      observations: request.observations,
+      discovery: request.discovery,
+      chatFiles: request.chatFiles ? [...new Set(request.chatFiles)].sort() : undefined,
+      databaseFacts
+    });
+    hooks.assertAvailable();
+    return plan;
+  }
+  async function restartIdentity(root, request, hooks) {
+    if (request.phase === "inspect")
+      return { status: "planned", plan: await inspect3(root, request, hooks) };
+    const expected = request.expected;
+    if (expected.scope === "role" && (!request.chatFiles || JSON.stringify([...new Set(request.chatFiles)].sort()) !== JSON.stringify([...expected.chatFiles ?? []].sort())))
+      return {
+        status: "skipped",
+        plan: expected,
+        requiresRescan: true,
+        message: "角色的聊天列表已变化或未能读取，请重新扫描。"
+      };
+    if (request.phase === "apply" && expected.chats.some((chat) => !request.observations?.some((observation) => observation.scope === "chat" && observation.avatar === expected.avatar && observation.file === chat.file && observation.status === "same" && observation.observedId === chat.chatDbId)))
+      return {
+        status: "skipped",
+        plan: expected,
+        requiresRescan: true,
+        message: "新的聊天编号尚未重新读回，请重新扫描。"
+      };
+    const current = await inspect3(root, {
+      phase: "inspect",
+      scope: expected.scope,
+      avatar: expected.avatar,
+      ...expected.file ? { file: expected.file } : {},
+      observations: request.phase === "apply" ? expected.observations : request.observations,
+      discovery: request.phase === "apply" ? expected.discovery : request.discovery,
+      chatFiles: request.chatFiles
+    }, hooks, false);
+    const skipped = (message) => ({
+      status: "skipped",
+      plan: expected,
+      requiresRescan: true,
+      message
+    });
+    if (current.kind !== "restart" || current.evidence !== expected.evidence)
+      return skipped("聊天或登记已变化，未重新开始。请重新扫描。");
+    if ([current.expectedRole, ...current.expectedChats].some((record) => record && !Number.isSafeInteger((record.generation ?? 0) + 1)))
+      return skipped("关联编号已超出支持范围，未重新开始。");
+    if (!expected.newCharDbId || !isUuid(expected.newCharDbId) || expected.chats.length !== current.chats.length || expected.chats.some((chat, index) => !isUuid(chat.chatDbId) || chat.file !== current.chats[index].file) || new Set(expected.chats.map((chat) => chat.chatDbId)).size !== expected.chats.length)
+      throw new ServiceError({ code: "INVALID_REQUEST", message: "新的身份清单无效。" });
+    if (expected.scope === "chat" && expected.newCharDbId !== current.newCharDbId)
+      return skipped("父角色已变化，请重新扫描。");
+    if (expected.scope === "role" && await hooks.pathExists(expected.newCharDbId))
+      return skipped("新角色路径已有文件，请重新扫描。");
+    for (const chat of expected.chats)
+      if (await hooks.pathExists(expected.newCharDbId, chat.chatDbId))
+        return skipped("新聊天路径已有文件，请重新扫描。");
+    hooks.assertAvailable();
+    if (request.phase === "check")
+      return { status: "checked", plan: expected };
+    if (request.confirmedChats.length !== expected.chats.length || expected.chats.some((chat) => !request.confirmedChats.some((confirmed) => confirmed.file === chat.file && confirmed.chatDbId === chat.chatDbId)))
+      throw new ServiceError({ code: "INVALID_REQUEST", message: "所有受影响聊天的新编号尚未读回确认。" });
+    const commands = [];
+    const role = current.expectedRole;
+    commands.push(rawGuard(role ? `SELECT 1 FROM ${ROLES} WHERE role_id=? AND avatar_name=? AND char_dbid IS ? AND generation=?` : `SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM ${ROLES} WHERE avatar_name=? AND state='active')`, role ? [role.referenceId, role.avatar, role.id, role.generation] : [expected.avatar]));
+    if (expected.scope === "role") {
+      if (role)
+        commands.push({
+          sql: `UPDATE ${ROLES} SET char_dbid=?,generation=?,confirmed=1,origin='generated' WHERE role_id=?`,
+          binds: [expected.newCharDbId, role.generation + 1, role.referenceId]
+        });
+      else
+        commands.push({
+          sql: `INSERT INTO ${ROLES}(avatar_name,char_dbid,generation,confirmed,origin,state) VALUES(?,?,1,1,'generated','active')`,
+          binds: [expected.avatar, expected.newCharDbId]
+        });
+      commands.push({
+        sql: `INSERT INTO ${TARGETS} VALUES('char',?,'','generated','never')`,
+        binds: [expected.newCharDbId]
+      });
+    }
+    for (const chat of expected.chats) {
+      const previous = current.expectedChats.find((record) => record.file === chat.file);
+      if (previous) {
+        commands.push(rawGuard(`SELECT 1 FROM ${CHATS} WHERE chat_id=? AND file_name=? AND chat_dbid IS ? AND generation=?`, [
+          previous.referenceId,
+          previous.file,
+          previous.id,
+          previous.generation
+        ]));
+        commands.push({
+          sql: `UPDATE ${CHATS} SET chat_dbid=?,parent_char_dbid=?,generation=?,confirmed=1,origin='generated' WHERE chat_id=?`,
+          binds: [chat.chatDbId, expected.newCharDbId, previous.generation + 1, previous.referenceId]
+        });
+      } else
+        commands.push({
+          sql: `INSERT INTO ${CHATS}(role_id,file_name,chat_dbid,parent_char_dbid,generation,confirmed,origin,state) SELECT role_id,?,?,?,1,1,'generated','active' FROM ${ROLES} WHERE avatar_name=? AND state='active'`,
+          binds: [chat.file, chat.chatDbId, expected.newCharDbId, expected.avatar]
+        });
+      commands.push({
+        sql: `INSERT INTO ${TARGETS} VALUES('chat',?,?,'generated','never')`,
+        binds: [expected.newCharDbId, chat.chatDbId]
+      });
+    }
+    await root.transaction(commands, undefined, {
+      management: true,
+      beforeExecute: () => {
+        hooks.assertAvailable();
+        if (expected.scope === "role" && role)
+          hooks.invalidate(role);
+        for (const record of current.expectedChats)
+          hooks.invalidate(record);
+      }
+    });
+    await root.refresh();
+    const saved = await scanRecords(root, "");
+    if (saved.management !== "valid" || expected.scope === "role" && !saved.records.some((record) => record.scope === "char" && record.avatar === expected.avatar && record.id === expected.newCharDbId && record.confirmed && record.generation === (role?.generation ?? 0) + 1) || !expected.chats.every((chat) => saved.records.some((record) => record.scope === "chat" && record.avatar === expected.avatar && record.file === chat.file && record.id === chat.chatDbId && record.parent === expected.newCharDbId && record.generation === (current.expectedChats.find((previous) => previous.file === chat.file)?.generation ?? 0) + 1 && record.confirmed && record.origin === "generated" && record.initialization === "never")))
+      throw new ServiceError({
+        code: "RESULT_UNCONFIRMED",
+        resultState: "unconfirmed",
+        message: "新登记已提交，但未能读回确认。请重新扫描。"
+      });
+    return {
+      status: "restarted",
+      plan: expected,
+      requiresRescan: true,
+      message: "已切换到新的插件数据，旧文件保留。请刷新并重新取得目标。"
+    };
+  }
+
   // src/worker/storage-coordinator.ts
   function validateScopedTarget(binding) {
     if (!["char", "chat"].includes(binding.scope ?? ""))
@@ -3663,12 +8514,17 @@
     targets;
     beforeScopedExecution;
     beforeConfigurationChange;
+    beforeManagementRepair;
     cleanupWaiting;
+    beforeScanRepair;
+    invalidateScanReference;
+    scanRepairCompleted;
     onBackgroundSaveFailed;
     permission;
     switching = false;
     revision = 0;
     lastError;
+    publishedUnsaved = false;
     restored;
     constructor(repository, createDatabase, changed = () => {}, getOpfsDirectory = opfsDirectory) {
       this.repository = repository;
@@ -3678,14 +8534,15 @@
       this.restored = this.enqueue(async () => {
         try {
           await this.readRegistry();
-          if (this.configuration && await this.checkPermission())
-            await this.loadDatabase();
         } catch (error) {
           this.lastError = errorData(error);
         }
-        this.updateReloadTimer();
         this.publish();
       });
+    }
+    source() {
+      const configuration = this.configuration;
+      return configuration.mode === "indexeddb" ? configuration : configuration.directory;
     }
     enqueue(task) {
       const result = this.tail.then(task);
@@ -3707,17 +8564,32 @@
           storageId: this.configuration?.storageId,
           configGeneration: this.configuration?.configGeneration ?? 0,
           permission: this.permission,
-          error: this.lastError
+          error: this.lastError,
+          unsavedChanges: this.unsavedChanges()
         },
         directory: this.mode === "directory" ? this.configuration?.directory : undefined
       };
     }
+    unsavedChanges() {
+      if (this.database?.unsavedChanges)
+        return true;
+      for (const entry of this.scopedDatabases.values())
+        if (entry.db.unsavedChanges)
+          return true;
+      return false;
+    }
     publish() {
       this.revision++;
+      const info = this.info();
+      this.publishedUnsaved = info.storage.unsavedChanges === true;
       try {
-        this.changed(this.info());
+        this.changed(info);
       } catch {}
     }
+    unsavedChanged = () => {
+      if (this.unsavedChanges() !== this.publishedUnsaved)
+        this.publish();
+    };
     async readRegistry() {
       if (this.registryLoaded)
         return;
@@ -3725,7 +8597,7 @@
       if (stored) {
         validateConfiguration(stored);
         const active = stored.spaces.find((s) => s.storageId === stored.storageId);
-        if ((stored.mode ?? "directory") !== (active.mode ?? "directory") || !await stored.directory.isSameEntry(active.directory) || stored.savedDirectory && !await stored.savedDirectory.directory.isSameEntry(stored.spaces.find((s) => s.storageId === stored.savedDirectory.storageId).directory))
+        if ((stored.mode ?? "directory") !== (active.mode ?? "directory") || stored.mode !== "indexeddb" && (active.mode === "indexeddb" || !await stored.directory.isSameEntry(active.directory)) || stored.savedDirectory && !await stored.savedDirectory.directory.isSameEntry(stored.spaces.find((s) => s.storageId === stored.savedDirectory.storageId).directory))
           throw new ServiceError({ code: "CONFIG_FAILED", message: "目录配置身份与句柄不一致。" });
         this.configuration = stored;
         this.registry = stored;
@@ -3737,7 +8609,7 @@
     async checkPermission() {
       if (!this.configuration)
         return false;
-      if (this.mode === "opfs") {
+      if (this.configuration.mode === "opfs" || this.configuration.mode === "indexeddb") {
         this.permission = "granted";
         return true;
       }
@@ -3757,7 +8629,7 @@
         await this.rootLoaded(this.database, this.targets);
         return;
       }
-      const candidate = await this.createDatabase(this.configuration.directory, undefined, this.mode);
+      const candidate = await this.createDatabase(this.source(), undefined, this.mode);
       try {
         await candidate.openExisting();
         this.bindDatabase(candidate, this.configuration);
@@ -3777,6 +8649,7 @@
         ...binding.charDbId ? { charDbId: binding.charDbId } : {},
         ...binding.chatDbId ? { chatDbId: binding.chatDbId } : {}
       };
+      db.onUnsavedChanged = this.unsavedChanged;
       db.onBackgroundSaveFailed = (failure) => {
         this.lastError = failure.error;
         this.publish();
@@ -3811,7 +8684,7 @@
           throw new ServiceError(this.lastError);
         throw new ServiceError({
           code: "NOT_INITIALIZED",
-          message: "开发模式尚未配置数据库目录；请在插件中选择并授权存储目录。"
+          message: "制卡模式尚未配置数据库目录；请在插件设置的「制卡高级设置」中选择并授权存储目录。"
         });
       }
       if (!binding || typeof binding.storageId !== "string" || !Number.isSafeInteger(binding.configGeneration)) {
@@ -3830,7 +8703,7 @@
     }
     admit() {
       if (this.switching)
-        throw new ServiceError({ code: "CONFIG_CHANGING", message: "目录切换正在排空已接收操作，请等待完成。" });
+        throw new ServiceError({ code: "CONFIG_CHANGING", message: "存储正在处理中，请等待完成后再试。" });
     }
     queueChecked(binding, task) {
       const captured = { ...binding };
@@ -3868,7 +8741,7 @@
       return this.switchDirectory(directory, "directory");
     }
     configureMode(mode, autoReloadEnabled) {
-      if (!["opfs", "directory"].includes(mode) || typeof autoReloadEnabled !== "boolean")
+      if (!["opfs", "directory", "indexeddb"].includes(mode) || typeof autoReloadEnabled !== "boolean")
         return Promise.reject(new ServiceError({ code: "INVALID_REQUEST", message: "存储模式设置无效。" }));
       if (this.switching)
         return Promise.reject(new ServiceError({ code: "CONFIG_CHANGING", message: "已有存储切换尚未完成。" }));
@@ -3884,9 +8757,9 @@
         try {
           await this.readRegistry();
           const old = this.registry;
-          const savedDirectory = old?.savedDirectory ?? (old && (old.mode ?? "directory") === "directory" ? { storageId: old.storageId, directory: old.directory, mode: "directory" } : undefined);
+          const savedDirectory = old?.savedDirectory ?? (old && old.mode !== "indexeddb" && (old.mode ?? "directory") === "directory" ? { storageId: old.storageId, directory: old.directory, mode: "directory" } : undefined);
           const directory = selected ?? (mode === "opfs" ? await this.getOpfsDirectory() : savedDirectory?.directory);
-          if (!directory) {
+          if (!directory && mode !== "indexeddb") {
             this.beforeConfigurationChange?.();
             await this.closeDatabases();
             this.database = undefined;
@@ -3900,27 +8773,27 @@
             this.updateReloadTimer();
             return this.info();
           }
-          if (this.configuration && (mode !== this.mode || !await directory.isSameEntry(this.configuration.directory)))
+          if (this.configuration && (mode !== this.mode || mode !== "indexeddb" && !await directory.isSameEntry(this.configuration.directory)))
             this.beforeConfigurationChange?.();
           await Promise.allSettled([...this.scopedDatabases.values()].map((entry) => entry.tail));
-          const permission = mode === "opfs" ? "granted" : await directoryPermission(directory);
+          const permission = mode !== "directory" ? "granted" : await directoryPermission(directory);
           if (selected && permission !== "granted")
             throw new ServiceError({ code: "PERMISSION_REQUIRED", message: "新目录未获得读写授权，原配置保持不变。" });
           let storageId;
           for (const space of old?.spaces ?? []) {
-            if ((space.mode ?? "directory") === mode && await directory.isSameEntry(space.directory)) {
+            if ((space.mode ?? "directory") === mode && (mode === "indexeddb" || space.mode !== "indexeddb" && await directory.isSameEntry(space.directory))) {
               storageId = space.storageId;
               break;
             }
           }
-          storageId ??= crypto.randomUUID();
+          storageId ??= randomUuid();
           const same = storageId === this.configuration?.storageId && mode === this.mode;
           const configGeneration = same ? old.configGeneration : (old?.configGeneration ?? 0) + 1;
           if (!Number.isSafeInteger(configGeneration))
             throw new ServiceError({ code: "CONFIG_FAILED", message: "配置代次已超过安全整数范围。" });
           const known = old?.spaces.some((space) => space.storageId === storageId) ?? false;
           if (permission === "granted") {
-            candidate = same && this.database ? this.database : await this.createDatabase(directory, undefined, mode);
+            candidate = same && this.database ? this.database : await this.createDatabase(mode === "indexeddb" ? { storageId, mode: "indexeddb" } : directory, undefined, mode);
             if (!(same && candidate.availability === "ready")) {
               if (known)
                 await candidate.openExisting();
@@ -3931,16 +8804,17 @@
           }
           if (old && !same)
             this.beforeConfigurationChange?.();
-          const space = { storageId, directory, mode };
+          const space = mode === "indexeddb" ? { storageId, mode: "indexeddb" } : { storageId, directory, mode };
           const spaces = [...(old?.spaces ?? []).filter((s) => s.storageId !== storageId), space];
           const next = {
             ...space,
             configGeneration,
             spaces,
-            savedDirectory: mode === "directory" ? space : savedDirectory,
+            savedDirectory: space.mode === "directory" ? space : savedDirectory,
             autoReloadEnabled
           };
-          await this.repository.write(next);
+          if (selected || !same || autoReloadEnabled !== (old?.autoReloadEnabled ?? true))
+            await this.repository.write(next);
           if (this.database !== candidate && (!same || !candidate))
             await this.closeDatabases();
           if (!same || !candidate) {
@@ -3989,19 +8863,30 @@
       }
       const instruction = structuredClone(request);
       return this.queueChecked(binding, async (captured) => {
-        const directory = this.configuration.directory;
+        const directory = this.source();
+        if (instruction.operation === "maintenance") {
+          this.validateMaintenanceTarget(instruction.target);
+          return (await inspectDatabaseMaintenance(this.maintenanceContext(captured), instruction.target, instruction)).plan;
+        }
+        if (instruction.operation === "management")
+          return this.withMaintenanceRoot((root) => inspectManagementRepair(root, this.managementRepairOptions(captured, instruction.observations)));
         if (instruction.operation === "records") {
-          if (!this.database)
-            return {
-              directoryName: directory.name,
-              management: "unreadable",
-              differences: [],
-              rootReadable: false,
-              records: [],
-              targets: [],
-              issues: [{ relativePath: GLOBAL_DATABASE, reason: "管理数据库尚未恢复，请先恢复现有数据库。" }]
-            };
-          return scanRecords(this.database, directory.name);
+          if (this.database?.availability !== "ready") {
+            try {
+              return await this.withMaintenanceRoot((root) => scanRecords(root, storageName(directory)));
+            } catch (error) {
+              return {
+                directoryName: storageName(directory),
+                management: "unreadable",
+                differences: [],
+                rootReadable: false,
+                records: [],
+                targets: [],
+                issues: [{ relativePath: GLOBAL_DATABASE, reason: errorData(error).message }]
+              };
+            }
+          }
+          return scanRecords(this.database, storageName(directory));
         }
         if (instruction.operation === "inventory")
           return scanInventory(directory);
@@ -4024,6 +8909,458 @@
           }
         }
         throw new ServiceError({ code: "INVALID_REQUEST", message: "扫描请求类型无效。" });
+      });
+    }
+    async withMaintenanceRoot(task) {
+      if (this.database?.availability === "ready")
+        return task(this.database);
+      const root = await this.createDatabase(this.source(), undefined, this.mode);
+      try {
+        await root.openExisting();
+        return await task(root);
+      } finally {
+        await root.close();
+      }
+    }
+    managementRepairOptions(binding, observations) {
+      return {
+        observations,
+        readTarget: async (target) => {
+          const directory = this.source();
+          const db = await this.createDatabase(directory, { ...binding, ...target }, this.mode);
+          try {
+            return await scanDatabase(db, directory, target.charDbId, target.chatDbId);
+          } finally {
+            await db.close();
+          }
+        },
+        readRecordFiles: async (record) => {
+          if (record.id === null || record.id === "")
+            return "absent";
+          if (typeof record.id !== "string" || record.scope === "chat" && typeof record.parent !== "string")
+            return "unknown";
+          const path = record.scope === "char" ? `characters/${record.id}` : `characters/${record.parent}/chats/${record.id}.sqlite`;
+          const parts = checkRelativePath(path, "read");
+          if (typeof parts === "string" || record.id.includes("/") || typeof record.parent === "string" && record.parent.includes("/"))
+            return "unknown";
+          return await storageEntryExists(this.source(), path, record.scope === "char" ? "directory" : "file") ? "present" : "absent";
+        }
+      };
+    }
+    repairManagement(binding, request) {
+      let instruction;
+      try {
+        this.admit();
+        instruction = structuredClone(request);
+        if (!instruction || !["prepare", "apply"].includes(instruction.phase) || !instruction.expected || !["light", "rebuild"].includes(instruction.expected.kind) || typeof instruction.expected.evidence !== "string")
+          throw new ServiceError({ code: "INVALID_REQUEST", message: "修复清单无效，请重新扫描。" });
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      const heavy = instruction.expected.kind === "rebuild";
+      if (heavy) {
+        this.switching = true;
+        this.publish();
+      }
+      return this.queueChecked(binding, async (captured) => {
+        try {
+          if (heavy) {
+            this.beforeConfigurationChange?.();
+            this.beforeManagementRepair?.();
+            const deadline = Date.now() + 1e4;
+            const wait = async (pending) => {
+              let timer;
+              try {
+                await Promise.race([
+                  pending,
+                  new Promise((_, reject) => {
+                    timer = setTimeout(() => reject(new ServiceError({
+                      code: "RESULT_UNCONFIRMED",
+                      resultState: "not-applied",
+                      retryable: false,
+                      message: "数据仍在处理中，本次修复没有开始；请等待完成后重新扫描。"
+                    })), Math.max(0, deadline - Date.now()));
+                  })
+                ]);
+              } finally {
+                clearTimeout(timer);
+              }
+            };
+            await wait(Promise.all([...this.scopedDatabases.values()].map((entry) => entry.tail)));
+            await wait(Promise.all([...this.scopedDatabases.values()].map((entry) => entry.db.waitForMaintenanceSave(Math.max(1, deadline - Date.now())))));
+            if (this.database)
+              await wait(this.database.waitForMaintenanceSave(Math.max(1, deadline - Date.now())));
+          }
+          return await this.withMaintenanceRoot(async (root) => {
+            const options = this.managementRepairOptions(captured, instruction.observations);
+            const plan = await inspectManagementRepair(root, options);
+            const stop = (status) => ({
+              status,
+              plan,
+              requiresRescan: true
+            });
+            if (plan.evidence !== instruction.expected.evidence || plan.kind !== instruction.expected.kind)
+              return stop("skipped");
+            if (!["light", "rebuild"].includes(plan.kind))
+              return stop("blocked");
+            if (heavy) {
+              const file = await readScanFile(this.source(), GLOBAL_DATABASE);
+              const digest = await sha2562(file.bytes);
+              if (instruction.phase === "prepare")
+                return { status: "prepared", file, digest, plan };
+              if (instruction.backupDigest !== digest)
+                return stop("skipped");
+              const next = { ...this.configuration, configGeneration: this.configuration.configGeneration + 1 };
+              if (!Number.isSafeInteger(next.configGeneration))
+                throw new ServiceError({
+                  code: "CONFIG_FAILED",
+                  message: "存储配置编号已超出支持范围，本次修复没有开始。"
+                });
+              await this.repository.write(next);
+              this.configuration = this.registry = next;
+              for (const entry of this.scopedDatabases.values())
+                await entry.db.close();
+              this.scopedDatabases.clear();
+              this.targets?.invalidate();
+            } else if (instruction.phase !== "apply")
+              return stop("blocked");
+            const result = await applyManagementRepair(root, instruction.expected, options);
+            if (result.status !== "repaired")
+              return stop(result.status === "blocked" ? "blocked" : "skipped");
+            await root.refresh();
+            if ((await inspectManagementRepair(root, options)).kind !== "none")
+              throw new ServiceError({
+                code: "RESULT_UNCONFIRMED",
+                resultState: "unconfirmed",
+                retryable: false,
+                message: "修复后读回仍有异常，请重新扫描确认当前结果。"
+              });
+            if (root !== this.database) {
+              if (!this.database)
+                this.database = await this.createDatabase(this.source(), undefined, this.mode);
+              await this.database.refresh();
+            }
+            this.targets ??= new RootTargets(this.database);
+            await this.rootLoaded(this.database, this.targets);
+            this.bindDatabase(this.database, this.configuration);
+            this.lastError = undefined;
+            return { status: "repaired", plan, requiresRescan: true };
+          });
+        } catch (error) {
+          this.lastError = errorData(error);
+          throw error;
+        }
+      }).finally(() => {
+        if (heavy)
+          this.switching = false;
+        this.publish();
+      });
+    }
+    validateMaintenanceTarget(target) {
+      if (!target || !["global", "char", "chat"].includes(target.scope))
+        throw new ServiceError({ code: "INVALID_REQUEST", message: "维护对象无效，请重新扫描。" });
+      if (target.scope === "global")
+        validateGlobalTarget(target);
+      else
+        validateScopedTarget(target);
+    }
+    restartIdentity(binding, request) {
+      let instruction;
+      try {
+        this.admit();
+        instruction = structuredClone(request);
+        if (!instruction || !["inspect", "check", "apply"].includes(instruction.phase))
+          throw new ServiceError({ code: "INVALID_REQUEST", message: "重新开始清单无效，请重新扫描。" });
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      return this.queueChecked(binding, async (captured) => {
+        if (!this.database)
+          throw new ServiceError({ code: "INSTANCE_DISABLED", message: "请先修复全局库。" });
+        return restartIdentity(this.database, instruction, {
+          assertAvailable: () => {
+            this.beforeConfigurationChange?.();
+            this.beforeManagementRepair?.();
+          },
+          invalidate: (record) => this.invalidateScanReference?.(captured, record),
+          pathExists: async (charDbId, chatDbId) => {
+            validateScopedTarget({
+              ...captured,
+              scope: chatDbId ? "chat" : "char",
+              charDbId,
+              ...chatDbId ? { chatDbId } : {}
+            });
+            return (await createStorage(this.source(), charDbId, chatDbId, this.mode === "opfs").readSnapshot()).bytes !== null;
+          },
+          readDatabase: async (charDbId, chatDbId) => {
+            const db = await this.createDatabase(this.source(), { ...captured, scope: chatDbId ? "chat" : "char", charDbId, ...chatDbId ? { chatDbId } : {} }, this.mode);
+            try {
+              return await scanDatabase(db, this.source(), charDbId, chatDbId);
+            } finally {
+              await db.close();
+            }
+          }
+        });
+      });
+    }
+    maintenanceContext(binding) {
+      return {
+        directory: this.source(),
+        root: this.database,
+        managementOptions: this.managementRepairOptions(binding),
+        create: (target) => this.createDatabase(this.source(), target.scope === "global" ? undefined : { ...binding, ...target }, this.mode)
+      };
+    }
+    async waitMaintenanceSaves(entries, includeRoot) {
+      const deadline = Date.now() + 1e4;
+      const wait = async (task) => {
+        let timer;
+        try {
+          await Promise.race([
+            task,
+            new Promise((_, reject) => {
+              timer = setTimeout(() => reject(new ServiceError({
+                code: "RESULT_UNCONFIRMED",
+                resultState: "not-applied",
+                retryable: false,
+                message: "数据仍在保存，本次处理没有开始；请等待完成后重新扫描。"
+              })), Math.max(0, deadline - Date.now()));
+            })
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+      const selected = [...entries];
+      await wait(Promise.all(selected.map((entry) => entry.tail)));
+      await wait(Promise.all(selected.map((entry) => entry.db.waitForMaintenanceSave(Math.max(1, deadline - Date.now())))));
+      if (includeRoot && this.database)
+        await wait(this.database.waitForMaintenanceSave(Math.max(1, deadline - Date.now())));
+    }
+    maintainDatabase(binding, request) {
+      let instruction;
+      try {
+        this.admit();
+        instruction = structuredClone(request);
+        this.validateMaintenanceTarget(instruction?.expected?.target);
+        if (!["prepare", "apply"].includes(instruction.phase) || !["repair", "reset", "reconstruct"].includes(instruction.expected.kind) || typeof instruction.expected.evidence !== "string")
+          throw new ServiceError({ code: "INVALID_REQUEST", message: "维护清单无效，请重新扫描。" });
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      const target = instruction.expected.target, global = target.scope === "global";
+      const fixed = { ...binding, ...target };
+      if (global) {
+        this.switching = true;
+        this.publish();
+      } else {
+        try {
+          this.assertIdentityTargetAvailable(fixed);
+        } catch (error) {
+          return Promise.reject(error);
+        }
+        this.sealCleanup(fixed);
+      }
+      return this.queueChecked(binding, async (captured) => {
+        let changedFile = false;
+        try {
+          if (global) {
+            this.beforeConfigurationChange?.();
+            this.beforeManagementRepair?.();
+          } else
+            for (const record of instruction.expected.records) {
+              if (record.state === "deleted")
+                continue;
+              this.beforeScanRepair?.(captured, record.scope === "char" ? {
+                scope: "char",
+                phase: "check",
+                avatar: record.avatar,
+                charDbId: target.charDbId,
+                expectedRole: record,
+                expectedTarget: null
+              } : {
+                scope: "chat",
+                phase: "check",
+                avatar: record.avatar,
+                file: record.file,
+                charDbId: target.charDbId,
+                chatDbId: target.scope === "chat" ? target.chatDbId : record.id,
+                expectedRole: null,
+                expectedChat: record,
+                expectedTarget: null
+              });
+            }
+          const entry = this.scopedDatabases.get(bindingKey(fixed));
+          await this.waitMaintenanceSaves(global ? this.scopedDatabases.values() : entry ? [entry] : [], global || instruction.expected.kind === "reset");
+          const inspected = await inspectDatabaseMaintenance(this.maintenanceContext(captured), target, instruction);
+          const plan = inspected.plan;
+          const stop = (status) => ({
+            status,
+            plan,
+            requiresRescan: true
+          });
+          if (plan.kind !== instruction.expected.kind || plan.evidence !== instruction.expected.evidence)
+            return stop("skipped");
+          if (!["repair", "reset", "reconstruct"].includes(plan.kind))
+            return stop("blocked");
+          const backup = await maintenanceBackup(this.source(), plan);
+          if (instruction.phase === "prepare")
+            return { status: "prepared", plan, ...backup };
+          if (backup.file && backup.digest !== instruction.backupDigest)
+            return stop("skipped");
+          if (global) {
+            const next = { ...this.configuration, configGeneration: this.configuration.configGeneration + 1 };
+            if (!Number.isSafeInteger(next.configGeneration))
+              throw new ServiceError({ code: "CONFIG_FAILED", message: "存储配置编号超出范围，本次处理没有开始。" });
+            await this.repository.write(next);
+            this.configuration = this.registry = next;
+            for (const value of this.scopedDatabases.values())
+              await value.db.close();
+            this.scopedDatabases.clear();
+            await this.database?.close();
+            this.targets?.invalidate();
+            const root = await this.createDatabase(next.mode === "indexeddb" ? next : next.directory, undefined, this.mode);
+            try {
+              if (plan.kind !== "reset")
+                await root.openExisting();
+              changedFile = true;
+              await applyGlobalReconstruction(root, inspected.facts, instruction.discovery, plan.kind === "reset", plan.file === "missing");
+              this.database = root;
+              this.targets = new RootTargets(root);
+              await this.rootLoaded(root, this.targets);
+              this.bindDatabase(root, next);
+              this.lastError = undefined;
+            } catch (error) {
+              await root.close();
+              throw error;
+            }
+          } else {
+            if (!this.database)
+              return stop("blocked");
+            if (entry) {
+              await entry.db.close();
+              this.scopedDatabases.delete(bindingKey(fixed));
+            }
+            if (plan.kind === "repair") {
+              const db = await this.createDatabase(this.source(), fixed, this.mode);
+              try {
+                await db.openExisting();
+                const registration = await this.targets.read(fixed);
+                const requireIdentity = registration?.origin === "generated" || plan.records.some((r) => r.origin === "generated");
+                const repaired = await applyScopedRepair(db, { identity: target, expected: plan.scopedRepair }, { requireIdentity });
+                if (repaired.status !== "repaired" && repaired.status !== "unchanged")
+                  return stop("skipped");
+                changedFile = true;
+                await db.refresh();
+              } finally {
+                await db.close();
+              }
+            } else {
+              if (plan.file === "present") {
+                await createStorage(this.source(), target.charDbId, target.scope === "chat" ? target.chatDbId : undefined, this.mode === "opfs").remove();
+                changedFile = true;
+              }
+              const commands = [
+                {
+                  sql: `INSERT INTO ${TARGETS}(scope,char_dbid,chat_dbid,origin,state) VALUES(?,?,?,'generated','never') ON CONFLICT(scope,char_dbid,chat_dbid) DO UPDATE SET origin='generated',state='never'`,
+                  binds: [target.scope, target.charDbId, target.scope === "chat" ? target.chatDbId : ""]
+                }
+              ];
+              for (const record of plan.records) {
+                if (!Number.isSafeInteger((record.generation ?? 0) + 1))
+                  throw new ServiceError({ code: "INVALID_REQUEST", message: "关联代次超出范围，本次处理未能完成。" });
+                commands.push({
+                  sql: `UPDATE ${record.scope === "char" ? ROLES : CHATS} SET generation=generation+1,confirmed=1,origin='generated' WHERE ${record.scope === "char" ? "role_id" : "chat_id"}=? AND generation=?`,
+                  binds: [record.referenceId, record.generation],
+                  kind: "write",
+                  expectChanges: 1
+                });
+                this.invalidateScanReference?.(captured, record);
+              }
+              this.targets?.invalidate();
+              await this.database.transaction(commands, undefined, { management: true });
+              const savedRoot = await this.createDatabase(this.source(), undefined, this.mode);
+              try {
+                await savedRoot.openExisting();
+                const saved = await scanRecords(savedRoot, storageName(this.source()));
+                const savedTarget = saved.targets.find((t) => t.scope === target.scope && t.charDbId === target.charDbId && (t.chatDbId ?? "") === (target.scope === "chat" ? target.chatDbId : ""));
+                if (saved.management !== "valid" || savedTarget?.origin !== "generated" || savedTarget.state !== "never" || plan.records.some((previous) => !saved.records.some((r) => r.scope === previous.scope && r.referenceId === previous.referenceId && r.id === previous.id && r.parent === previous.parent && r.generation === previous.generation + 1 && r.confirmed && r.origin === "generated")))
+                  throw new ServiceError({
+                    code: "RESULT_UNCONFIRMED",
+                    resultState: "unconfirmed",
+                    message: "新的登记已提交，但文件读回未能确认；请重新扫描。"
+                  });
+              } finally {
+                await savedRoot.close();
+              }
+              if ((await scanFile(this.source(), target.charDbId, target.scope === "chat" ? target.chatDbId : undefined)).status !== "missing")
+                throw new ServiceError({
+                  code: "RESULT_UNCONFIRMED",
+                  resultState: "unconfirmed",
+                  message: "处理后仍发现旧数据文件，请重新扫描。"
+                });
+            }
+          }
+          return { status: plan.kind === "reset" ? "reset" : "repaired", plan, requiresRescan: true };
+        } catch (error) {
+          this.lastError = errorData(error);
+          if (changedFile)
+            return {
+              status: "partial",
+              plan: instruction.expected,
+              requiresRescan: true,
+              message: `部分处理已提交，尚未完成全部确认；请重新扫描，不要重复执行。${errorData(error).message}`
+            };
+          throw error;
+        }
+      }).finally(() => {
+        if (global)
+          this.switching = false;
+        else
+          this.releaseCleanup(fixed);
+        this.publish();
+      });
+    }
+    repairScan(binding, request) {
+      let instruction;
+      try {
+        this.admit();
+        instruction = structuredClone(request);
+        validateScanRepair(instruction);
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      return this.queueChecked(binding, async (captured) => {
+        if (!this.database)
+          throw new ServiceError({ code: "INSTANCE_DISABLED", message: "管理数据库尚未恢复。" });
+        const assertAvailable = () => {
+          this.beforeScanRepair?.(captured, instruction);
+          const ids = new Set(instruction.scope === "chat" ? [instruction.chatDbId, instruction.expectedChat?.id].filter(Boolean) : []);
+          for (const [key, entry] of this.scopedDatabases) {
+            const fixed = JSON.parse(key);
+            if (fixed[0] !== captured.storageId || fixed[1] !== captured.configGeneration || fixed[3] !== instruction.charDbId)
+              continue;
+            if ((fixed[2] === "chat" && ids.has(fixed[4]) || fixed[2] === "char" && (instruction.scope === "char" || instruction.expectedRole?.initialization !== "ready")) && (entry.pending || entry.db.hasPendingFirstCommit))
+              throw new ServiceError({
+                code: "RESULT_UNCONFIRMED",
+                resultState: "not-applied",
+                message: "这份数据仍在处理中，请等待当前操作结束后重新扫描。"
+              });
+          }
+        };
+        const readDatabase = async (charDbId, chatDbId) => {
+          const directory = this.source();
+          const db = await this.createDatabase(directory, { ...captured, scope: chatDbId ? "chat" : "char", charDbId, ...chatDbId ? { chatDbId } : {} }, this.mode);
+          try {
+            return await scanDatabase(db, directory, charDbId, chatDbId);
+          } finally {
+            await db.close();
+          }
+        };
+        const result = await repairScanRegistration(this.database, instruction, readDatabase, assertAvailable, (record) => this.invalidateScanReference?.(captured, record));
+        if (instruction.phase === "apply" && (result.status === "repaired" || result.status === "unchanged"))
+          this.scanRepairCompleted?.(captured, instruction);
+        return result;
       });
     }
     async scanEntryBasis(relativePath, entry) {
@@ -4070,7 +9407,7 @@
           return await this.enqueue(async () => {
             if (await check())
               return skipped(registered);
-            const outcome = await removeStorageEntry(this.configuration.directory, segments, kind);
+            const outcome = await removeStorageEntry(this.source(), segments, kind);
             if (outcome === "not-empty")
               return skipped("目录不为空，未删除。");
             return {
@@ -4183,7 +9520,7 @@
         if (!this.database || !this.targets)
           throw new ServiceError({ code: "INSTANCE_DISABLED", message: "root 尚未恢复，拒绝文件清理。" });
         await authorize(new RootEntities(this.database, this.targets));
-        await new DirectoryStorage(this.configuration.directory, binding.charDbId, binding.chatDbId, this.mode === "opfs").remove();
+        await createStorage(this.source(), binding.charDbId, binding.chatDbId, this.mode === "opfs").remove();
       });
     }
     registerGenerated(binding) {
@@ -4214,7 +9551,7 @@
           throw new ServiceError({ code: "INSTANCE_DISABLED", message: "全局数据库尚未恢复。" });
         if (await this.targets.read(captured))
           return;
-        const db = await this.createDatabase(this.configuration.directory, captured, this.mode);
+        const db = await this.createDatabase(this.source(), captured, this.mode);
         try {
           if (await db.fileExists())
             existing();
@@ -4341,7 +9678,7 @@
           const targetKey = bindingKey(captured);
           let entry = this.scopedDatabases.get(targetKey);
           if (!entry) {
-            const db = await this.createDatabase(this.configuration.directory, captured, this.mode);
+            const db = await this.createDatabase(this.source(), captured, this.mode);
             this.bindDatabase(db, captured);
             entry = {
               db,
@@ -4504,7 +9841,7 @@
       });
       promise.catch(() => {});
       const a = {
-        id: crypto.randomUUID(),
+        id: randomUuid(),
         targetBuildId,
         purpose,
         participants: new Map([...ports].map((p) => [p, false])),
@@ -4683,6 +10020,9 @@
     hasWorkFor(matches) {
       return [...this.entities].some(([entity, entry]) => matches(entity) && (!!entry.token || !!entry.waiters.length));
     }
+    forget(entity) {
+      this.entities.delete(entity);
+    }
     seed(entity, id) {
       if (!this.entities.has(entity))
         this.entities.set(entity, { id, waiters: [] });
@@ -4708,8 +10048,8 @@
         this.entities.set(entity, { id: observed, waiters: [] });
         return Promise.resolve({ identityId: observed });
       }
-      entry ??= { id: crypto.randomUUID(), waiters: [] };
-      entry.token = crypto.randomUUID();
+      entry ??= { id: randomUuid(), waiters: [] };
+      entry.token = randomUuid();
       entry.owner = owner;
       this.entities.set(entity, entry);
       const candidate = entry, token = entry.token;
@@ -4775,10 +10115,7 @@
       ]);
       let coordinator = chatIdentities.get(domain);
       if (!coordinator) {
-        coordinator = new CharacterIdentities(async (id, entity) => {
-          await entities.propose(binding, entity, id);
-          await storage.registerGenerated({ ...binding, scope: "chat", chatDbId: id });
-        }, (entity) => deletions.assertEntity(binding, entity, true));
+        coordinator = new CharacterIdentities((id, entity) => entities.propose(binding, entity, id), (entity) => deletions.assertEntity(binding, entity, true));
         chatIdentities.set(domain, coordinator);
       }
       return coordinator;
@@ -4922,10 +10259,11 @@
   }
 
   // src/worker/runtime.ts
-  importScripts(new URL("sql-wasm.js", self.location.href).href);
-  function createWorkerRuntime(saveDebounceMs) {
-    const engine = initSqlJs({ locateFile: (file) => new URL(file, self.location.href).href });
-    const instanceId = crypto.randomUUID();
+  function createWorkerRuntime(options) {
+    const { engine, saveDebounceMs } = options;
+    engine.catch(() => {});
+    const instanceId = randomUuid();
+    let exited = false;
     const chatIdentities = new Map;
     const ports = new Set;
     const lastSeen = new Map;
@@ -4936,9 +10274,11 @@
         identity.disconnect(port);
       ports.delete(port);
       lastSeen.delete(port);
+      port.onmessage = null;
+      port.onmessageerror = null;
       port.close();
     }
-    setInterval(() => {
+    const heartbeatTimer = setInterval(() => {
       for (const [port, time] of lastSeen)
         if (Date.now() - time > 90000)
           removePort(port);
@@ -4952,7 +10292,7 @@
         }
       }
     }
-    const storage = new StorageCoordinator(new IndexedDbConfiguration, async (directory, binding, mode) => new SingleDatabase(await engine, new DirectoryStorage(directory, binding?.charDbId, binding?.chatDbId, mode === "opfs"), undefined, saveDebounceMs), (info) => {
+    const storage = new StorageCoordinator(new IndexedDbConfiguration, async (source, binding, mode) => new SingleDatabase(await engine, createStorage(source, binding?.charDbId, binding?.chatDbId, mode === "opfs"), undefined, saveDebounceMs), (info) => {
       const event = { type: "storage-changed", instanceId, ...withEntityRevision(info) };
       broadcast(event);
     });
@@ -5005,8 +10345,47 @@
       renames.assertSettled();
       deletions.assertSettled();
     };
+    storage.beforeManagementRepair = () => {
+      for (const coordinator of chatIdentities.values())
+        coordinator.assertSettled();
+    };
     storage.cleanupWaiting = (binding, target) => deletions.isCleanupWaiting(binding, target);
-    setInterval(() => {
+    storage.beforeScanRepair = (binding, request) => {
+      const entity = request.scope === "chat" ? JSON.stringify([request.avatar, request.file]) : undefined;
+      renames.assertEntity(binding, request.avatar);
+      renames.assertEntity(binding, entity);
+      deletions.assertEntity(binding, request.avatar);
+      if (entity)
+        deletions.assertEntity(binding, entity, true);
+      const busy = [...chatIdentities].some(([key, coordinator]) => {
+        const domain = JSON.parse(key);
+        return domain[0] === binding.storageId && domain[1] === binding.configGeneration && coordinator.hasWorkFor((value) => entity !== undefined ? value === entity : (() => {
+          try {
+            return JSON.parse(value)[0] === request.avatar;
+          } catch {
+            return false;
+          }
+        })());
+      });
+      const cleanup = request.scope === "chat" ? [request.chatDbId, request.expectedChat?.id].filter(Boolean).some((chatDbId) => storage.cleanupWaiting?.(binding, { scope: "chat", charDbId: request.charDbId, chatDbId })) : storage.cleanupWaiting?.(binding, { scope: "char", charDbId: request.charDbId });
+      if (busy || cleanup)
+        throw new ServiceError({
+          code: "RESULT_UNCONFIRMED",
+          resultState: "not-applied",
+          message: "这份数据仍在处理中，请等待当前操作结束后重新扫描。"
+        });
+    };
+    storage.invalidateScanReference = (binding, record) => entities.forgetReference(binding, record.referenceId, record.scope === "chat");
+    storage.scanRepairCompleted = (binding, request) => {
+      if (request.scope !== "chat")
+        return;
+      for (const [key, coordinator] of chatIdentities) {
+        const domain = JSON.parse(key);
+        if (domain[0] === binding.storageId && domain[1] === binding.configGeneration)
+          coordinator.forget(JSON.stringify([request.avatar, request.file]));
+      }
+    };
+    const idleTimer = setInterval(() => {
       storage.releaseIdle();
     }, 30000);
     const identity = createIdentityRequests({ storage, entities, deletions, renames, chatIdentities });
@@ -5029,7 +10408,7 @@
       let commands, id;
       try {
         commands = writeCommands(operation);
-        id = operation.callId ?? crypto.randomUUID();
+        id = operation.callId ?? randomUuid();
       } catch (error) {
         throw beforeBusinessSqlError(error);
       }
@@ -5072,7 +10451,14 @@
           for (const coordinator of chatIdentities.values())
             coordinator.assertSettled();
           authorize();
-        }), () => self.close());
+        }), () => {
+          exited = true;
+          clearInterval(heartbeatTimer);
+          clearInterval(idleTimer);
+          for (const connected of ports)
+            removePort(connected);
+          options.exit();
+        });
       }
       if (request.type === "hello" && restart.state !== "idle")
         throw new ServiceError({ code: "SERVICE_RESTARTING", message: "全局准备期间暂停新连接握手，请取消后显式重连。" });
@@ -5147,6 +10533,14 @@
       }
       if (request.type === "scan")
         return storage.scan(request.binding, request.request);
+      if (request.type === "scan-repair")
+        return storage.repairScan(request.binding, request.request);
+      if (request.type === "database-maintenance")
+        return storage.maintainDatabase(request.binding, request.request);
+      if (request.type === "identity-restart")
+        return storage.restartIdentity(request.binding, request.request);
+      if (request.type === "scan-management-repair")
+        return storage.repairManagement(request.binding, request.request);
       if (request.type === "scan-remove-entry")
         return storage.removeScanEntry(request.binding, request.request);
       if (request.type === "scan-remove-target")
@@ -5159,8 +10553,10 @@
       } catch (error) {
         throw preflightError(request, error);
       }
-      if (request.type === "hello")
+      if (request.type === "hello") {
+        await engine;
         return { protocolVersion: PROTOCOL_VERSION, buildId: BUILD_ID, ...withEntityRevision(await storage.getStatus()) };
+      }
       if (request.type === "ping")
         return { alive: true };
       if (request.type === "disconnect") {
@@ -5228,6 +10624,8 @@
       return invalidRequest();
     }
     function connectPort(port) {
+      if (exited)
+        throw new ServiceError({ code: "INSTANCE_DISABLED", message: "页面内数据库实例已退出，请刷新页面。" });
       ports.add(port);
       lastSeen.set(port, Date.now());
       port.onmessageerror = () => {
@@ -5284,8 +10682,21 @@
     return { connectPort };
   }
 
+  // src/worker/sql-loader.ts
+  function loadWorkerSqlJs() {
+    try {
+      const base = self.location.href;
+      importScripts(new URL("sql-wasm.js", base).href);
+      return globalThis.initSqlJs({
+        locateFile: (file) => new URL(file, base).href
+      });
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
   // src/worker/entry.ts
-  var runtime = createWorkerRuntime(1000);
+  var runtime = createWorkerRuntime({ engine: loadWorkerSqlJs(), saveDebounceMs: 1000, exit: () => self.close() });
   self.onconnect = (event) => {
     runtime.connectPort(event.ports[0]);
   };

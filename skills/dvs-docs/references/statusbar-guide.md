@@ -1,0 +1,90 @@
+# 悬浮状态栏
+
+## 制作悬浮状态栏
+
+例如在角落放一个可展开面板，显示当前时间、地点和物品。先沿用卡片已有的 HTML、Vue 或其他界面方式；DVS 负责提供数据，状态栏负责显示。没有现成界面时，用简单 HTML/CSS 即可，不必为读取几项数据引入新框架。
+
+### 界面与数据怎样接上
+
+状态栏作为独立脚本时，等待 DVS 注册就绪，再查询当前数据。它不再调用 `DVS.register()`，也不设置第二份 `dvs` 配置。业务注册仍由原卡片脚本负责。
+
+| 时机 | 状态栏做什么 |
+| --- | --- |
+| 面板首次打开 | 显示等待状态；注册就绪后立即读一次数据 |
+| 数据变化、聊天或 swipe 切换 | 重新取得 `DVS.getState()`，读取新目标，不复用旧 state 对象 |
+| 业务脚本重新注册 | 取消旧数据订阅，等新注册就绪后重新订阅并读取 |
+| 正在更新变量 | 显示处理状态；若有修改或重新更新按钮，按更新状态禁用 |
+| 当前表为空 | 明确显示“没有物品”等空状态 |
+| 读取失败 | 显示具体错误或简短错误加详情，不继续把旧值当作当前值 |
+| 脚本或组件卸载 | 取消订阅，移除自己的界面和事件 |
+
+下面是数据接线示例。`view` 代表你已经创建的界面，需要提供 `showWaiting`、`showState`、`showError`、`showProgress` 和 `remove` 五个方法；示例不规定样式或框架。
+
+```js
+async function connectStatusbar(view) {
+  let closed = false;
+  let revision = 0;
+  let stopData = () => {};
+  let stopProgress = () => {};
+  let stopRegistration = () => {};
+
+  function dispose() {
+    closed = true;
+    revision++;
+    stopData();
+    stopProgress();
+    stopRegistration();
+    window.removeEventListener('pagehide', dispose);
+    view.remove();
+  }
+  window.addEventListener('pagehide', dispose, { once: true });
+  view.showWaiting('等待 DVS 就绪');
+
+  async function refresh() {
+    const request = ++revision;
+    try {
+      const state = await DVS.getState();
+      const [scene, items] = await Promise.all([
+        state.table('场景').get('当前'),
+        state.table('物品').orderBy('名称', 'asc').rows(),
+      ]);
+      if (!closed && request === revision) view.showState({ scene, items });
+    } catch (error) {
+      if (!closed && request === revision) view.showError(error);
+    }
+  }
+
+  try {
+    await waitGlobalInitialized('DVS');
+    if (closed) return dispose;
+    stopRegistration = DVS.onRegistrationChange(ready => {
+      revision++;
+      stopData();
+      stopProgress();
+      stopData = stopProgress = () => {};
+      if (!ready) {
+        view.showWaiting('等待 DVS 就绪');
+        return;
+      }
+      stopData = DVS.onUpdate(refresh);
+      stopProgress = DVS.onUpdateStatus(status => view.showProgress(status));
+      void refresh();
+    });
+  } catch (error) {
+    if (!closed) view.showError(error);
+  }
+  return dispose;
+}
+```
+
+示例使用最小卡的场景和物品表；接入自己的卡时替换表名、业务键和显示字段。新一次读取开始后，旧读取的晚到结果会被丢弃，避免显示已经切走的目标。组件自行关闭时也要调用返回的 `dispose`；只折叠面板时是否保留订阅，由界面需要决定。订阅的准确生命周期见[注册状态与脚本关闭](dvs-api.md#注册状态与脚本关闭)。
+
+这条路径使用独立悬浮界面，不依赖正文中的状态栏占位标签。楼层内嵌状态栏是另一种接入方式，不能把尚未落实的自动占位行为当作悬浮状态栏正常显示的前提。
+
+### 按需要加入操作
+
+基础面板只读。用户明确需要修改数量、重新更新变量或调整功能时，再加入相应按钮：普通数据修改使用 DVS 当前状态的管理方法，多个相互依赖的修改使用 `state.transaction()`；重新计算最新正文的变量使用 `DVS.regen()`。这些按钮与仅展开、收起面板不同，要显示成功或错误结果，不能点击后只改界面数字。
+
+DVS 状态应按 DVS 的版本规则修改，不因为底层使用 SQLite 就直接更新业务表、绕开楼层关联。方法与操作限制见[修改与逻辑事务](dvs-api.md#修改与逻辑事务)、[更新进度](dvs-api.md#更新进度)。
+
+检查时覆盖首次打开、一次更新、切聊天、切 swipe、脚本重载和面板关闭。再看窄屏下是否遮挡输入框，展开收起能否操作，空状态和错误能否看清。模拟接口通过与真实酒馆运行分别报告。

@@ -10,12 +10,12 @@
   - 文件: welcome.txt
 世界书名称: 林溪与青禾书店
 条目:
-  - 名称: '[DVS_DDL]v1.0.0'
+  - 名称: '[DVS:DDL]v1.0.0'
     启用: false
     激活策略: { 类型: 蓝灯 }
     插入位置: { 类型: 角色定义之前, 顺序: 1 }
     文件: worldbook/ddl.sql
-  - 名称: '[DVS_INIT]welcome_0'
+  - 名称: '[DVS:初始化]welcome_0'
     启用: false
     激活策略: { 类型: 蓝灯 }
     插入位置: { 类型: 角色定义之前, 顺序: 2 }
@@ -25,17 +25,17 @@
     激活策略: { 类型: 蓝灯 }
     插入位置: { 类型: 角色定义之前, 顺序: 90 }
     文件: worldbook/person.txt
-  - 名称: '[DVS_NAR]当前状态'
+  - 名称: '[DVS:预处理,正文]当前状态'
     启用: true
     激活策略: { 类型: 蓝灯 }
     插入位置: { 类型: 角色定义之前, 顺序: 100 }
     文件: worldbook/narrative.txt
-  - 名称: '[DVS_RULES]更新规则'
+  - 名称: '[DVS:变量规则]更新规则'
     启用: true
     激活策略: { 类型: 蓝灯 }
     插入位置: { 类型: 角色定义之前, 顺序: 110 }
     文件: worldbook/rules.txt
-  - 名称: '[DVS_DATA]变量数据'
+  - 名称: '[DVS:变量数据]变量数据'
     启用: true
     激活策略: { 类型: 蓝灯 }
     插入位置: { 类型: 角色定义之前, 顺序: 120 }
@@ -49,7 +49,14 @@
         类型: 脚本
         文件: dvs.js
         数据:
-          dvs_enable: true
+          dvs:
+            enabled: true
+            exts:
+              tables_opt: false
+              plot_plan: false
+            config:
+              lb_opt:
+                llm_filter: false
         按钮:
           启用: false
           按钮列表: []

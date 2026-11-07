@@ -1,0 +1,20 @@
+{
+  "sources": {
+    "doc/sqlite-helper/契约/公共接口契约.md": "references/helper-api.md",
+    "doc/sqlite-helper/契约/数据库与保存契约.md": "references/helper-sql.md",
+    "doc/sqlite-helper/契约/调用等待与恢复契约.md": "references/helper-recovery.md",
+    "doc/sqlite-helper/指南/业务侧使用指南.md": "references/helper-author-guide.md",
+    "doc/sqlite-helper/指南/使用与维护指南.md": "references/helper-usage.md",
+    "doc/sqlite-helper/指南/错误说明.md": "references/helper-errors.md",
+    "examples/helper-notes/notes.js": "assets/helper-notes/notes.js",
+    "examples/helper-notes/README.md": "assets/helper-notes/README.md",
+    "LICENSE": "LICENSE",
+    "skills/NOTICE.md": "NOTICE.md",
+    "skills/st-sqlite-scripting/SKILL.md": "SKILL.md"
+  },
+  "requires": [
+    "dvs-docs"
+  ],
+  "generated": {},
+  "contentHash": "e7a45f857051888a43e0e35f42ee413f857901aa2366697bc7931c6f73af19ba"
+}
