@@ -17,7 +17,25 @@ description: DVS 卡片开发总入口。用于新卡接入、已有卡整体调
 | 拦截正文生成，用于正文前确认人设、购物、前置交互对话等场景 | [制作生成拦截界面](../dvs-docs/references/generation-interception-guide.md#制作生成拦截界面) |
 | 制作或修改悬浮状态栏 | [制作悬浮状态栏](../dvs-docs/references/statusbar-guide.md#制作悬浮状态栏) |
 | 转换旧标签和默认配置 | [旧卡升级](../dvs-docs/references/migration-guide.md)，使用本包 `scripts/dvs-card-migrate.mjs` |
+| 压缩角色卡中的长文本、DDL 或 INIT | 使用本包 `scripts/dvs-card-compress.mjs`，步骤见下文 |
 | 初值、更新或显示不符合预期 | [按现象检查问题](references/setup-guide.md#按现象检查问题) |
+
+## 压缩世界书条目
+
+在角色卡的 `index.yaml` 旁创建 `compress-list.yaml`。每项填写一个被世界书条目引用的明文文件，路径相对于 `index.yaml`，写全扩展名。例如：
+
+```yaml
+- 世界书/DVS-INIT.sql
+- 世界书/房车设定.txt
+```
+
+先按卡片原有方式打包。假设索引和打好的 `原卡.png` 都在工程根目录，且本 skill 安装在 `.agents/skills/dvs`，从工程根目录运行：
+
+```sh
+node ".agents/skills/dvs/scripts/dvs-card-compress.mjs" "index.yaml" "原卡.png" "发布卡.png"
+```
+
+使用 Node.js 22.2 或更高版本即可，依赖已包含在脚本中。若 skill 安装在别处，把命令中的脚本路径换成实际位置。三个参数依次为索引、原始卡和另存的发布卡。输入是 JSON 卡时，输出也用 `.json`。发布生成的副本，源文件保留明文。玩家打开压缩卡时，需要支持解压的 SQLite Helper 插件。
 
 ## 完成卡片接入
 

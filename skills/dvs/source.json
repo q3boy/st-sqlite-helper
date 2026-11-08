@@ -33,7 +33,18 @@
       "dependencies": {
         "yaml": "2.9.1"
       }
+    },
+    "scripts/dvs-card-compress.mjs": {
+      "build": "scripts/skills/build.ts",
+      "sources": [
+        "scripts/card-compress/cli.ts",
+        "scripts/card-compress/pack.ts",
+        "src/shared/worldbook-compression-format.ts"
+      ],
+      "dependencies": {
+        "yaml": "2.9.1"
+      }
     }
   },
-  "contentHash": "dd530b41b6033433dbb66a1cd322a6c00983e5c1e0848e94761b4c9fe6ddeed3"
+  "contentHash": "7272bd97c66159c33ef04e92a48a9a3fb2afdc0a65cedbb4fff76dc70fc6dfc8"
 }
