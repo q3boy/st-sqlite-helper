@@ -2097,7 +2097,7 @@ function fileRetryable(error) {
 
 // src/protocol.ts
 var PROTOCOL_VERSION = 27;
-var BUILD_ID = "26e9d06c-2b03-4ec1-9e35-6fda46d32a25";
+var BUILD_ID = "993afeee-e391-4600-bbce-1b4ecb65e186";
 var extensionEntryPath = new URL(import.meta.url).pathname;
 var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
 var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;
@@ -8799,6 +8799,58 @@ function isUserRule(tags) {
   return tags.user === "filter_rules" || tags.user === "lorebook_filter_rules" || tags.user === "table_filter_rules" || tags.user === "plot";
 }
 
+// src/shared/worldbook-compression-format.ts
+var BROTLI_HEADER = "DVS-BROTLI-BASE64";
+function isCompressedContent(content) {
+  return typeof content === "string" && (content === BROTLI_HEADER || content.startsWith(`${BROTLI_HEADER}
+`) || content.startsWith(`${BROTLI_HEADER}\r
+`));
+}
+
+// src/dvs2/worldbook.ts
+function worldbookEntryName(name) {
+  return name.replace(/\[DVS(?::|_)[^\]]*\]/gi, "").trim();
+}
+function allowsWorldbookStage(name, stage) {
+  const tags = parseLorebookTags(name);
+  return !tags.metadata && tags.stages.includes(stage === "variable" ? "ai" : "narrative") && (stage !== "variable" || !tags.ai);
+}
+function sortWorldbookEntries(entries) {
+  for (const entry of entries)
+    if (!Number.isFinite(entry.order))
+      throw new Error(`DVS 世界书条目顺序无效：${entry.book} / ${entry.name}`);
+  return [...entries].sort((a, b) => a.order - b.order);
+}
+async function readWorldbooks(reader, avatar, assertCurrent) {
+  assertCurrent();
+  const names = reader.getCharWorldbookNames(avatar);
+  const books = [...new Set([names.primary, ...names.additional].filter((name) => !!name))];
+  const result = [];
+  for (const book of books) {
+    let entries = await reader.getWorldbook(book);
+    assertCurrent();
+    if (entries.some((entry) => isCompressedContent(entry.content)) && reader.prepareWorldbook) {
+      await reader.prepareWorldbook(book);
+      assertCurrent();
+      entries = await reader.getWorldbook(book);
+      assertCurrent();
+    }
+    for (const entry of entries) {
+      if (isCompressedContent(entry.content))
+        throw new Error(`世界书“${book}”条目“${entry.name}”（uid ${entry.uid}）仍是压缩正文，请查看解压提示，处理后重新打开聊天。`);
+      result.push({
+        book,
+        uid: entry.uid,
+        name: entry.name,
+        content: entry.content,
+        enabled: entry.enabled,
+        order: entry.position.order
+      });
+    }
+  }
+  return result;
+}
+
 // src/dvs2/ext/tables/worldbook.ts
 function strictVersion(version) {
   const parsed = import_semver2.parse(version, { loose: false });
@@ -8826,10 +8878,15 @@ function migrations(entries, current) {
   return selected.filter((entry) => current === null || import_semver2.compare(entry.version, current) > 0);
 }
 function initializationEntry(entries, welcomeId) {
-  const candidates = entries.filter((entry) => parseLorebookTags(entry.name).metadata === "init" && parseMetadataSuffix(entry.name) === `welcome_${welcomeId}`);
-  if (candidates.length > 1)
-    throw new Error(`开场白 welcome_${welcomeId} 需要唯一 DVS 初始化条目，实际 ${candidates.length} 条。`);
-  return candidates[0] ?? null;
+  return sortWorldbookEntries(entries.filter((entry) => {
+    if (parseLorebookTags(entry.name).metadata !== "init")
+      return false;
+    const suffix = parseMetadataSuffix(entry.name);
+    if (suffix === "welcome_*")
+      return true;
+    const numbers = /^welcome_(\d+(?:,\d+)*)$/.exec(suffix ?? "")?.[1];
+    return numbers !== undefined && numbers.split(",").includes(String(welcomeId));
+  }));
 }
 
 // src/dvs2/ids.ts
@@ -30839,42 +30896,114 @@ var G4 = /* @__PURE__ */ defineComponent({
   }
 });
 
-// node_modules/@phosphor-icons/vue/dist/icons/PhBrain.vue.mjs
-var g = ["width", "height", "fill", "transform"];
-var M9 = { key: 0 };
-var y5 = /* @__PURE__ */ createBaseVNode("path", { d: "M252,124a60.14,60.14,0,0,0-32-53.08,52,52,0,0,0-92-32.11A52,52,0,0,0,36,70.92a60,60,0,0,0,0,106.14,52,52,0,0,0,92,32.13,52,52,0,0,0,92-32.13A60.05,60.05,0,0,0,252,124ZM88,204a28,28,0,0,1-26.85-20.07c1,0,1.89.07,2.85.07h8a12,12,0,0,0,0-24H64A36,36,0,0,1,52,90.05a12,12,0,0,0,8-11.32V72a28,28,0,0,1,56,0v60.18a51.61,51.61,0,0,0-7.2-3.85,12,12,0,1,0-9.6,22A28,28,0,0,1,88,204Zm104-44h-8a12,12,0,0,0,0,24h8c1,0,1.9,0,2.85-.07a28,28,0,1,1-38-33.61,12,12,0,1,0-9.6-22,51.61,51.61,0,0,0-7.2,3.85V72a28,28,0,0,1,56,0v6.73a12,12,0,0,0,8,11.32,36,36,0,0,1-12,70Zm16-44a12,12,0,0,1-12,12,40,40,0,0,1-40-40V84a12,12,0,0,1,24,0v4a16,16,0,0,0,16,16A12,12,0,0,1,208,116ZM100,88a40,40,0,0,1-40,40,12,12,0,0,1,0-24A16,16,0,0,0,76,88V84a12,12,0,0,1,24,0Z" }, null, -1);
-var f6 = [
-  y5
+// node_modules/@phosphor-icons/vue/dist/icons/PhBooks.vue.mjs
+var M9 = ["width", "height", "fill", "transform"];
+var v2 = { key: 0 };
+var g = /* @__PURE__ */ createBaseVNode("path", { d: "M235.57,193.73,202.38,35.93a20,20,0,0,0-23.76-15.48L131.81,30.51a19.82,19.82,0,0,0-11,6.65A20,20,0,0,0,104,28H56A20,20,0,0,0,36,48V208a20,20,0,0,0,20,20h48a20,20,0,0,0,20-20V90.25l25.62,121.82A20,20,0,0,0,169.15,228a20.27,20.27,0,0,0,4.23-.45l46.81-10.06A20.1,20.1,0,0,0,235.57,193.73ZM148.19,88.65l39-8.38,2.53,12-39,8.38Zm7.46,35.5,39-8.38,9.16,43.58-39,8.38Zm24.06-79.39,2.53,12-39,8.38-2.53-12ZM60,88h40v80H60Zm40-36V64H60V52ZM60,204V192h40v12Zm112.29-.76-2.53-12,39-8.38,2.53,12Z" }, null, -1);
+var H5 = [
+  g
 ];
-var H5 = { key: 1 };
-var w9 = /* @__PURE__ */ createBaseVNode("path", {
+var y5 = { key: 1 };
+var f6 = /* @__PURE__ */ createBaseVNode("path", {
+  d: "M48,72h64V184H48ZM190.64,38.39a8,8,0,0,0-9.5-6.21l-46.81,10a8.07,8.07,0,0,0-6.15,9.57L139.79,107l62.46-13.42Z",
+  opacity: "0.2"
+}, null, -1);
+var w9 = /* @__PURE__ */ createBaseVNode("path", { d: "M231.65,194.55,198.46,36.75a16,16,0,0,0-19-12.39L132.65,34.42a16.08,16.08,0,0,0-12.3,19l33.19,157.8A16,16,0,0,0,169.16,224a16.25,16.25,0,0,0,3.38-.36l46.81-10.06A16.09,16.09,0,0,0,231.65,194.55ZM136,50.15c0-.06,0-.09,0-.09l46.8-10,3.33,15.87L139.33,66Zm6.62,31.47,46.82-10.05,3.34,15.9L146,97.53Zm6.64,31.57,46.82-10.06,13.3,63.24-46.82,10.06ZM216,197.94l-46.8,10-3.33-15.87L212.67,182,216,197.85C216,197.91,216,197.94,216,197.94ZM104,32H56A16,16,0,0,0,40,48V208a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V48A16,16,0,0,0,104,32ZM56,48h48V64H56Zm0,32h48v96H56Zm48,128H56V192h48v16Z" }, null, -1);
+var k9 = [
+  f6,
+  w9
+];
+var C9 = { key: 2 };
+var x9 = /* @__PURE__ */ createBaseVNode("path", { d: "M231.65,194.55,198.46,36.75a16,16,0,0,0-19-12.39L132.65,34.42a16.08,16.08,0,0,0-12.3,19l33.19,157.8A16,16,0,0,0,169.16,224a16.25,16.25,0,0,0,3.38-.36l46.81-10.06A16.09,16.09,0,0,0,231.65,194.55ZM136,50.15c0-.06,0-.09,0-.09l46.8-10,3.33,15.87L139.33,66Zm10,47.38-3.35-15.9,46.82-10.06,3.34,15.9Zm70,100.41-46.8,10-3.33-15.87L212.67,182,216,197.85C216,197.91,216,197.94,216,197.94ZM104,32H56A16,16,0,0,0,40,48V208a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V48A16,16,0,0,0,104,32ZM56,48h48V64H56Zm48,160H56V192h48v16Z" }, null, -1);
+var S9 = [
+  x9
+];
+var z9 = { key: 3 };
+var B9 = /* @__PURE__ */ createBaseVNode("path", { d: "M104,34H56A14,14,0,0,0,42,48V208a14,14,0,0,0,14,14h48a14,14,0,0,0,14-14V48A14,14,0,0,0,104,34ZM54,78h52V178H54Zm2-32h48a2,2,0,0,1,2,2V66H54V48A2,2,0,0,1,56,46Zm48,164H56a2,2,0,0,1-2-2V190h52v18A2,2,0,0,1,104,210Zm125.7-15L196.51,37.16a14,14,0,0,0-16.63-10.85L133.07,36.37A14.09,14.09,0,0,0,122.3,53l33.19,157.81a14,14,0,0,0,6.1,8.9,13.85,13.85,0,0,0,7.57,2.26,13.55,13.55,0,0,0,3-.32l46.81-10.05A14.09,14.09,0,0,0,229.7,195Zm-82.81-83.32,50.73-10.9,14.12,67.16L161,178.81Zm-6.63-31.56L191,69.19,195.15,89l-50.73,10.9Zm-4.66-32,46.8-10.05a2.18,2.18,0,0,1,.42,0,1.89,1.89,0,0,1,1.05.32,2,2,0,0,1,.89,1.31l3.75,17.82L137.79,68.34l-3.74-17.78A2.07,2.07,0,0,1,135.6,48.1Zm80.81,151.8L169.6,210a1.92,1.92,0,0,1-1.47-.27,2,2,0,0,1-.89-1.31l-3.75-17.82,50.72-10.9L218,197.43A2.07,2.07,0,0,1,216.41,199.9Z" }, null, -1);
+var N9 = [
+  B9
+];
+var b9 = { key: 4 };
+var E9 = /* @__PURE__ */ createBaseVNode("path", { d: "M231.65,194.55,198.46,36.75a16,16,0,0,0-19-12.39L132.65,34.42a16.08,16.08,0,0,0-12.3,19l33.19,157.8A16,16,0,0,0,169.16,224a16.25,16.25,0,0,0,3.38-.36l46.81-10.06A16.09,16.09,0,0,0,231.65,194.55ZM136,50.15c0-.06,0-.09,0-.09l46.8-10,3.33,15.87L139.33,66Zm6.62,31.47,46.82-10.05,3.34,15.9L146,97.53Zm6.64,31.57,46.82-10.06,13.3,63.24-46.82,10.06ZM216,197.94l-46.8,10-3.33-15.87L212.67,182,216,197.85C216,197.91,216,197.94,216,197.94ZM104,32H56A16,16,0,0,0,40,48V208a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V48A16,16,0,0,0,104,32ZM56,48h48V64H56Zm0,32h48v96H56Zm48,128H56V192h48v16Z" }, null, -1);
+var P9 = [
+  E9
+];
+var W9 = { key: 5 };
+var $9 = /* @__PURE__ */ createBaseVNode("path", { d: "M104,36H56A12,12,0,0,0,44,48V208a12,12,0,0,0,12,12h48a12,12,0,0,0,12-12V48A12,12,0,0,0,104,36ZM52,76h56V180H52Zm4-32h48a4,4,0,0,1,4,4V68H52V48A4,4,0,0,1,56,44Zm48,168H56a4,4,0,0,1-4-4V188h56v20A4,4,0,0,1,104,212Zm123.74-16.62L194.55,37.57a12,12,0,0,0-14.25-9.3L133.49,38.32a12.1,12.1,0,0,0-9.23,14.3l33.19,157.81a12,12,0,0,0,14.25,9.3l46.81-10.06h0A12.08,12.08,0,0,0,227.74,195.38Zm-83.21-85.27,54.63-11.73,15,71.07-54.63,11.74Zm-6.64-31.56,54.64-11.74,5,23.74-54.64,11.73Zm-2.71-32.4L182,36.09a4,4,0,0,1,.84-.09,3.94,3.94,0,0,1,2.14.64,4,4,0,0,1,1.76,2.58L190.88,59,136.24,70.72,132.09,51A4.07,4.07,0,0,1,135.18,46.15Zm81.65,155.7L170,211.91a4,4,0,0,1-3-.55,4,4,0,0,1-1.76-2.58L161.12,189l54.64-11.73L219.91,197A4.07,4.07,0,0,1,216.83,201.85Z" }, null, -1);
+var j9 = [
+  $9
+];
+var q4 = {
+  name: "PhBooks"
+};
+var G5 = /* @__PURE__ */ defineComponent({
+  ...q4,
+  props: {
+    weight: {
+      type: String
+    },
+    size: {
+      type: [String, Number]
+    },
+    color: {
+      type: String
+    },
+    mirrored: {
+      type: Boolean
+    }
+  },
+  setup(r) {
+    const a = r, c = inject("weight", "regular"), Z = inject("size", "1em"), d = inject("color", "currentColor"), m = inject("mirrored", false), l = computed2(() => a.weight ?? c), n = computed2(() => a.size ?? Z), _ = computed2(() => a.color ?? d), V = computed2(() => a.mirrored !== undefined ? a.mirrored ? "scale(-1, 1)" : undefined : m ? "scale(-1, 1)" : undefined);
+    return (i, D) => (openBlock(), createElementBlock("svg", mergeProps({
+      xmlns: "http://www.w3.org/2000/svg",
+      viewBox: "0 0 256 256",
+      width: n.value,
+      height: n.value,
+      fill: _.value,
+      transform: V.value
+    }, i.$attrs), [
+      renderSlot(i.$slots, "default"),
+      l.value === "bold" ? (openBlock(), createElementBlock("g", v2, H5)) : l.value === "duotone" ? (openBlock(), createElementBlock("g", y5, k9)) : l.value === "fill" ? (openBlock(), createElementBlock("g", C9, S9)) : l.value === "light" ? (openBlock(), createElementBlock("g", z9, N9)) : l.value === "regular" ? (openBlock(), createElementBlock("g", b9, P9)) : l.value === "thin" ? (openBlock(), createElementBlock("g", W9, j9)) : createCommentVNode("", true)
+    ], 16, M9));
+  }
+});
+
+// node_modules/@phosphor-icons/vue/dist/icons/PhBrain.vue.mjs
+var g2 = ["width", "height", "fill", "transform"];
+var M10 = { key: 0 };
+var y6 = /* @__PURE__ */ createBaseVNode("path", { d: "M252,124a60.14,60.14,0,0,0-32-53.08,52,52,0,0,0-92-32.11A52,52,0,0,0,36,70.92a60,60,0,0,0,0,106.14,52,52,0,0,0,92,32.13,52,52,0,0,0,92-32.13A60.05,60.05,0,0,0,252,124ZM88,204a28,28,0,0,1-26.85-20.07c1,0,1.89.07,2.85.07h8a12,12,0,0,0,0-24H64A36,36,0,0,1,52,90.05a12,12,0,0,0,8-11.32V72a28,28,0,0,1,56,0v60.18a51.61,51.61,0,0,0-7.2-3.85,12,12,0,1,0-9.6,22A28,28,0,0,1,88,204Zm104-44h-8a12,12,0,0,0,0,24h8c1,0,1.9,0,2.85-.07a28,28,0,1,1-38-33.61,12,12,0,1,0-9.6-22,51.61,51.61,0,0,0-7.2,3.85V72a28,28,0,0,1,56,0v6.73a12,12,0,0,0,8,11.32,36,36,0,0,1-12,70Zm16-44a12,12,0,0,1-12,12,40,40,0,0,1-40-40V84a12,12,0,0,1,24,0v4a16,16,0,0,0,16,16A12,12,0,0,1,208,116ZM100,88a40,40,0,0,1-40,40,12,12,0,0,1,0-24A16,16,0,0,0,76,88V84a12,12,0,0,1,24,0Z" }, null, -1);
+var f7 = [
+  y6
+];
+var H6 = { key: 1 };
+var w10 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M240,124a48,48,0,0,1-32,45.27h0V176a40,40,0,0,1-80,0,40,40,0,0,1-80,0v-6.73h0a48,48,0,0,1,0-90.54V72a40,40,0,0,1,80,0,40,40,0,0,1,80,0v6.73A48,48,0,0,1,240,124Z",
   opacity: "0.2"
 }, null, -1);
-var k9 = /* @__PURE__ */ createBaseVNode("path", { d: "M248,124a56.11,56.11,0,0,0-32-50.61V72a48,48,0,0,0-88-26.49A48,48,0,0,0,40,72v1.39a56,56,0,0,0,0,101.2V176a48,48,0,0,0,88,26.49A48,48,0,0,0,216,176v-1.41A56.09,56.09,0,0,0,248,124ZM88,208a32,32,0,0,1-31.81-28.56A55.87,55.87,0,0,0,64,180h8a8,8,0,0,0,0-16H64A40,40,0,0,1,50.67,86.27,8,8,0,0,0,56,78.73V72a32,32,0,0,1,64,0v68.26A47.8,47.8,0,0,0,88,128a8,8,0,0,0,0,16,32,32,0,0,1,0,64Zm104-44h-8a8,8,0,0,0,0,16h8a55.87,55.87,0,0,0,7.81-.56A32,32,0,1,1,168,144a8,8,0,0,0,0-16,47.8,47.8,0,0,0-32,12.26V72a32,32,0,0,1,64,0v6.73a8,8,0,0,0,5.33,7.54A40,40,0,0,1,192,164Zm16-52a8,8,0,0,1-8,8h-4a36,36,0,0,1-36-36V80a8,8,0,0,1,16,0v4a20,20,0,0,0,20,20h4A8,8,0,0,1,208,112ZM60,120H56a8,8,0,0,1,0-16h4A20,20,0,0,0,80,84V80a8,8,0,0,1,16,0v4A36,36,0,0,1,60,120Z" }, null, -1);
-var x9 = [
-  w9,
-  k9
+var k10 = /* @__PURE__ */ createBaseVNode("path", { d: "M248,124a56.11,56.11,0,0,0-32-50.61V72a48,48,0,0,0-88-26.49A48,48,0,0,0,40,72v1.39a56,56,0,0,0,0,101.2V176a48,48,0,0,0,88,26.49A48,48,0,0,0,216,176v-1.41A56.09,56.09,0,0,0,248,124ZM88,208a32,32,0,0,1-31.81-28.56A55.87,55.87,0,0,0,64,180h8a8,8,0,0,0,0-16H64A40,40,0,0,1,50.67,86.27,8,8,0,0,0,56,78.73V72a32,32,0,0,1,64,0v68.26A47.8,47.8,0,0,0,88,128a8,8,0,0,0,0,16,32,32,0,0,1,0,64Zm104-44h-8a8,8,0,0,0,0,16h8a55.87,55.87,0,0,0,7.81-.56A32,32,0,1,1,168,144a8,8,0,0,0,0-16,47.8,47.8,0,0,0-32,12.26V72a32,32,0,0,1,64,0v6.73a8,8,0,0,0,5.33,7.54A40,40,0,0,1,192,164Zm16-52a8,8,0,0,1-8,8h-4a36,36,0,0,1-36-36V80a8,8,0,0,1,16,0v4a20,20,0,0,0,20,20h4A8,8,0,0,1,208,112ZM60,120H56a8,8,0,0,1,0-16h4A20,20,0,0,0,80,84V80a8,8,0,0,1,16,0v4A36,36,0,0,1,60,120Z" }, null, -1);
+var x10 = [
+  w10,
+  k10
 ];
-var S9 = { key: 2 };
-var z9 = /* @__PURE__ */ createBaseVNode("path", { d: "M212,76V72a44,44,0,0,0-74.86-31.31,3.93,3.93,0,0,0-1.14,2.8v88.72a4,4,0,0,0,6.2,3.33A47.67,47.67,0,0,1,167.68,128a8.18,8.18,0,0,1,8.31,7.58,8,8,0,0,1-8,8.42,32,32,0,0,0-32,32v33.88a4,4,0,0,0,1.49,3.12,47.92,47.92,0,0,0,74.21-17.16,4,4,0,0,0-4.49-5.56A68.06,68.06,0,0,1,192,192h-7.73a8.18,8.18,0,0,1-8.25-7.47,8,8,0,0,1,8-8.53h8a51.6,51.6,0,0,0,24-5.88v0A52,52,0,0,0,212,76Zm-12,36h-4a36,36,0,0,1-36-36V72a8,8,0,0,1,16,0v4a20,20,0,0,0,20,20h4a8,8,0,0,1,0,16ZM88,28A44.05,44.05,0,0,0,44,72v4a52,52,0,0,0-4,94.12h0A51.6,51.6,0,0,0,64,176h7.73A8.18,8.18,0,0,1,80,183.47,8,8,0,0,1,72,192H64a67.48,67.48,0,0,1-15.21-1.73,4,4,0,0,0-4.5,5.55A47.93,47.93,0,0,0,118.51,213a4,4,0,0,0,1.49-3.12V176a32,32,0,0,0-32-32,8,8,0,0,1-8-8.42A8.18,8.18,0,0,1,88.32,128a47.67,47.67,0,0,1,25.48,7.54,4,4,0,0,0,6.2-3.33V43.49a4,4,0,0,0-1.14-2.81A43.85,43.85,0,0,0,88,28Zm8,48a36,36,0,0,1-36,36H56a8,8,0,0,1,0-16h4A20,20,0,0,0,80,76V72a8,8,0,0,1,16,0Z" }, null, -1);
-var B9 = [
-  z9
+var S10 = { key: 2 };
+var z10 = /* @__PURE__ */ createBaseVNode("path", { d: "M212,76V72a44,44,0,0,0-74.86-31.31,3.93,3.93,0,0,0-1.14,2.8v88.72a4,4,0,0,0,6.2,3.33A47.67,47.67,0,0,1,167.68,128a8.18,8.18,0,0,1,8.31,7.58,8,8,0,0,1-8,8.42,32,32,0,0,0-32,32v33.88a4,4,0,0,0,1.49,3.12,47.92,47.92,0,0,0,74.21-17.16,4,4,0,0,0-4.49-5.56A68.06,68.06,0,0,1,192,192h-7.73a8.18,8.18,0,0,1-8.25-7.47,8,8,0,0,1,8-8.53h8a51.6,51.6,0,0,0,24-5.88v0A52,52,0,0,0,212,76Zm-12,36h-4a36,36,0,0,1-36-36V72a8,8,0,0,1,16,0v4a20,20,0,0,0,20,20h4a8,8,0,0,1,0,16ZM88,28A44.05,44.05,0,0,0,44,72v4a52,52,0,0,0-4,94.12h0A51.6,51.6,0,0,0,64,176h7.73A8.18,8.18,0,0,1,80,183.47,8,8,0,0,1,72,192H64a67.48,67.48,0,0,1-15.21-1.73,4,4,0,0,0-4.5,5.55A47.93,47.93,0,0,0,118.51,213a4,4,0,0,0,1.49-3.12V176a32,32,0,0,0-32-32,8,8,0,0,1-8-8.42A8.18,8.18,0,0,1,88.32,128a47.67,47.67,0,0,1,25.48,7.54,4,4,0,0,0,6.2-3.33V43.49a4,4,0,0,0-1.14-2.81A43.85,43.85,0,0,0,88,28Zm8,48a36,36,0,0,1-36,36H56a8,8,0,0,1,0-16h4A20,20,0,0,0,80,76V72a8,8,0,0,1,16,0Z" }, null, -1);
+var B10 = [
+  z10
 ];
-var C9 = { key: 3 };
-var N9 = /* @__PURE__ */ createBaseVNode("path", { d: "M246,124a54.13,54.13,0,0,0-32-49.33V72a46,46,0,0,0-86-22.67A46,46,0,0,0,42,72v2.67a54,54,0,0,0,0,98.63V176a46,46,0,0,0,86,22.67A46,46,0,0,0,214,176v-2.7A54.07,54.07,0,0,0,246,124ZM88,210a34,34,0,0,1-34-32.94A53.67,53.67,0,0,0,64,178h8a6,6,0,0,0,0-12H64A42,42,0,0,1,50,84.39a6,6,0,0,0,4-5.66V72a34,34,0,0,1,68,0v73.05A45.89,45.89,0,0,0,88,130a6,6,0,0,0,0,12,34,34,0,0,1,0,68Zm104-44h-8a6,6,0,0,0,0,12h8a53.67,53.67,0,0,0,10-.94A34,34,0,1,1,168,142a6,6,0,0,0,0-12,45.89,45.89,0,0,0-34,15.05V72a34,34,0,0,1,68,0v6.73a6,6,0,0,0,4,5.66A42,42,0,0,1,192,166Zm14-54a6,6,0,0,1-6,6h-4a34,34,0,0,1-34-34V80a6,6,0,0,1,12,0v4a22,22,0,0,0,22,22h4A6,6,0,0,1,206,112ZM60,118H56a6,6,0,0,1,0-12h4A22,22,0,0,0,82,84V80a6,6,0,0,1,12,0v4A34,34,0,0,1,60,118Z" }, null, -1);
-var b9 = [
-  N9
+var C10 = { key: 3 };
+var N10 = /* @__PURE__ */ createBaseVNode("path", { d: "M246,124a54.13,54.13,0,0,0-32-49.33V72a46,46,0,0,0-86-22.67A46,46,0,0,0,42,72v2.67a54,54,0,0,0,0,98.63V176a46,46,0,0,0,86,22.67A46,46,0,0,0,214,176v-2.7A54.07,54.07,0,0,0,246,124ZM88,210a34,34,0,0,1-34-32.94A53.67,53.67,0,0,0,64,178h8a6,6,0,0,0,0-12H64A42,42,0,0,1,50,84.39a6,6,0,0,0,4-5.66V72a34,34,0,0,1,68,0v73.05A45.89,45.89,0,0,0,88,130a6,6,0,0,0,0,12,34,34,0,0,1,0,68Zm104-44h-8a6,6,0,0,0,0,12h8a53.67,53.67,0,0,0,10-.94A34,34,0,1,1,168,142a6,6,0,0,0,0-12,45.89,45.89,0,0,0-34,15.05V72a34,34,0,0,1,68,0v6.73a6,6,0,0,0,4,5.66A42,42,0,0,1,192,166Zm14-54a6,6,0,0,1-6,6h-4a34,34,0,0,1-34-34V80a6,6,0,0,1,12,0v4a22,22,0,0,0,22,22h4A6,6,0,0,1,206,112ZM60,118H56a6,6,0,0,1,0-12h4A22,22,0,0,0,82,84V80a6,6,0,0,1,12,0v4A34,34,0,0,1,60,118Z" }, null, -1);
+var b10 = [
+  N10
 ];
-var E9 = { key: 4 };
-var P9 = /* @__PURE__ */ createBaseVNode("path", { d: "M248,124a56.11,56.11,0,0,0-32-50.61V72a48,48,0,0,0-88-26.49A48,48,0,0,0,40,72v1.39a56,56,0,0,0,0,101.2V176a48,48,0,0,0,88,26.49A48,48,0,0,0,216,176v-1.41A56.09,56.09,0,0,0,248,124ZM88,208a32,32,0,0,1-31.81-28.56A55.87,55.87,0,0,0,64,180h8a8,8,0,0,0,0-16H64A40,40,0,0,1,50.67,86.27,8,8,0,0,0,56,78.73V72a32,32,0,0,1,64,0v68.26A47.8,47.8,0,0,0,88,128a8,8,0,0,0,0,16,32,32,0,0,1,0,64Zm104-44h-8a8,8,0,0,0,0,16h8a55.87,55.87,0,0,0,7.81-.56A32,32,0,1,1,168,144a8,8,0,0,0,0-16,47.8,47.8,0,0,0-32,12.26V72a32,32,0,0,1,64,0v6.73a8,8,0,0,0,5.33,7.54A40,40,0,0,1,192,164Zm16-52a8,8,0,0,1-8,8h-4a36,36,0,0,1-36-36V80a8,8,0,0,1,16,0v4a20,20,0,0,0,20,20h4A8,8,0,0,1,208,112ZM60,120H56a8,8,0,0,1,0-16h4A20,20,0,0,0,80,84V80a8,8,0,0,1,16,0v4A36,36,0,0,1,60,120Z" }, null, -1);
-var W9 = [
-  P9
+var E10 = { key: 4 };
+var P10 = /* @__PURE__ */ createBaseVNode("path", { d: "M248,124a56.11,56.11,0,0,0-32-50.61V72a48,48,0,0,0-88-26.49A48,48,0,0,0,40,72v1.39a56,56,0,0,0,0,101.2V176a48,48,0,0,0,88,26.49A48,48,0,0,0,216,176v-1.41A56.09,56.09,0,0,0,248,124ZM88,208a32,32,0,0,1-31.81-28.56A55.87,55.87,0,0,0,64,180h8a8,8,0,0,0,0-16H64A40,40,0,0,1,50.67,86.27,8,8,0,0,0,56,78.73V72a32,32,0,0,1,64,0v68.26A47.8,47.8,0,0,0,88,128a8,8,0,0,0,0,16,32,32,0,0,1,0,64Zm104-44h-8a8,8,0,0,0,0,16h8a55.87,55.87,0,0,0,7.81-.56A32,32,0,1,1,168,144a8,8,0,0,0,0-16,47.8,47.8,0,0,0-32,12.26V72a32,32,0,0,1,64,0v6.73a8,8,0,0,0,5.33,7.54A40,40,0,0,1,192,164Zm16-52a8,8,0,0,1-8,8h-4a36,36,0,0,1-36-36V80a8,8,0,0,1,16,0v4a20,20,0,0,0,20,20h4A8,8,0,0,1,208,112ZM60,120H56a8,8,0,0,1,0-16h4A20,20,0,0,0,80,84V80a8,8,0,0,1,16,0v4A36,36,0,0,1,60,120Z" }, null, -1);
+var W10 = [
+  P10
 ];
-var $9 = { key: 5 };
-var j9 = /* @__PURE__ */ createBaseVNode("path", { d: "M244,124a52.1,52.1,0,0,0-32-48V72a44,44,0,0,0-84-18.3A44,44,0,0,0,44,72v4a52,52,0,0,0,0,96v4a44,44,0,0,0,84,18.3A44,44,0,0,0,212,176v-4A52.07,52.07,0,0,0,244,124ZM88,212a36,36,0,0,1-36-36v-1.41A52.13,52.13,0,0,0,64,176h8a4,4,0,0,0,0-8H64A44,44,0,0,1,49.33,82.5,4,4,0,0,0,52,78.73V72a36,36,0,0,1,72,0v78.75A44,44,0,0,0,88,132a4,4,0,0,0,0,8,36,36,0,0,1,0,72Zm104-44h-8a4,4,0,0,0,0,8h8a52.13,52.13,0,0,0,12-1.41V176a36,36,0,1,1-36-36,4,4,0,0,0,0-8,44,44,0,0,0-36,18.75V72a36,36,0,0,1,72,0v6.73a4,4,0,0,0,2.67,3.77A44,44,0,0,1,192,168Zm12-56a4,4,0,0,1-4,4h-4a32,32,0,0,1-32-32V80a4,4,0,0,1,8,0v4a24,24,0,0,0,24,24h4A4,4,0,0,1,204,112ZM92,84a32,32,0,0,1-32,32H56a4,4,0,0,1,0-8h4A24,24,0,0,0,84,84V80a4,4,0,0,1,8,0Z" }, null, -1);
-var q4 = [
-  j9
+var $10 = { key: 5 };
+var j10 = /* @__PURE__ */ createBaseVNode("path", { d: "M244,124a52.1,52.1,0,0,0-32-48V72a44,44,0,0,0-84-18.3A44,44,0,0,0,44,72v4a52,52,0,0,0,0,96v4a44,44,0,0,0,84,18.3A44,44,0,0,0,212,176v-4A52.07,52.07,0,0,0,244,124ZM88,212a36,36,0,0,1-36-36v-1.41A52.13,52.13,0,0,0,64,176h8a4,4,0,0,0,0-8H64A44,44,0,0,1,49.33,82.5,4,4,0,0,0,52,78.73V72a36,36,0,0,1,72,0v78.75A44,44,0,0,0,88,132a4,4,0,0,0,0,8,36,36,0,0,1,0,72Zm104-44h-8a4,4,0,0,0,0,8h8a52.13,52.13,0,0,0,12-1.41V176a36,36,0,1,1-36-36,4,4,0,0,0,0-8,44,44,0,0,0-36,18.75V72a36,36,0,0,1,72,0v6.73a4,4,0,0,0,2.67,3.77A44,44,0,0,1,192,168Zm12-56a4,4,0,0,1-4,4h-4a32,32,0,0,1-32-32V80a4,4,0,0,1,8,0v4a24,24,0,0,0,24,24h4A4,4,0,0,1,204,112ZM92,84a32,32,0,0,1-32,32H56a4,4,0,0,1,0-8h4A24,24,0,0,0,84,84V80a4,4,0,0,1,8,0Z" }, null, -1);
+var q5 = [
+  j10
 ];
 var D3 = {
   name: "PhBrain"
@@ -30906,52 +31035,52 @@ var I = /* @__PURE__ */ defineComponent({
       transform: V.value
     }, A.$attrs), [
       renderSlot(A.$slots, "default"),
-      o.value === "bold" ? (openBlock(), createElementBlock("g", M9, f6)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", H5, x9)) : o.value === "fill" ? (openBlock(), createElementBlock("g", S9, B9)) : o.value === "light" ? (openBlock(), createElementBlock("g", C9, b9)) : o.value === "regular" ? (openBlock(), createElementBlock("g", E9, W9)) : o.value === "thin" ? (openBlock(), createElementBlock("g", $9, q4)) : createCommentVNode("", true)
-    ], 16, g));
+      o.value === "bold" ? (openBlock(), createElementBlock("g", M10, f7)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", H6, x10)) : o.value === "fill" ? (openBlock(), createElementBlock("g", S10, B10)) : o.value === "light" ? (openBlock(), createElementBlock("g", C10, b10)) : o.value === "regular" ? (openBlock(), createElementBlock("g", E10, W10)) : o.value === "thin" ? (openBlock(), createElementBlock("g", $10, q5)) : createCommentVNode("", true)
+    ], 16, g2));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhCaretDown.vue.mjs
-var w10 = ["width", "height", "fill", "transform"];
-var M10 = { key: 0 };
-var k10 = /* @__PURE__ */ createBaseVNode("path", { d: "M216.49,104.49l-80,80a12,12,0,0,1-17,0l-80-80a12,12,0,0,1,17-17L128,159l71.51-71.52a12,12,0,0,1,17,17Z" }, null, -1);
+var w11 = ["width", "height", "fill", "transform"];
+var M11 = { key: 0 };
+var k11 = /* @__PURE__ */ createBaseVNode("path", { d: "M216.49,104.49l-80,80a12,12,0,0,1-17,0l-80-80a12,12,0,0,1,17-17L128,159l71.51-71.52a12,12,0,0,1,17,17Z" }, null, -1);
 var Z9 = [
-  k10
+  k11
 ];
-var x10 = { key: 1 };
-var C10 = /* @__PURE__ */ createBaseVNode("path", {
+var x11 = { key: 1 };
+var C11 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M208,96l-80,80L48,96Z",
   opacity: "0.2"
 }, null, -1);
-var S10 = /* @__PURE__ */ createBaseVNode("path", { d: "M215.39,92.94A8,8,0,0,0,208,88H48a8,8,0,0,0-5.66,13.66l80,80a8,8,0,0,0,11.32,0l80-80A8,8,0,0,0,215.39,92.94ZM128,164.69,67.31,104H188.69Z" }, null, -1);
-var z10 = [
-  C10,
-  S10
+var S11 = /* @__PURE__ */ createBaseVNode("path", { d: "M215.39,92.94A8,8,0,0,0,208,88H48a8,8,0,0,0-5.66,13.66l80,80a8,8,0,0,0,11.32,0l80-80A8,8,0,0,0,215.39,92.94ZM128,164.69,67.31,104H188.69Z" }, null, -1);
+var z11 = [
+  C11,
+  S11
 ];
 var L7 = { key: 2 };
 var A7 = /* @__PURE__ */ createBaseVNode("path", { d: "M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,48,88H208a8,8,0,0,1,5.66,13.66Z" }, null, -1);
-var B10 = [
+var B11 = [
   A7
 ];
-var H6 = { key: 3 };
-var N10 = /* @__PURE__ */ createBaseVNode("path", { d: "M212.24,100.24l-80,80a6,6,0,0,1-8.48,0l-80-80a6,6,0,0,1,8.48-8.48L128,167.51l75.76-75.75a6,6,0,0,1,8.48,8.48Z" }, null, -1);
-var b10 = [
-  N10
+var H7 = { key: 3 };
+var N11 = /* @__PURE__ */ createBaseVNode("path", { d: "M212.24,100.24l-80,80a6,6,0,0,1-8.48,0l-80-80a6,6,0,0,1,8.48-8.48L128,167.51l75.76-75.75a6,6,0,0,1,8.48,8.48Z" }, null, -1);
+var b11 = [
+  N11
 ];
-var E10 = { key: 4 };
-var P10 = /* @__PURE__ */ createBaseVNode("path", { d: "M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,53.66,90.34L128,164.69l74.34-74.35a8,8,0,0,1,11.32,11.32Z" }, null, -1);
+var E11 = { key: 4 };
+var P11 = /* @__PURE__ */ createBaseVNode("path", { d: "M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,53.66,90.34L128,164.69l74.34-74.35a8,8,0,0,1,11.32,11.32Z" }, null, -1);
 var V6 = [
-  P10
+  P11
 ];
-var W10 = { key: 5 };
-var $10 = /* @__PURE__ */ createBaseVNode("path", { d: "M210.83,98.83l-80,80a4,4,0,0,1-5.66,0l-80-80a4,4,0,0,1,5.66-5.66L128,170.34l77.17-77.17a4,4,0,1,1,5.66,5.66Z" }, null, -1);
-var j10 = [
-  $10
+var W11 = { key: 5 };
+var $11 = /* @__PURE__ */ createBaseVNode("path", { d: "M210.83,98.83l-80,80a4,4,0,0,1-5.66,0l-80-80a4,4,0,0,1,5.66-5.66L128,170.34l77.17-77.17a4,4,0,1,1,5.66,5.66Z" }, null, -1);
+var j11 = [
+  $11
 ];
 var D4 = {
   name: "PhCaretDown"
 };
-var G5 = /* @__PURE__ */ defineComponent({
+var G6 = /* @__PURE__ */ defineComponent({
   ...D4,
   props: {
     weight: {
@@ -30978,52 +31107,52 @@ var G5 = /* @__PURE__ */ defineComponent({
       transform: g.value
     }, a.$attrs), [
       renderSlot(a.$slots, "default"),
-      l.value === "bold" ? (openBlock(), createElementBlock("g", M10, Z9)) : l.value === "duotone" ? (openBlock(), createElementBlock("g", x10, z10)) : l.value === "fill" ? (openBlock(), createElementBlock("g", L7, B10)) : l.value === "light" ? (openBlock(), createElementBlock("g", H6, b10)) : l.value === "regular" ? (openBlock(), createElementBlock("g", E10, V6)) : l.value === "thin" ? (openBlock(), createElementBlock("g", W10, j10)) : createCommentVNode("", true)
-    ], 16, w10));
+      l.value === "bold" ? (openBlock(), createElementBlock("g", M11, Z9)) : l.value === "duotone" ? (openBlock(), createElementBlock("g", x11, z11)) : l.value === "fill" ? (openBlock(), createElementBlock("g", L7, B11)) : l.value === "light" ? (openBlock(), createElementBlock("g", H7, b11)) : l.value === "regular" ? (openBlock(), createElementBlock("g", E11, V6)) : l.value === "thin" ? (openBlock(), createElementBlock("g", W11, j11)) : createCommentVNode("", true)
+    ], 16, w11));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhCaretLeft.vue.mjs
-var w11 = ["width", "height", "fill", "transform"];
-var M11 = { key: 0 };
-var k11 = /* @__PURE__ */ createBaseVNode("path", { d: "M168.49,199.51a12,12,0,0,1-17,17l-80-80a12,12,0,0,1,0-17l80-80a12,12,0,0,1,17,17L97,128Z" }, null, -1);
+var w12 = ["width", "height", "fill", "transform"];
+var M12 = { key: 0 };
+var k12 = /* @__PURE__ */ createBaseVNode("path", { d: "M168.49,199.51a12,12,0,0,1-17,17l-80-80a12,12,0,0,1,0-17l80-80a12,12,0,0,1,17,17L97,128Z" }, null, -1);
 var Z10 = [
-  k11
+  k12
 ];
-var x11 = { key: 1 };
-var C11 = /* @__PURE__ */ createBaseVNode("path", {
+var x12 = { key: 1 };
+var C12 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M160,48V208L80,128Z",
   opacity: "0.2"
 }, null, -1);
 var L8 = /* @__PURE__ */ createBaseVNode("path", { d: "M163.06,40.61a8,8,0,0,0-8.72,1.73l-80,80a8,8,0,0,0,0,11.32l80,80A8,8,0,0,0,168,208V48A8,8,0,0,0,163.06,40.61ZM152,188.69,91.31,128,152,67.31Z" }, null, -1);
-var S11 = [
-  C11,
+var S12 = [
+  C12,
   L8
 ];
-var z11 = { key: 2 };
+var z12 = { key: 2 };
 var V7 = /* @__PURE__ */ createBaseVNode("path", { d: "M168,48V208a8,8,0,0,1-13.66,5.66l-80-80a8,8,0,0,1,0-11.32l80-80A8,8,0,0,1,168,48Z" }, null, -1);
-var B11 = [
+var B12 = [
   V7
 ];
 var A8 = { key: 3 };
-var N11 = /* @__PURE__ */ createBaseVNode("path", { d: "M164.24,203.76a6,6,0,1,1-8.48,8.48l-80-80a6,6,0,0,1,0-8.48l80-80a6,6,0,0,1,8.48,8.48L88.49,128Z" }, null, -1);
-var b11 = [
-  N11
+var N12 = /* @__PURE__ */ createBaseVNode("path", { d: "M164.24,203.76a6,6,0,1,1-8.48,8.48l-80-80a6,6,0,0,1,0-8.48l80-80a6,6,0,0,1,8.48,8.48L88.49,128Z" }, null, -1);
+var b12 = [
+  N12
 ];
-var E11 = { key: 4 };
-var P11 = /* @__PURE__ */ createBaseVNode("path", { d: "M165.66,202.34a8,8,0,0,1-11.32,11.32l-80-80a8,8,0,0,1,0-11.32l80-80a8,8,0,0,1,11.32,11.32L91.31,128Z" }, null, -1);
-var W11 = [
-  P11
+var E12 = { key: 4 };
+var P12 = /* @__PURE__ */ createBaseVNode("path", { d: "M165.66,202.34a8,8,0,0,1-11.32,11.32l-80-80a8,8,0,0,1,0-11.32l80-80a8,8,0,0,1,11.32,11.32L91.31,128Z" }, null, -1);
+var W12 = [
+  P12
 ];
-var $11 = { key: 5 };
-var j11 = /* @__PURE__ */ createBaseVNode("path", { d: "M162.83,205.17a4,4,0,0,1-5.66,5.66l-80-80a4,4,0,0,1,0-5.66l80-80a4,4,0,1,1,5.66,5.66L85.66,128Z" }, null, -1);
-var q5 = [
-  j11
+var $12 = { key: 5 };
+var j12 = /* @__PURE__ */ createBaseVNode("path", { d: "M162.83,205.17a4,4,0,0,1-5.66,5.66l-80-80a4,4,0,0,1,0-5.66l80-80a4,4,0,1,1,5.66,5.66L85.66,128Z" }, null, -1);
+var q6 = [
+  j12
 ];
 var D5 = {
   name: "PhCaretLeft"
 };
-var H7 = /* @__PURE__ */ defineComponent({
+var H8 = /* @__PURE__ */ defineComponent({
   ...D5,
   props: {
     weight: {
@@ -31050,53 +31179,53 @@ var H7 = /* @__PURE__ */ defineComponent({
       transform: g.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", M11, Z10)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", x11, S11)) : s.value === "fill" ? (openBlock(), createElementBlock("g", z11, B11)) : s.value === "light" ? (openBlock(), createElementBlock("g", A8, b11)) : s.value === "regular" ? (openBlock(), createElementBlock("g", E11, W11)) : s.value === "thin" ? (openBlock(), createElementBlock("g", $11, q5)) : createCommentVNode("", true)
-    ], 16, w11));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", M12, Z10)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", x12, S12)) : s.value === "fill" ? (openBlock(), createElementBlock("g", z12, B12)) : s.value === "light" ? (openBlock(), createElementBlock("g", A8, b12)) : s.value === "regular" ? (openBlock(), createElementBlock("g", E12, W12)) : s.value === "thin" ? (openBlock(), createElementBlock("g", $12, q6)) : createCommentVNode("", true)
+    ], 16, w12));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhCaretRight.vue.mjs
-var w12 = ["width", "height", "fill", "transform"];
-var M12 = { key: 0 };
-var k12 = /* @__PURE__ */ createBaseVNode("path", { d: "M184.49,136.49l-80,80a12,12,0,0,1-17-17L159,128,87.51,56.49a12,12,0,1,1,17-17l80,80A12,12,0,0,1,184.49,136.49Z" }, null, -1);
+var w13 = ["width", "height", "fill", "transform"];
+var M13 = { key: 0 };
+var k13 = /* @__PURE__ */ createBaseVNode("path", { d: "M184.49,136.49l-80,80a12,12,0,0,1-17-17L159,128,87.51,56.49a12,12,0,1,1,17-17l80,80A12,12,0,0,1,184.49,136.49Z" }, null, -1);
 var A9 = [
-  k12
+  k13
 ];
 var Z11 = { key: 1 };
-var x12 = /* @__PURE__ */ createBaseVNode("path", {
+var x13 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M176,128,96,208V48Z",
   opacity: "0.2"
 }, null, -1);
-var C12 = /* @__PURE__ */ createBaseVNode("path", { d: "M181.66,122.34l-80-80A8,8,0,0,0,88,48V208a8,8,0,0,0,13.66,5.66l80-80A8,8,0,0,0,181.66,122.34ZM104,188.69V67.31L164.69,128Z" }, null, -1);
-var S12 = [
-  x12,
-  C12
+var C13 = /* @__PURE__ */ createBaseVNode("path", { d: "M181.66,122.34l-80-80A8,8,0,0,0,88,48V208a8,8,0,0,0,13.66,5.66l80-80A8,8,0,0,0,181.66,122.34ZM104,188.69V67.31L164.69,128Z" }, null, -1);
+var S13 = [
+  x13,
+  C13
 ];
 var V8 = { key: 2 };
-var z12 = /* @__PURE__ */ createBaseVNode("path", { d: "M181.66,133.66l-80,80A8,8,0,0,1,88,208V48a8,8,0,0,1,13.66-5.66l80,80A8,8,0,0,1,181.66,133.66Z" }, null, -1);
+var z13 = /* @__PURE__ */ createBaseVNode("path", { d: "M181.66,133.66l-80,80A8,8,0,0,1,88,208V48a8,8,0,0,1,13.66-5.66l80,80A8,8,0,0,1,181.66,133.66Z" }, null, -1);
 var L9 = [
-  z12
+  z13
 ];
-var B12 = { key: 3 };
-var N12 = /* @__PURE__ */ createBaseVNode("path", { d: "M180.24,132.24l-80,80a6,6,0,0,1-8.48-8.48L167.51,128,91.76,52.24a6,6,0,0,1,8.48-8.48l80,80A6,6,0,0,1,180.24,132.24Z" }, null, -1);
-var b12 = [
-  N12
+var B13 = { key: 3 };
+var N13 = /* @__PURE__ */ createBaseVNode("path", { d: "M180.24,132.24l-80,80a6,6,0,0,1-8.48-8.48L167.51,128,91.76,52.24a6,6,0,0,1,8.48-8.48l80,80A6,6,0,0,1,180.24,132.24Z" }, null, -1);
+var b13 = [
+  N13
 ];
-var E12 = { key: 4 };
-var P12 = /* @__PURE__ */ createBaseVNode("path", { d: "M181.66,133.66l-80,80a8,8,0,0,1-11.32-11.32L164.69,128,90.34,53.66a8,8,0,0,1,11.32-11.32l80,80A8,8,0,0,1,181.66,133.66Z" }, null, -1);
-var W12 = [
-  P12
+var E13 = { key: 4 };
+var P13 = /* @__PURE__ */ createBaseVNode("path", { d: "M181.66,133.66l-80,80a8,8,0,0,1-11.32-11.32L164.69,128,90.34,53.66a8,8,0,0,1,11.32-11.32l80,80A8,8,0,0,1,181.66,133.66Z" }, null, -1);
+var W13 = [
+  P13
 ];
-var $12 = { key: 5 };
-var j12 = /* @__PURE__ */ createBaseVNode("path", { d: "M178.83,130.83l-80,80a4,4,0,0,1-5.66-5.66L170.34,128,93.17,50.83a4,4,0,0,1,5.66-5.66l80,80A4,4,0,0,1,178.83,130.83Z" }, null, -1);
+var $13 = { key: 5 };
+var j13 = /* @__PURE__ */ createBaseVNode("path", { d: "M178.83,130.83l-80,80a4,4,0,0,1-5.66-5.66L170.34,128,93.17,50.83a4,4,0,0,1,5.66-5.66l80,80A4,4,0,0,1,178.83,130.83Z" }, null, -1);
 var R3 = [
-  j12
+  j13
 ];
-var q6 = {
+var q7 = {
   name: "PhCaretRight"
 };
-var G6 = /* @__PURE__ */ defineComponent({
-  ...q6,
+var G7 = /* @__PURE__ */ defineComponent({
+  ...q7,
   props: {
     weight: {
       type: String
@@ -31122,53 +31251,53 @@ var G6 = /* @__PURE__ */ defineComponent({
       transform: g.value
     }, a.$attrs), [
       renderSlot(a.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", M12, A9)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", Z11, S12)) : s.value === "fill" ? (openBlock(), createElementBlock("g", V8, L9)) : s.value === "light" ? (openBlock(), createElementBlock("g", B12, b12)) : s.value === "regular" ? (openBlock(), createElementBlock("g", E12, W12)) : s.value === "thin" ? (openBlock(), createElementBlock("g", $12, R3)) : createCommentVNode("", true)
-    ], 16, w12));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", M13, A9)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", Z11, S13)) : s.value === "fill" ? (openBlock(), createElementBlock("g", V8, L9)) : s.value === "light" ? (openBlock(), createElementBlock("g", B13, b13)) : s.value === "regular" ? (openBlock(), createElementBlock("g", E13, W13)) : s.value === "thin" ? (openBlock(), createElementBlock("g", $13, R3)) : createCommentVNode("", true)
+    ], 16, w13));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhCheck.vue.mjs
-var w13 = ["width", "height", "fill", "transform"];
-var M13 = { key: 0 };
-var k13 = /* @__PURE__ */ createBaseVNode("path", { d: "M232.49,80.49l-128,128a12,12,0,0,1-17,0l-56-56a12,12,0,1,1,17-17L96,183,215.51,63.51a12,12,0,0,1,17,17Z" }, null, -1);
+var w14 = ["width", "height", "fill", "transform"];
+var M14 = { key: 0 };
+var k14 = /* @__PURE__ */ createBaseVNode("path", { d: "M232.49,80.49l-128,128a12,12,0,0,1-17,0l-56-56a12,12,0,1,1,17-17L96,183,215.51,63.51a12,12,0,0,1,17,17Z" }, null, -1);
 var Z12 = [
-  k13
+  k14
 ];
-var x13 = { key: 1 };
-var C13 = /* @__PURE__ */ createBaseVNode("path", {
+var x14 = { key: 1 };
+var C14 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M232,56V200a16,16,0,0,1-16,16H40a16,16,0,0,1-16-16V56A16,16,0,0,1,40,40H216A16,16,0,0,1,232,56Z",
   opacity: "0.2"
 }, null, -1);
 var L10 = /* @__PURE__ */ createBaseVNode("path", { d: "M205.66,85.66l-96,96a8,8,0,0,1-11.32,0l-40-40a8,8,0,0,1,11.32-11.32L104,164.69l90.34-90.35a8,8,0,0,1,11.32,11.32Z" }, null, -1);
-var S13 = [
-  C13,
+var S14 = [
+  C14,
   L10
 ];
 var V9 = { key: 2 };
-var z13 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40ZM205.66,85.66l-96,96a8,8,0,0,1-11.32,0l-40-40a8,8,0,0,1,11.32-11.32L104,164.69l90.34-90.35a8,8,0,0,1,11.32,11.32Z" }, null, -1);
+var z14 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40ZM205.66,85.66l-96,96a8,8,0,0,1-11.32,0l-40-40a8,8,0,0,1,11.32-11.32L104,164.69l90.34-90.35a8,8,0,0,1,11.32,11.32Z" }, null, -1);
 var A10 = [
-  z13
+  z14
 ];
-var B13 = { key: 3 };
-var H8 = /* @__PURE__ */ createBaseVNode("path", { d: "M228.24,76.24l-128,128a6,6,0,0,1-8.48,0l-56-56a6,6,0,0,1,8.48-8.48L96,191.51,219.76,67.76a6,6,0,0,1,8.48,8.48Z" }, null, -1);
-var N13 = [
-  H8
+var B14 = { key: 3 };
+var H9 = /* @__PURE__ */ createBaseVNode("path", { d: "M228.24,76.24l-128,128a6,6,0,0,1-8.48,0l-56-56a6,6,0,0,1,8.48-8.48L96,191.51,219.76,67.76a6,6,0,0,1,8.48,8.48Z" }, null, -1);
+var N14 = [
+  H9
 ];
-var b13 = { key: 4 };
-var E13 = /* @__PURE__ */ createBaseVNode("path", { d: "M229.66,77.66l-128,128a8,8,0,0,1-11.32,0l-56-56a8,8,0,0,1,11.32-11.32L96,188.69,218.34,66.34a8,8,0,0,1,11.32,11.32Z" }, null, -1);
-var P13 = [
-  E13
+var b14 = { key: 4 };
+var E14 = /* @__PURE__ */ createBaseVNode("path", { d: "M229.66,77.66l-128,128a8,8,0,0,1-11.32,0l-56-56a8,8,0,0,1,11.32-11.32L96,188.69,218.34,66.34a8,8,0,0,1,11.32,11.32Z" }, null, -1);
+var P14 = [
+  E14
 ];
-var W13 = { key: 5 };
-var $13 = /* @__PURE__ */ createBaseVNode("path", { d: "M226.83,74.83l-128,128a4,4,0,0,1-5.66,0l-56-56a4,4,0,0,1,5.66-5.66L96,194.34,221.17,69.17a4,4,0,1,1,5.66,5.66Z" }, null, -1);
-var j13 = [
-  $13
+var W14 = { key: 5 };
+var $14 = /* @__PURE__ */ createBaseVNode("path", { d: "M226.83,74.83l-128,128a4,4,0,0,1-5.66,0l-56-56a4,4,0,0,1,5.66-5.66L96,194.34,221.17,69.17a4,4,0,1,1,5.66,5.66Z" }, null, -1);
+var j14 = [
+  $14
 ];
-var q7 = {
+var q8 = {
   name: "PhCheck"
 };
-var G7 = /* @__PURE__ */ defineComponent({
-  ...q7,
+var G8 = /* @__PURE__ */ defineComponent({
+  ...q8,
   props: {
     weight: {
       type: String
@@ -31194,52 +31323,52 @@ var G7 = /* @__PURE__ */ defineComponent({
       transform: g.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", M13, Z12)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", x13, S13)) : s.value === "fill" ? (openBlock(), createElementBlock("g", V9, A10)) : s.value === "light" ? (openBlock(), createElementBlock("g", B13, N13)) : s.value === "regular" ? (openBlock(), createElementBlock("g", b13, P13)) : s.value === "thin" ? (openBlock(), createElementBlock("g", W13, j13)) : createCommentVNode("", true)
-    ], 16, w13));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", M14, Z12)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", x14, S14)) : s.value === "fill" ? (openBlock(), createElementBlock("g", V9, A10)) : s.value === "light" ? (openBlock(), createElementBlock("g", B14, N14)) : s.value === "regular" ? (openBlock(), createElementBlock("g", b14, P14)) : s.value === "thin" ? (openBlock(), createElementBlock("g", W14, j14)) : createCommentVNode("", true)
+    ], 16, w14));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhCheckCircle.vue.mjs
-var y6 = ["width", "height", "fill", "transform"];
-var M14 = { key: 0 };
-var f7 = /* @__PURE__ */ createBaseVNode("path", { d: "M176.49,95.51a12,12,0,0,1,0,17l-56,56a12,12,0,0,1-17,0l-24-24a12,12,0,1,1,17-17L112,143l47.51-47.52A12,12,0,0,1,176.49,95.51ZM236,128A108,108,0,1,1,128,20,108.12,108.12,0,0,1,236,128Zm-24,0a84,84,0,1,0-84,84A84.09,84.09,0,0,0,212,128Z" }, null, -1);
-var w14 = [
-  f7
+var y7 = ["width", "height", "fill", "transform"];
+var M15 = { key: 0 };
+var f8 = /* @__PURE__ */ createBaseVNode("path", { d: "M176.49,95.51a12,12,0,0,1,0,17l-56,56a12,12,0,0,1-17,0l-24-24a12,12,0,1,1,17-17L112,143l47.51-47.52A12,12,0,0,1,176.49,95.51ZM236,128A108,108,0,1,1,128,20,108.12,108.12,0,0,1,236,128Zm-24,0a84,84,0,1,0-84,84A84.09,84.09,0,0,0,212,128Z" }, null, -1);
+var w15 = [
+  f8
 ];
-var k14 = { key: 1 };
-var C14 = /* @__PURE__ */ createBaseVNode("path", {
+var k15 = { key: 1 };
+var C15 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M224,128a96,96,0,1,1-96-96A96,96,0,0,1,224,128Z",
   opacity: "0.2"
 }, null, -1);
-var x14 = /* @__PURE__ */ createBaseVNode("path", { d: "M173.66,98.34a8,8,0,0,1,0,11.32l-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35A8,8,0,0,1,173.66,98.34ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z" }, null, -1);
+var x15 = /* @__PURE__ */ createBaseVNode("path", { d: "M173.66,98.34a8,8,0,0,1,0,11.32l-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35A8,8,0,0,1,173.66,98.34ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z" }, null, -1);
 var L11 = [
-  C14,
-  x14
+  C15,
+  x15
 ];
-var S14 = { key: 2 };
-var z14 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm45.66,85.66-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35a8,8,0,0,1,11.32,11.32Z" }, null, -1);
-var B14 = [
-  z14
+var S15 = { key: 2 };
+var z15 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm45.66,85.66-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35a8,8,0,0,1,11.32,11.32Z" }, null, -1);
+var B15 = [
+  z15
 ];
-var N14 = { key: 3 };
-var b14 = /* @__PURE__ */ createBaseVNode("path", { d: "M172.24,99.76a6,6,0,0,1,0,8.48l-56,56a6,6,0,0,1-8.48,0l-24-24a6,6,0,0,1,8.48-8.48L112,151.51l51.76-51.75A6,6,0,0,1,172.24,99.76ZM230,128A102,102,0,1,1,128,26,102.12,102.12,0,0,1,230,128Zm-12,0a90,90,0,1,0-90,90A90.1,90.1,0,0,0,218,128Z" }, null, -1);
-var E14 = [
-  b14
+var N15 = { key: 3 };
+var b15 = /* @__PURE__ */ createBaseVNode("path", { d: "M172.24,99.76a6,6,0,0,1,0,8.48l-56,56a6,6,0,0,1-8.48,0l-24-24a6,6,0,0,1,8.48-8.48L112,151.51l51.76-51.75A6,6,0,0,1,172.24,99.76ZM230,128A102,102,0,1,1,128,26,102.12,102.12,0,0,1,230,128Zm-12,0a90,90,0,1,0-90,90A90.1,90.1,0,0,0,218,128Z" }, null, -1);
+var E15 = [
+  b15
 ];
-var P14 = { key: 4 };
+var P15 = { key: 4 };
 var V10 = /* @__PURE__ */ createBaseVNode("path", { d: "M173.66,98.34a8,8,0,0,1,0,11.32l-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35A8,8,0,0,1,173.66,98.34ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z" }, null, -1);
-var W14 = [
+var W15 = [
   V10
 ];
-var $14 = { key: 5 };
-var j14 = /* @__PURE__ */ createBaseVNode("path", { d: "M170.83,101.17a4,4,0,0,1,0,5.66l-56,56a4,4,0,0,1-5.66,0l-24-24a4,4,0,0,1,5.66-5.66L112,154.34l53.17-53.17A4,4,0,0,1,170.83,101.17ZM228,128A100,100,0,1,1,128,28,100.11,100.11,0,0,1,228,128Zm-8,0a92,92,0,1,0-92,92A92.1,92.1,0,0,0,220,128Z" }, null, -1);
-var q8 = [
-  j14
+var $15 = { key: 5 };
+var j15 = /* @__PURE__ */ createBaseVNode("path", { d: "M170.83,101.17a4,4,0,0,1,0,5.66l-56,56a4,4,0,0,1-5.66,0l-24-24a4,4,0,0,1,5.66-5.66L112,154.34l53.17-53.17A4,4,0,0,1,170.83,101.17ZM228,128A100,100,0,1,1,128,28,100.11,100.11,0,0,1,228,128Zm-8,0a92,92,0,1,0-92,92A92.1,92.1,0,0,0,220,128Z" }, null, -1);
+var q9 = [
+  j15
 ];
 var D6 = {
   name: "PhCheckCircle"
 };
-var H9 = /* @__PURE__ */ defineComponent({
+var H10 = /* @__PURE__ */ defineComponent({
   ...D6,
   props: {
     weight: {
@@ -31266,46 +31395,46 @@ var H9 = /* @__PURE__ */ defineComponent({
       transform: m.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      l.value === "bold" ? (openBlock(), createElementBlock("g", M14, w14)) : l.value === "duotone" ? (openBlock(), createElementBlock("g", k14, L11)) : l.value === "fill" ? (openBlock(), createElementBlock("g", S14, B14)) : l.value === "light" ? (openBlock(), createElementBlock("g", N14, E14)) : l.value === "regular" ? (openBlock(), createElementBlock("g", P14, W14)) : l.value === "thin" ? (openBlock(), createElementBlock("g", $14, q8)) : createCommentVNode("", true)
-    ], 16, y6));
+      l.value === "bold" ? (openBlock(), createElementBlock("g", M15, w15)) : l.value === "duotone" ? (openBlock(), createElementBlock("g", k15, L11)) : l.value === "fill" ? (openBlock(), createElementBlock("g", S15, B15)) : l.value === "light" ? (openBlock(), createElementBlock("g", N15, E15)) : l.value === "regular" ? (openBlock(), createElementBlock("g", P15, W15)) : l.value === "thin" ? (openBlock(), createElementBlock("g", $15, q9)) : createCommentVNode("", true)
+    ], 16, y7));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhCircleDashed.vue.mjs
-var v2 = ["width", "height", "fill", "transform"];
-var y7 = { key: 0 };
-var f8 = /* @__PURE__ */ createBaseVNode("path", { d: "M92.38,38.05A12,12,0,0,1,101,23.42a108,108,0,0,1,54,0,12,12,0,1,1-6,23.23,84.11,84.11,0,0,0-42,0A12,12,0,0,1,92.38,38.05ZM50.94,52.34a108.1,108.1,0,0,0-27,46.76,12,12,0,0,0,8.37,14.77,12.2,12.2,0,0,0,3.2.43,12,12,0,0,0,11.56-8.8,84,84,0,0,1,21-36.35A12,12,0,1,0,50.94,52.34Zm-3.88,98.14a12,12,0,0,0-23.12,6.42,108,108,0,0,0,27,46.78A12,12,0,0,0,68,186.85,84,84,0,0,1,47.06,150.48ZM149,209.35a84,84,0,0,1-42,0,12,12,0,1,0-6,23.23,108,108,0,0,0,54,0,12,12,0,1,0-6-23.23Zm74.72-67.22A12,12,0,0,0,209,150.5a84,84,0,0,1-21,36.35,12,12,0,0,0,17.12,16.82,108.19,108.19,0,0,0,27-46.77A12,12,0,0,0,223.71,142.13Zm-14.77-36.61a12,12,0,0,0,23.12-6.42,108,108,0,0,0-27-46.78A12,12,0,1,0,188,69.15,84,84,0,0,1,208.94,105.52Z" }, null, -1);
-var w15 = [
-  f8
+var v3 = ["width", "height", "fill", "transform"];
+var y8 = { key: 0 };
+var f9 = /* @__PURE__ */ createBaseVNode("path", { d: "M92.38,38.05A12,12,0,0,1,101,23.42a108,108,0,0,1,54,0,12,12,0,1,1-6,23.23,84.11,84.11,0,0,0-42,0A12,12,0,0,1,92.38,38.05ZM50.94,52.34a108.1,108.1,0,0,0-27,46.76,12,12,0,0,0,8.37,14.77,12.2,12.2,0,0,0,3.2.43,12,12,0,0,0,11.56-8.8,84,84,0,0,1,21-36.35A12,12,0,1,0,50.94,52.34Zm-3.88,98.14a12,12,0,0,0-23.12,6.42,108,108,0,0,0,27,46.78A12,12,0,0,0,68,186.85,84,84,0,0,1,47.06,150.48ZM149,209.35a84,84,0,0,1-42,0,12,12,0,1,0-6,23.23,108,108,0,0,0,54,0,12,12,0,1,0-6-23.23Zm74.72-67.22A12,12,0,0,0,209,150.5a84,84,0,0,1-21,36.35,12,12,0,0,0,17.12,16.82,108.19,108.19,0,0,0,27-46.77A12,12,0,0,0,223.71,142.13Zm-14.77-36.61a12,12,0,0,0,23.12-6.42,108,108,0,0,0-27-46.78A12,12,0,1,0,188,69.15,84,84,0,0,1,208.94,105.52Z" }, null, -1);
+var w16 = [
+  f9
 ];
-var k15 = { key: 1 };
-var x15 = /* @__PURE__ */ createBaseVNode("path", {
+var k16 = { key: 1 };
+var x16 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M224,128a96,96,0,1,1-96-96A96,96,0,0,1,224,128Z",
   opacity: "0.2"
 }, null, -1);
-var C15 = /* @__PURE__ */ createBaseVNode("path", { d: "M96.26,37A8,8,0,0,1,102,27.29a104.11,104.11,0,0,1,52,0,8,8,0,0,1-2,15.75,8.15,8.15,0,0,1-2-.26,88.09,88.09,0,0,0-44,0A8,8,0,0,1,96.26,37ZM53.79,55.14a104,104,0,0,0-26,45,8,8,0,1,0,15.42,4.26,87.91,87.91,0,0,1,22-38.08A8,8,0,0,0,53.79,55.14ZM43.21,151.55a8,8,0,1,0-15.42,4.28,104,104,0,0,0,26,45,8,8,0,1,0,11.41-11.21A88.14,88.14,0,0,1,43.21,151.55ZM150,213.22a88,88,0,0,1-44,0,8,8,0,1,0-4,15.49,104.11,104.11,0,0,0,52,0,8,8,0,0,0-4-15.49ZM222.65,146a8,8,0,0,0-9.85,5.57,87.88,87.88,0,0,1-22,38.09,8,8,0,1,0,11.42,11.21,104.05,104.05,0,0,0,26-45A8,8,0,0,0,222.65,146Zm-9.86-41.54a8,8,0,0,0,15.42-4.28,104,104,0,0,0-26-45,8,8,0,1,0-11.41,11.21A88.14,88.14,0,0,1,212.79,104.45Z" }, null, -1);
-var S15 = [
-  x15,
-  C15
+var C16 = /* @__PURE__ */ createBaseVNode("path", { d: "M96.26,37A8,8,0,0,1,102,27.29a104.11,104.11,0,0,1,52,0,8,8,0,0,1-2,15.75,8.15,8.15,0,0,1-2-.26,88.09,88.09,0,0,0-44,0A8,8,0,0,1,96.26,37ZM53.79,55.14a104,104,0,0,0-26,45,8,8,0,1,0,15.42,4.26,87.91,87.91,0,0,1,22-38.08A8,8,0,0,0,53.79,55.14ZM43.21,151.55a8,8,0,1,0-15.42,4.28,104,104,0,0,0,26,45,8,8,0,1,0,11.41-11.21A88.14,88.14,0,0,1,43.21,151.55ZM150,213.22a88,88,0,0,1-44,0,8,8,0,1,0-4,15.49,104.11,104.11,0,0,0,52,0,8,8,0,0,0-4-15.49ZM222.65,146a8,8,0,0,0-9.85,5.57,87.88,87.88,0,0,1-22,38.09,8,8,0,1,0,11.42,11.21,104.05,104.05,0,0,0,26-45A8,8,0,0,0,222.65,146Zm-9.86-41.54a8,8,0,0,0,15.42-4.28,104,104,0,0,0-26-45,8,8,0,1,0-11.41,11.21A88.14,88.14,0,0,1,212.79,104.45Z" }, null, -1);
+var S16 = [
+  x16,
+  C16
 ];
-var z15 = { key: 2 };
-var B15 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm54.59,45a8,8,0,0,1,11.29.7,88,88,0,0,1,17.6,30.47,8,8,0,0,1-15.18,5.08,71.87,71.87,0,0,0-14.4-25A8,8,0,0,1,182.59,69ZM73.41,187.05a8,8,0,0,1-11.29-.7,88,88,0,0,1-17.6-30.47A8,8,0,1,1,59.7,150.8a71.87,71.87,0,0,0,14.4,24.95A8,8,0,0,1,73.41,187.05Zm.69-106.8a71.87,71.87,0,0,0-14.4,25,8,8,0,1,1-15.18-5.08,88,88,0,0,1,17.6-30.47,8,8,0,1,1,12,10.6Zm71.49,134a87.8,87.8,0,0,1-35.18,0,8,8,0,0,1,3.18-15.68,72.08,72.08,0,0,0,28.82,0,8,8,0,0,1,3.18,15.68Zm6.25-163A8,8,0,0,1,144,57.61a7.89,7.89,0,0,1-1.6-.16,72.08,72.08,0,0,0-28.82,0,8,8,0,1,1-3.18-15.68,87.92,87.92,0,0,1,35.18,0A8,8,0,0,1,151.84,51.2Zm59.64,104.68a88,88,0,0,1-17.6,30.47,8,8,0,1,1-12-10.6,71.87,71.87,0,0,0,14.4-24.95,8,8,0,0,1,15.18,5.08Z" }, null, -1);
-var N15 = [
-  B15
+var z16 = { key: 2 };
+var B16 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm54.59,45a8,8,0,0,1,11.29.7,88,88,0,0,1,17.6,30.47,8,8,0,0,1-15.18,5.08,71.87,71.87,0,0,0-14.4-25A8,8,0,0,1,182.59,69ZM73.41,187.05a8,8,0,0,1-11.29-.7,88,88,0,0,1-17.6-30.47A8,8,0,1,1,59.7,150.8a71.87,71.87,0,0,0,14.4,24.95A8,8,0,0,1,73.41,187.05Zm.69-106.8a71.87,71.87,0,0,0-14.4,25,8,8,0,1,1-15.18-5.08,88,88,0,0,1,17.6-30.47,8,8,0,1,1,12,10.6Zm71.49,134a87.8,87.8,0,0,1-35.18,0,8,8,0,0,1,3.18-15.68,72.08,72.08,0,0,0,28.82,0,8,8,0,0,1,3.18,15.68Zm6.25-163A8,8,0,0,1,144,57.61a7.89,7.89,0,0,1-1.6-.16,72.08,72.08,0,0,0-28.82,0,8,8,0,1,1-3.18-15.68,87.92,87.92,0,0,1,35.18,0A8,8,0,0,1,151.84,51.2Zm59.64,104.68a88,88,0,0,1-17.6,30.47,8,8,0,1,1-12-10.6,71.87,71.87,0,0,0,14.4-24.95,8,8,0,0,1,15.18,5.08Z" }, null, -1);
+var N16 = [
+  B16
 ];
-var b15 = { key: 3 };
-var E15 = /* @__PURE__ */ createBaseVNode("path", { d: "M98.19,36.54a6,6,0,0,1,4.3-7.31,102.12,102.12,0,0,1,51,0,6,6,0,0,1-3,11.62,90,90,0,0,0-45,0A6,6,0,0,1,98.19,36.54Zm-43,20A102.07,102.07,0,0,0,29.7,100.7a6,6,0,0,0,4.19,7.38,5.88,5.88,0,0,0,1.6.22,6,6,0,0,0,5.78-4.4A90,90,0,0,1,63.78,65a6,6,0,1,0-8.56-8.41ZM41.28,152.09a6,6,0,1,0-11.56,3.2,102,102,0,0,0,25.49,44.18,6,6,0,0,0,8.55-8.41A90.11,90.11,0,0,1,41.28,152.09Zm109.21,63.06a90,90,0,0,1-45,0,6,6,0,1,0-3,11.62,102.16,102.16,0,0,0,51,0,6,6,0,0,0-3-11.62Zm71.62-67.23a6,6,0,0,0-7.38,4.18,90,90,0,0,1-22.51,39,6,6,0,1,0,8.56,8.41A102.12,102.12,0,0,0,226.3,155.3,6,6,0,0,0,222.11,147.92Zm-7.39-44a6,6,0,0,0,5.78,4.4,5.88,5.88,0,0,0,1.6-.22,6,6,0,0,0,4.18-7.38,102,102,0,0,0-25.49-44.18,6,6,0,0,0-8.55,8.41A90.05,90.05,0,0,1,214.72,103.91Z" }, null, -1);
-var P15 = [
-  E15
+var b16 = { key: 3 };
+var E16 = /* @__PURE__ */ createBaseVNode("path", { d: "M98.19,36.54a6,6,0,0,1,4.3-7.31,102.12,102.12,0,0,1,51,0,6,6,0,0,1-3,11.62,90,90,0,0,0-45,0A6,6,0,0,1,98.19,36.54Zm-43,20A102.07,102.07,0,0,0,29.7,100.7a6,6,0,0,0,4.19,7.38,5.88,5.88,0,0,0,1.6.22,6,6,0,0,0,5.78-4.4A90,90,0,0,1,63.78,65a6,6,0,1,0-8.56-8.41ZM41.28,152.09a6,6,0,1,0-11.56,3.2,102,102,0,0,0,25.49,44.18,6,6,0,0,0,8.55-8.41A90.11,90.11,0,0,1,41.28,152.09Zm109.21,63.06a90,90,0,0,1-45,0,6,6,0,1,0-3,11.62,102.16,102.16,0,0,0,51,0,6,6,0,0,0-3-11.62Zm71.62-67.23a6,6,0,0,0-7.38,4.18,90,90,0,0,1-22.51,39,6,6,0,1,0,8.56,8.41A102.12,102.12,0,0,0,226.3,155.3,6,6,0,0,0,222.11,147.92Zm-7.39-44a6,6,0,0,0,5.78,4.4,5.88,5.88,0,0,0,1.6-.22,6,6,0,0,0,4.18-7.38,102,102,0,0,0-25.49-44.18,6,6,0,0,0-8.55,8.41A90.05,90.05,0,0,1,214.72,103.91Z" }, null, -1);
+var P16 = [
+  E16
 ];
 var V11 = { key: 4 };
-var W15 = /* @__PURE__ */ createBaseVNode("path", { d: "M96.26,37.05A8,8,0,0,1,102,27.29a104.11,104.11,0,0,1,52,0,8,8,0,0,1-2,15.75,8.15,8.15,0,0,1-2-.26,88.09,88.09,0,0,0-44,0A8,8,0,0,1,96.26,37.05ZM53.79,55.14a104.05,104.05,0,0,0-26,45,8,8,0,0,0,15.42,4.27,88,88,0,0,1,22-38.09A8,8,0,0,0,53.79,55.14ZM43.21,151.55a8,8,0,1,0-15.42,4.28,104.12,104.12,0,0,0,26,45,8,8,0,0,0,11.41-11.22A88.14,88.14,0,0,1,43.21,151.55ZM150,213.22a88,88,0,0,1-44,0,8,8,0,1,0-4,15.49,104.11,104.11,0,0,0,52,0,8,8,0,0,0-4-15.49ZM222.65,146a8,8,0,0,0-9.85,5.58,87.91,87.91,0,0,1-22,38.08,8,8,0,1,0,11.42,11.21,104,104,0,0,0,26-45A8,8,0,0,0,222.65,146Zm-9.86-41.54a8,8,0,0,0,15.42-4.28,104,104,0,0,0-26-45,8,8,0,1,0-11.41,11.22A88,88,0,0,1,212.79,104.45Z" }, null, -1);
-var $15 = [
-  W15
+var W16 = /* @__PURE__ */ createBaseVNode("path", { d: "M96.26,37.05A8,8,0,0,1,102,27.29a104.11,104.11,0,0,1,52,0,8,8,0,0,1-2,15.75,8.15,8.15,0,0,1-2-.26,88.09,88.09,0,0,0-44,0A8,8,0,0,1,96.26,37.05ZM53.79,55.14a104.05,104.05,0,0,0-26,45,8,8,0,0,0,15.42,4.27,88,88,0,0,1,22-38.09A8,8,0,0,0,53.79,55.14ZM43.21,151.55a8,8,0,1,0-15.42,4.28,104.12,104.12,0,0,0,26,45,8,8,0,0,0,11.41-11.22A88.14,88.14,0,0,1,43.21,151.55ZM150,213.22a88,88,0,0,1-44,0,8,8,0,1,0-4,15.49,104.11,104.11,0,0,0,52,0,8,8,0,0,0-4-15.49ZM222.65,146a8,8,0,0,0-9.85,5.58,87.91,87.91,0,0,1-22,38.08,8,8,0,1,0,11.42,11.21,104,104,0,0,0,26-45A8,8,0,0,0,222.65,146Zm-9.86-41.54a8,8,0,0,0,15.42-4.28,104,104,0,0,0-26-45,8,8,0,1,0-11.41,11.22A88,88,0,0,1,212.79,104.45Z" }, null, -1);
+var $16 = [
+  W16
 ];
-var j15 = { key: 5 };
+var j16 = { key: 5 };
 var D7 = /* @__PURE__ */ createBaseVNode("path", { d: "M155.87,36.06a4,4,0,0,1-3.87,3,4.29,4.29,0,0,1-1-.13,92,92,0,0,0-46,0,4,4,0,0,1-2-7.74,100.09,100.09,0,0,1,50,0A4,4,0,0,1,155.87,36.06ZM56.65,57.94a100.18,100.18,0,0,0-25,43.29,4,4,0,0,0,7.71,2.14,92.06,92.06,0,0,1,23-39.82,4,4,0,1,0-5.7-5.61ZM39.36,152.62a4,4,0,0,0-7.71,2.14,100.08,100.08,0,0,0,25,43.31,4,4,0,1,0,5.71-5.61A91.91,91.91,0,0,1,39.36,152.62ZM151,217.09a92,92,0,0,1-46,0,4,4,0,0,0-2,7.75,100,100,0,0,0,50,0,4,4,0,1,0-2-7.74Zm70.58-67.25a4,4,0,0,0-4.92,2.79,92.12,92.12,0,0,1-23,39.82,4,4,0,1,0,5.7,5.61,100.18,100.18,0,0,0,25-43.29A4,4,0,0,0,221.58,149.84Zm-4.94-46.46a4,4,0,0,0,7.71-2.14,100.08,100.08,0,0,0-25-43.31,4,4,0,1,0-5.71,5.61A91.91,91.91,0,0,1,216.64,103.38Z" }, null, -1);
-var q9 = [
+var q10 = [
   D7
 ];
 var F5 = {
@@ -31338,47 +31467,47 @@ var I2 = /* @__PURE__ */ defineComponent({
       transform: A.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      a.value === "bold" ? (openBlock(), createElementBlock("g", y7, w15)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", k15, S15)) : a.value === "fill" ? (openBlock(), createElementBlock("g", z15, N15)) : a.value === "light" ? (openBlock(), createElementBlock("g", b15, P15)) : a.value === "regular" ? (openBlock(), createElementBlock("g", V11, $15)) : a.value === "thin" ? (openBlock(), createElementBlock("g", j15, q9)) : createCommentVNode("", true)
-    ], 16, v2));
+      a.value === "bold" ? (openBlock(), createElementBlock("g", y8, w16)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", k16, S16)) : a.value === "fill" ? (openBlock(), createElementBlock("g", z16, N16)) : a.value === "light" ? (openBlock(), createElementBlock("g", b16, P16)) : a.value === "regular" ? (openBlock(), createElementBlock("g", V11, $16)) : a.value === "thin" ? (openBlock(), createElementBlock("g", j16, q10)) : createCommentVNode("", true)
+    ], 16, v3));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhCircleNotch.vue.mjs
-var f9 = ["width", "height", "fill", "transform"];
-var w16 = { key: 0 };
-var M15 = /* @__PURE__ */ createBaseVNode("path", { d: "M236,128a108,108,0,0,1-216,0c0-42.52,24.73-81.34,63-98.9A12,12,0,1,1,93,50.91C63.24,64.57,44,94.83,44,128a84,84,0,0,0,168,0c0-33.17-19.24-63.43-49-77.09A12,12,0,1,1,173,29.1C211.27,46.66,236,85.48,236,128Z" }, null, -1);
-var k16 = [
-  M15
+var f10 = ["width", "height", "fill", "transform"];
+var w17 = { key: 0 };
+var M16 = /* @__PURE__ */ createBaseVNode("path", { d: "M236,128a108,108,0,0,1-216,0c0-42.52,24.73-81.34,63-98.9A12,12,0,1,1,93,50.91C63.24,64.57,44,94.83,44,128a84,84,0,0,0,168,0c0-33.17-19.24-63.43-49-77.09A12,12,0,1,1,173,29.1C211.27,46.66,236,85.48,236,128Z" }, null, -1);
+var k17 = [
+  M16
 ];
 var Z13 = { key: 1 };
-var x16 = /* @__PURE__ */ createBaseVNode("path", {
+var x17 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M224,128a96,96,0,1,1-96-96A96,96,0,0,1,224,128Z",
   opacity: "0.2"
 }, null, -1);
 var A11 = /* @__PURE__ */ createBaseVNode("path", { d: "M232,128a104,104,0,0,1-208,0c0-41,23.81-78.36,60.66-95.27a8,8,0,0,1,6.68,14.54C60.15,61.59,40,93.27,40,128a88,88,0,0,0,176,0c0-34.73-20.15-66.41-51.34-80.73a8,8,0,0,1,6.68-14.54C208.19,49.64,232,87,232,128Z" }, null, -1);
-var S16 = [
-  x16,
+var S17 = [
+  x17,
   A11
 ];
-var z16 = { key: 2 };
-var B16 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,176A72,72,0,0,1,92,65.64a8,8,0,0,1,8,13.85,56,56,0,1,0,56,0,8,8,0,0,1,8-13.85A72,72,0,0,1,128,200Z" }, null, -1);
-var N16 = [
-  B16
+var z17 = { key: 2 };
+var B17 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,176A72,72,0,0,1,92,65.64a8,8,0,0,1,8,13.85,56,56,0,1,0,56,0,8,8,0,0,1,8-13.85A72,72,0,0,1,128,200Z" }, null, -1);
+var N17 = [
+  B17
 ];
-var b16 = { key: 3 };
-var E16 = /* @__PURE__ */ createBaseVNode("path", { d: "M230,128a102,102,0,0,1-204,0c0-40.18,23.35-76.86,59.5-93.45a6,6,0,0,1,5,10.9C58.61,60.09,38,92.49,38,128a90,90,0,0,0,180,0c0-35.51-20.61-67.91-52.5-82.55a6,6,0,0,1,5-10.9C206.65,51.14,230,87.82,230,128Z" }, null, -1);
-var P16 = [
-  E16
+var b17 = { key: 3 };
+var E17 = /* @__PURE__ */ createBaseVNode("path", { d: "M230,128a102,102,0,0,1-204,0c0-40.18,23.35-76.86,59.5-93.45a6,6,0,0,1,5,10.9C58.61,60.09,38,92.49,38,128a90,90,0,0,0,180,0c0-35.51-20.61-67.91-52.5-82.55a6,6,0,0,1,5-10.9C206.65,51.14,230,87.82,230,128Z" }, null, -1);
+var P17 = [
+  E17
 ];
 var V12 = { key: 4 };
-var W16 = /* @__PURE__ */ createBaseVNode("path", { d: "M232,128a104,104,0,0,1-208,0c0-41,23.81-78.36,60.66-95.27a8,8,0,0,1,6.68,14.54C60.15,61.59,40,93.27,40,128a88,88,0,0,0,176,0c0-34.73-20.15-66.41-51.34-80.73a8,8,0,0,1,6.68-14.54C208.19,49.64,232,87,232,128Z" }, null, -1);
-var $16 = [
-  W16
+var W17 = /* @__PURE__ */ createBaseVNode("path", { d: "M232,128a104,104,0,0,1-208,0c0-41,23.81-78.36,60.66-95.27a8,8,0,0,1,6.68,14.54C60.15,61.59,40,93.27,40,128a88,88,0,0,0,176,0c0-34.73-20.15-66.41-51.34-80.73a8,8,0,0,1,6.68-14.54C208.19,49.64,232,87,232,128Z" }, null, -1);
+var $17 = [
+  W17
 ];
-var j16 = { key: 5 };
-var q10 = /* @__PURE__ */ createBaseVNode("path", { d: "M228,128a100,100,0,0,1-200,0c0-39.4,22.9-75.37,58.33-91.63a4,4,0,1,1,3.34,7.27C57.07,58.6,36,91.71,36,128a92,92,0,0,0,184,0c0-36.29-21.07-69.4-53.67-84.36a4,4,0,1,1,3.34-7.27C205.1,52.63,228,88.6,228,128Z" }, null, -1);
+var j17 = { key: 5 };
+var q11 = /* @__PURE__ */ createBaseVNode("path", { d: "M228,128a100,100,0,0,1-200,0c0-39.4,22.9-75.37,58.33-91.63a4,4,0,1,1,3.34,7.27C57.07,58.6,36,91.71,36,128a92,92,0,0,0,184,0c0-36.29-21.07-69.4-53.67-84.36a4,4,0,1,1,3.34-7.27C205.1,52.63,228,88.6,228,128Z" }, null, -1);
 var D8 = [
-  q10
+  q11
 ];
 var F6 = {
   name: "PhCircleNotch"
@@ -31410,52 +31539,52 @@ var I3 = /* @__PURE__ */ defineComponent({
       transform: g.value
     }, l.$attrs), [
       renderSlot(l.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", w16, k16)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", Z13, S16)) : s.value === "fill" ? (openBlock(), createElementBlock("g", z16, N16)) : s.value === "light" ? (openBlock(), createElementBlock("g", b16, P16)) : s.value === "regular" ? (openBlock(), createElementBlock("g", V12, $16)) : s.value === "thin" ? (openBlock(), createElementBlock("g", j16, D8)) : createCommentVNode("", true)
-    ], 16, f9));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", w17, k17)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", Z13, S17)) : s.value === "fill" ? (openBlock(), createElementBlock("g", z17, N17)) : s.value === "light" ? (openBlock(), createElementBlock("g", b17, P17)) : s.value === "regular" ? (openBlock(), createElementBlock("g", V12, $17)) : s.value === "thin" ? (openBlock(), createElementBlock("g", j17, D8)) : createCommentVNode("", true)
+    ], 16, f10));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhCloudArrowDown.vue.mjs
 var Z14 = ["width", "height", "fill", "transform"];
-var f10 = { key: 0 };
-var w17 = /* @__PURE__ */ createBaseVNode("path", { d: "M192.49,167.51a12,12,0,0,1,0,17l-32,32a12,12,0,0,1-17,0l-32-32a12,12,0,1,1,17-17L140,179V128a12,12,0,0,1,24,0v51l11.51-11.52A12,12,0,0,1,192.49,167.51ZM160,36A92.08,92.08,0,0,0,79,84.37,68,68,0,1,0,72,220H84a12,12,0,0,0,0-24H72a44,44,0,0,1-1.81-87.95A91.7,91.7,0,0,0,68,128a12,12,0,0,0,24,0,68,68,0,0,1,136,0,67.27,67.27,0,0,1-7.25,30.59,12,12,0,1,0,21.42,10.82A91.08,91.08,0,0,0,252,128,92.1,92.1,0,0,0,160,36Z" }, null, -1);
-var H10 = [
-  w17
+var f11 = { key: 0 };
+var w18 = /* @__PURE__ */ createBaseVNode("path", { d: "M192.49,167.51a12,12,0,0,1,0,17l-32,32a12,12,0,0,1-17,0l-32-32a12,12,0,1,1,17-17L140,179V128a12,12,0,0,1,24,0v51l11.51-11.52A12,12,0,0,1,192.49,167.51ZM160,36A92.08,92.08,0,0,0,79,84.37,68,68,0,1,0,72,220H84a12,12,0,0,0,0-24H72a44,44,0,0,1-1.81-87.95A91.7,91.7,0,0,0,68,128a12,12,0,0,0,24,0,68,68,0,0,1,136,0,67.27,67.27,0,0,1-7.25,30.59,12,12,0,1,0,21.42,10.82A91.08,91.08,0,0,0,252,128,92.1,92.1,0,0,0,160,36Z" }, null, -1);
+var H11 = [
+  w18
 ];
-var M16 = { key: 1 };
-var C16 = /* @__PURE__ */ createBaseVNode("path", {
+var M17 = { key: 1 };
+var C17 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M240,128a80,80,0,0,1-80,80H72A56,56,0,1,1,85.92,97.74l0,.1A80,80,0,0,1,240,128Z",
   opacity: "0.2"
 }, null, -1);
-var k17 = /* @__PURE__ */ createBaseVNode("path", { d: "M248,128a87.34,87.34,0,0,1-17.6,52.81,8,8,0,1,1-12.8-9.62A71.34,71.34,0,0,0,232,128a72,72,0,0,0-144,0,8,8,0,0,1-16,0,88,88,0,0,1,3.29-23.88C74.2,104,73.1,104,72,104a48,48,0,0,0,0,96H96a8,8,0,0,1,0,16H72A64,64,0,1,1,81.29,88.68,88,88,0,0,1,248,128Zm-69.66,42.34L160,188.69V128a8,8,0,0,0-16,0v60.69l-18.34-18.35a8,8,0,0,0-11.32,11.32l32,32a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Z" }, null, -1);
+var k18 = /* @__PURE__ */ createBaseVNode("path", { d: "M248,128a87.34,87.34,0,0,1-17.6,52.81,8,8,0,1,1-12.8-9.62A71.34,71.34,0,0,0,232,128a72,72,0,0,0-144,0,8,8,0,0,1-16,0,88,88,0,0,1,3.29-23.88C74.2,104,73.1,104,72,104a48,48,0,0,0,0,96H96a8,8,0,0,1,0,16H72A64,64,0,1,1,81.29,88.68,88,88,0,0,1,248,128Zm-69.66,42.34L160,188.69V128a8,8,0,0,0-16,0v60.69l-18.34-18.35a8,8,0,0,0-11.32,11.32l32,32a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Z" }, null, -1);
 var V13 = [
-  C16,
-  k17
+  C17,
+  k18
 ];
-var x17 = { key: 2 };
+var x18 = { key: 2 };
 var L12 = /* @__PURE__ */ createBaseVNode("path", { d: "M247.93,124.52C246.11,77.54,207.07,40,160.06,40A88.1,88.1,0,0,0,81.29,88.67h0A87.48,87.48,0,0,0,72,127.73,8.18,8.18,0,0,1,64.57,136,8,8,0,0,1,56,128a103.66,103.66,0,0,1,5.34-32.92,4,4,0,0,0-4.75-5.18A64.09,64.09,0,0,0,8,152c0,35.19,29.75,64,65,64H160A88.09,88.09,0,0,0,247.93,124.52Zm-50.27,25.14-32,32a8,8,0,0,1-11.32,0l-32-32a8,8,0,0,1,11.32-11.32L152,156.69V96a8,8,0,0,1,16,0v60.69l18.34-18.35a8,8,0,0,1,11.32,11.32Z" }, null, -1);
-var S17 = [
+var S18 = [
   L12
 ];
-var z17 = { key: 3 };
-var B17 = /* @__PURE__ */ createBaseVNode("path", { d: "M246,128a85.27,85.27,0,0,1-17.2,51.6,6,6,0,1,1-9.6-7.2A74,74,0,1,0,86,128a6,6,0,0,1-12,0,85.54,85.54,0,0,1,3.91-25.64A50.68,50.68,0,0,0,72,102a50,50,0,0,0,0,100H96a6,6,0,0,1,0,12H72A62,62,0,1,1,82.43,90.88,86,86,0,0,1,246,128Zm-66.24,43.76L158,193.51V128a6,6,0,0,0-12,0v65.51l-21.76-21.75a6,6,0,0,0-8.48,8.48l32,32a6,6,0,0,0,8.48,0l32-32a6,6,0,0,0-8.48-8.48Z" }, null, -1);
-var N17 = [
-  B17
+var z18 = { key: 3 };
+var B18 = /* @__PURE__ */ createBaseVNode("path", { d: "M246,128a85.27,85.27,0,0,1-17.2,51.6,6,6,0,1,1-9.6-7.2A74,74,0,1,0,86,128a6,6,0,0,1-12,0,85.54,85.54,0,0,1,3.91-25.64A50.68,50.68,0,0,0,72,102a50,50,0,0,0,0,100H96a6,6,0,0,1,0,12H72A62,62,0,1,1,82.43,90.88,86,86,0,0,1,246,128Zm-66.24,43.76L158,193.51V128a6,6,0,0,0-12,0v65.51l-21.76-21.75a6,6,0,0,0-8.48,8.48l32,32a6,6,0,0,0,8.48,0l32-32a6,6,0,0,0-8.48-8.48Z" }, null, -1);
+var N18 = [
+  B18
 ];
-var b17 = { key: 4 };
-var E17 = /* @__PURE__ */ createBaseVNode("path", { d: "M248,128a87.34,87.34,0,0,1-17.6,52.81,8,8,0,1,1-12.8-9.62A71.34,71.34,0,0,0,232,128a72,72,0,0,0-144,0,8,8,0,0,1-16,0,88,88,0,0,1,3.29-23.88C74.2,104,73.1,104,72,104a48,48,0,0,0,0,96H96a8,8,0,0,1,0,16H72A64,64,0,1,1,81.29,88.68,88,88,0,0,1,248,128Zm-69.66,42.34L160,188.69V128a8,8,0,0,0-16,0v60.69l-18.34-18.35a8,8,0,0,0-11.32,11.32l32,32a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Z" }, null, -1);
-var P17 = [
-  E17
+var b18 = { key: 4 };
+var E18 = /* @__PURE__ */ createBaseVNode("path", { d: "M248,128a87.34,87.34,0,0,1-17.6,52.81,8,8,0,1,1-12.8-9.62A71.34,71.34,0,0,0,232,128a72,72,0,0,0-144,0,8,8,0,0,1-16,0,88,88,0,0,1,3.29-23.88C74.2,104,73.1,104,72,104a48,48,0,0,0,0,96H96a8,8,0,0,1,0,16H72A64,64,0,1,1,81.29,88.68,88,88,0,0,1,248,128Zm-69.66,42.34L160,188.69V128a8,8,0,0,0-16,0v60.69l-18.34-18.35a8,8,0,0,0-11.32,11.32l32,32a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Z" }, null, -1);
+var P18 = [
+  E18
 ];
-var W17 = { key: 5 };
-var $17 = /* @__PURE__ */ createBaseVNode("path", { d: "M244,128a83.28,83.28,0,0,1-16.8,50.4,4,4,0,1,1-6.4-4.8A76,76,0,1,0,84,128a4,4,0,0,1-8,0,83.45,83.45,0,0,1,4.57-27.27A52,52,0,1,0,72,204H96a4,4,0,0,1,0,8H72A60,60,0,1,1,83.61,93.13,84,84,0,0,1,244,128Zm-62.83,45.17L156,198.34V128a4,4,0,0,0-8,0v70.34l-25.17-25.17a4,4,0,0,0-5.66,5.66l32,32a4,4,0,0,0,5.66,0l32-32a4,4,0,0,0-5.66-5.66Z" }, null, -1);
-var j17 = [
-  $17
+var W18 = { key: 5 };
+var $18 = /* @__PURE__ */ createBaseVNode("path", { d: "M244,128a83.28,83.28,0,0,1-16.8,50.4,4,4,0,1,1-6.4-4.8A76,76,0,1,0,84,128a4,4,0,0,1-8,0,83.45,83.45,0,0,1,4.57-27.27A52,52,0,1,0,72,204H96a4,4,0,0,1,0,8H72A60,60,0,1,1,83.61,93.13,84,84,0,0,1,244,128Zm-62.83,45.17L156,198.34V128a4,4,0,0,0-8,0v70.34l-25.17-25.17a4,4,0,0,0-5.66,5.66l32,32a4,4,0,0,0,5.66,0l32-32a4,4,0,0,0-5.66-5.66Z" }, null, -1);
+var j18 = [
+  $18
 ];
 var D9 = {
   name: "PhCloudArrowDown"
 };
-var G8 = /* @__PURE__ */ defineComponent({
+var G9 = /* @__PURE__ */ defineComponent({
   ...D9,
   props: {
     weight: {
@@ -31482,53 +31611,53 @@ var G8 = /* @__PURE__ */ defineComponent({
       transform: m.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      a.value === "bold" ? (openBlock(), createElementBlock("g", f10, H10)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", M16, V13)) : a.value === "fill" ? (openBlock(), createElementBlock("g", x17, S17)) : a.value === "light" ? (openBlock(), createElementBlock("g", z17, N17)) : a.value === "regular" ? (openBlock(), createElementBlock("g", b17, P17)) : a.value === "thin" ? (openBlock(), createElementBlock("g", W17, j17)) : createCommentVNode("", true)
+      a.value === "bold" ? (openBlock(), createElementBlock("g", f11, H11)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", M17, V13)) : a.value === "fill" ? (openBlock(), createElementBlock("g", x18, S18)) : a.value === "light" ? (openBlock(), createElementBlock("g", z18, N18)) : a.value === "regular" ? (openBlock(), createElementBlock("g", b18, P18)) : a.value === "thin" ? (openBlock(), createElementBlock("g", W18, j18)) : createCommentVNode("", true)
     ], 16, Z14));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhCode.vue.mjs
 var A12 = ["width", "height", "fill", "transform"];
-var M17 = { key: 0 };
-var f11 = /* @__PURE__ */ createBaseVNode("path", { d: "M71.68,97.22,34.74,128l36.94,30.78a12,12,0,1,1-15.36,18.44l-48-40a12,12,0,0,1,0-18.44l48-40A12,12,0,0,1,71.68,97.22Zm176,21.56-48-40a12,12,0,1,0-15.36,18.44L221.26,128l-36.94,30.78a12,12,0,1,0,15.36,18.44l48-40a12,12,0,0,0,0-18.44ZM164.1,28.72a12,12,0,0,0-15.38,7.18l-64,176a12,12,0,0,0,7.18,15.37A11.79,11.79,0,0,0,96,228a12,12,0,0,0,11.28-7.9l64-176A12,12,0,0,0,164.1,28.72Z" }, null, -1);
-var w18 = [
-  f11
+var M18 = { key: 0 };
+var f12 = /* @__PURE__ */ createBaseVNode("path", { d: "M71.68,97.22,34.74,128l36.94,30.78a12,12,0,1,1-15.36,18.44l-48-40a12,12,0,0,1,0-18.44l48-40A12,12,0,0,1,71.68,97.22Zm176,21.56-48-40a12,12,0,1,0-15.36,18.44L221.26,128l-36.94,30.78a12,12,0,1,0,15.36,18.44l48-40a12,12,0,0,0,0-18.44ZM164.1,28.72a12,12,0,0,0-15.38,7.18l-64,176a12,12,0,0,0,7.18,15.37A11.79,11.79,0,0,0,96,228a12,12,0,0,0,11.28-7.9l64-176A12,12,0,0,0,164.1,28.72Z" }, null, -1);
+var w19 = [
+  f12
 ];
-var k18 = { key: 1 };
+var k19 = { key: 1 };
 var L13 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M240,128l-48,40H64L16,128,64,88H192Z",
   opacity: "0.2"
 }, null, -1);
-var x18 = /* @__PURE__ */ createBaseVNode("path", { d: "M69.12,94.15,28.5,128l40.62,33.85a8,8,0,1,1-10.24,12.29l-48-40a8,8,0,0,1,0-12.29l48-40a8,8,0,0,1,10.24,12.3Zm176,27.7-48-40a8,8,0,1,0-10.24,12.3L227.5,128l-40.62,33.85a8,8,0,1,0,10.24,12.29l48-40a8,8,0,0,0,0-12.29ZM162.73,32.48a8,8,0,0,0-10.25,4.79l-64,176a8,8,0,0,0,4.79,10.26A8.14,8.14,0,0,0,96,224a8,8,0,0,0,7.52-5.27l64-176A8,8,0,0,0,162.73,32.48Z" }, null, -1);
-var C17 = [
+var x19 = /* @__PURE__ */ createBaseVNode("path", { d: "M69.12,94.15,28.5,128l40.62,33.85a8,8,0,1,1-10.24,12.29l-48-40a8,8,0,0,1,0-12.29l48-40a8,8,0,0,1,10.24,12.3Zm176,27.7-48-40a8,8,0,1,0-10.24,12.3L227.5,128l-40.62,33.85a8,8,0,1,0,10.24,12.29l48-40a8,8,0,0,0,0-12.29ZM162.73,32.48a8,8,0,0,0-10.25,4.79l-64,176a8,8,0,0,0,4.79,10.26A8.14,8.14,0,0,0,96,224a8,8,0,0,0,7.52-5.27l64-176A8,8,0,0,0,162.73,32.48Z" }, null, -1);
+var C18 = [
   L13,
-  x18
+  x19
 ];
-var S18 = { key: 2 };
-var z18 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40ZM92.8,145.6a8,8,0,1,1-9.6,12.8l-32-24a8,8,0,0,1,0-12.8l32-24a8,8,0,0,1,9.6,12.8L69.33,128Zm58.89-71.4-32,112a8,8,0,1,1-15.38-4.4l32-112a8,8,0,0,1,15.38,4.4Zm53.11,60.2-32,24a8,8,0,0,1-9.6-12.8L186.67,128,163.2,110.4a8,8,0,1,1,9.6-12.8l32,24a8,8,0,0,1,0,12.8Z" }, null, -1);
-var B18 = [
-  z18
+var S19 = { key: 2 };
+var z19 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40ZM92.8,145.6a8,8,0,1,1-9.6,12.8l-32-24a8,8,0,0,1,0-12.8l32-24a8,8,0,0,1,9.6,12.8L69.33,128Zm58.89-71.4-32,112a8,8,0,1,1-15.38-4.4l32-112a8,8,0,0,1,15.38,4.4Zm53.11,60.2-32,24a8,8,0,0,1-9.6-12.8L186.67,128,163.2,110.4a8,8,0,1,1,9.6-12.8l32,24a8,8,0,0,1,0,12.8Z" }, null, -1);
+var B19 = [
+  z19
 ];
-var H11 = { key: 3 };
+var H12 = { key: 3 };
 var V14 = /* @__PURE__ */ createBaseVNode("path", { d: "M67.84,92.61,25.37,128l42.47,35.39a6,6,0,1,1-7.68,9.22l-48-40a6,6,0,0,1,0-9.22l48-40a6,6,0,0,1,7.68,9.22Zm176,30.78-48-40a6,6,0,1,0-7.68,9.22L230.63,128l-42.47,35.39a6,6,0,1,0,7.68,9.22l48-40a6,6,0,0,0,0-9.22Zm-81.79-89A6,6,0,0,0,154.36,38l-64,176A6,6,0,0,0,94,221.64a6.15,6.15,0,0,0,2,.36,6,6,0,0,0,5.64-3.95l64-176A6,6,0,0,0,162.05,34.36Z" }, null, -1);
-var N18 = [
+var N19 = [
   V14
 ];
-var b18 = { key: 4 };
-var E18 = /* @__PURE__ */ createBaseVNode("path", { d: "M69.12,94.15,28.5,128l40.62,33.85a8,8,0,1,1-10.24,12.29l-48-40a8,8,0,0,1,0-12.29l48-40a8,8,0,0,1,10.24,12.3Zm176,27.7-48-40a8,8,0,1,0-10.24,12.3L227.5,128l-40.62,33.85a8,8,0,1,0,10.24,12.29l48-40a8,8,0,0,0,0-12.29ZM162.73,32.48a8,8,0,0,0-10.25,4.79l-64,176a8,8,0,0,0,4.79,10.26A8.14,8.14,0,0,0,96,224a8,8,0,0,0,7.52-5.27l64-176A8,8,0,0,0,162.73,32.48Z" }, null, -1);
-var P18 = [
-  E18
+var b19 = { key: 4 };
+var E19 = /* @__PURE__ */ createBaseVNode("path", { d: "M69.12,94.15,28.5,128l40.62,33.85a8,8,0,1,1-10.24,12.29l-48-40a8,8,0,0,1,0-12.29l48-40a8,8,0,0,1,10.24,12.3Zm176,27.7-48-40a8,8,0,1,0-10.24,12.3L227.5,128l-40.62,33.85a8,8,0,1,0,10.24,12.29l48-40a8,8,0,0,0,0-12.29ZM162.73,32.48a8,8,0,0,0-10.25,4.79l-64,176a8,8,0,0,0,4.79,10.26A8.14,8.14,0,0,0,96,224a8,8,0,0,0,7.52-5.27l64-176A8,8,0,0,0,162.73,32.48Z" }, null, -1);
+var P19 = [
+  E19
 ];
-var W18 = { key: 5 };
-var $18 = /* @__PURE__ */ createBaseVNode("path", { d: "M66.56,91.07,22.25,128l44.31,36.93A4,4,0,0,1,64,172a3.94,3.94,0,0,1-2.56-.93l-48-40a4,4,0,0,1,0-6.14l48-40a4,4,0,0,1,5.12,6.14Zm176,33.86-48-40a4,4,0,1,0-5.12,6.14L233.75,128l-44.31,36.93a4,4,0,1,0,5.12,6.14l48-40a4,4,0,0,0,0-6.14ZM161.37,36.24a4,4,0,0,0-5.13,2.39l-64,176a4,4,0,0,0,2.39,5.13A4.12,4.12,0,0,0,96,220a4,4,0,0,0,3.76-2.63l64-176A4,4,0,0,0,161.37,36.24Z" }, null, -1);
-var j18 = [
-  $18
+var W19 = { key: 5 };
+var $19 = /* @__PURE__ */ createBaseVNode("path", { d: "M66.56,91.07,22.25,128l44.31,36.93A4,4,0,0,1,64,172a3.94,3.94,0,0,1-2.56-.93l-48-40a4,4,0,0,1,0-6.14l48-40a4,4,0,0,1,5.12,6.14Zm176,33.86-48-40a4,4,0,1,0-5.12,6.14L233.75,128l-44.31,36.93a4,4,0,1,0,5.12,6.14l48-40a4,4,0,0,0,0-6.14ZM161.37,36.24a4,4,0,0,0-5.13,2.39l-64,176a4,4,0,0,0,2.39,5.13A4.12,4.12,0,0,0,96,220a4,4,0,0,0,3.76-2.63l64-176A4,4,0,0,0,161.37,36.24Z" }, null, -1);
+var j19 = [
+  $19
 ];
-var q11 = {
+var q12 = {
   name: "PhCode"
 };
-var G9 = /* @__PURE__ */ defineComponent({
-  ...q11,
+var G10 = /* @__PURE__ */ defineComponent({
+  ...q12,
   props: {
     weight: {
       type: String
@@ -31554,47 +31683,47 @@ var G9 = /* @__PURE__ */ defineComponent({
       transform: p.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      l.value === "bold" ? (openBlock(), createElementBlock("g", M17, w18)) : l.value === "duotone" ? (openBlock(), createElementBlock("g", k18, C17)) : l.value === "fill" ? (openBlock(), createElementBlock("g", S18, B18)) : l.value === "light" ? (openBlock(), createElementBlock("g", H11, N18)) : l.value === "regular" ? (openBlock(), createElementBlock("g", b18, P18)) : l.value === "thin" ? (openBlock(), createElementBlock("g", W18, j18)) : createCommentVNode("", true)
+      l.value === "bold" ? (openBlock(), createElementBlock("g", M18, w19)) : l.value === "duotone" ? (openBlock(), createElementBlock("g", k19, C18)) : l.value === "fill" ? (openBlock(), createElementBlock("g", S19, B19)) : l.value === "light" ? (openBlock(), createElementBlock("g", H12, N19)) : l.value === "regular" ? (openBlock(), createElementBlock("g", b19, P19)) : l.value === "thin" ? (openBlock(), createElementBlock("g", W19, j19)) : createCommentVNode("", true)
     ], 16, A12));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhCopy.vue.mjs
-var v3 = ["width", "height", "fill", "transform"];
-var y8 = { key: 0 };
-var M18 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,28H88A12,12,0,0,0,76,40V76H40A12,12,0,0,0,28,88V216a12,12,0,0,0,12,12H168a12,12,0,0,0,12-12V180h36a12,12,0,0,0,12-12V40A12,12,0,0,0,216,28ZM156,204H52V100H156Zm48-48H180V88a12,12,0,0,0-12-12H100V52H204Z" }, null, -1);
-var f12 = [
-  M18
+var v4 = ["width", "height", "fill", "transform"];
+var y9 = { key: 0 };
+var M19 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,28H88A12,12,0,0,0,76,40V76H40A12,12,0,0,0,28,88V216a12,12,0,0,0,12,12H168a12,12,0,0,0,12-12V180h36a12,12,0,0,0,12-12V40A12,12,0,0,0,216,28ZM156,204H52V100H156Zm48-48H180V88a12,12,0,0,0-12-12H100V52H204Z" }, null, -1);
+var f13 = [
+  M19
 ];
-var w19 = { key: 1 };
-var k19 = /* @__PURE__ */ createBaseVNode("path", {
+var w20 = { key: 1 };
+var k20 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M216,40V168H168V88H88V40Z",
   opacity: "0.2"
 }, null, -1);
 var A13 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,32H88a8,8,0,0,0-8,8V80H40a8,8,0,0,0-8,8V216a8,8,0,0,0,8,8H168a8,8,0,0,0,8-8V176h40a8,8,0,0,0,8-8V40A8,8,0,0,0,216,32ZM160,208H48V96H160Zm48-48H176V88a8,8,0,0,0-8-8H96V48H208Z" }, null, -1);
-var x19 = [
-  k19,
+var x20 = [
+  k20,
   A13
 ];
-var C18 = { key: 2 };
-var S19 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,32H88a8,8,0,0,0-8,8V80H40a8,8,0,0,0-8,8V216a8,8,0,0,0,8,8H168a8,8,0,0,0,8-8V176h40a8,8,0,0,0,8-8V40A8,8,0,0,0,216,32Zm-8,128H176V88a8,8,0,0,0-8-8H96V48H208Z" }, null, -1);
-var z19 = [
-  S19
+var C19 = { key: 2 };
+var S20 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,32H88a8,8,0,0,0-8,8V80H40a8,8,0,0,0-8,8V216a8,8,0,0,0,8,8H168a8,8,0,0,0,8-8V176h40a8,8,0,0,0,8-8V40A8,8,0,0,0,216,32Zm-8,128H176V88a8,8,0,0,0-8-8H96V48H208Z" }, null, -1);
+var z20 = [
+  S20
 ];
-var B19 = { key: 3 };
-var N19 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,34H88a6,6,0,0,0-6,6V82H40a6,6,0,0,0-6,6V216a6,6,0,0,0,6,6H168a6,6,0,0,0,6-6V174h42a6,6,0,0,0,6-6V40A6,6,0,0,0,216,34ZM162,210H46V94H162Zm48-48H174V88a6,6,0,0,0-6-6H94V46H210Z" }, null, -1);
-var b19 = [
-  N19
+var B20 = { key: 3 };
+var N20 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,34H88a6,6,0,0,0-6,6V82H40a6,6,0,0,0-6,6V216a6,6,0,0,0,6,6H168a6,6,0,0,0,6-6V174h42a6,6,0,0,0,6-6V40A6,6,0,0,0,216,34ZM162,210H46V94H162Zm48-48H174V88a6,6,0,0,0-6-6H94V46H210Z" }, null, -1);
+var b20 = [
+  N20
 ];
-var E19 = { key: 4 };
-var P19 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,32H88a8,8,0,0,0-8,8V80H40a8,8,0,0,0-8,8V216a8,8,0,0,0,8,8H168a8,8,0,0,0,8-8V176h40a8,8,0,0,0,8-8V40A8,8,0,0,0,216,32ZM160,208H48V96H160Zm48-48H176V88a8,8,0,0,0-8-8H96V48H208Z" }, null, -1);
-var W19 = [
-  P19
+var E20 = { key: 4 };
+var P20 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,32H88a8,8,0,0,0-8,8V80H40a8,8,0,0,0-8,8V216a8,8,0,0,0,8,8H168a8,8,0,0,0,8-8V176h40a8,8,0,0,0,8-8V40A8,8,0,0,0,216,32ZM160,208H48V96H160Zm48-48H176V88a8,8,0,0,0-8-8H96V48H208Z" }, null, -1);
+var W20 = [
+  P20
 ];
-var $19 = { key: 5 };
-var j19 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,36H88a4,4,0,0,0-4,4V84H40a4,4,0,0,0-4,4V216a4,4,0,0,0,4,4H168a4,4,0,0,0,4-4V172h44a4,4,0,0,0,4-4V40A4,4,0,0,0,216,36ZM164,212H44V92H164Zm48-48H172V88a4,4,0,0,0-4-4H92V44H212Z" }, null, -1);
-var q12 = [
-  j19
+var $20 = { key: 5 };
+var j20 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,36H88a4,4,0,0,0-4,4V84H40a4,4,0,0,0-4,4V216a4,4,0,0,0,4,4H168a4,4,0,0,0,4-4V172h44a4,4,0,0,0,4-4V40A4,4,0,0,0,216,36ZM164,212H44V92H164Zm48-48H172V88a4,4,0,0,0-4-4H92V44H212Z" }, null, -1);
+var q13 = [
+  j20
 ];
 var D10 = {
   name: "PhCopy"
@@ -31626,47 +31755,47 @@ var I4 = /* @__PURE__ */ defineComponent({
       transform: u.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      a.value === "bold" ? (openBlock(), createElementBlock("g", y8, f12)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", w19, x19)) : a.value === "fill" ? (openBlock(), createElementBlock("g", C18, z19)) : a.value === "light" ? (openBlock(), createElementBlock("g", B19, b19)) : a.value === "regular" ? (openBlock(), createElementBlock("g", E19, W19)) : a.value === "thin" ? (openBlock(), createElementBlock("g", $19, q12)) : createCommentVNode("", true)
-    ], 16, v3));
+      a.value === "bold" ? (openBlock(), createElementBlock("g", y9, f13)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", w20, x20)) : a.value === "fill" ? (openBlock(), createElementBlock("g", C19, z20)) : a.value === "light" ? (openBlock(), createElementBlock("g", B20, b20)) : a.value === "regular" ? (openBlock(), createElementBlock("g", E20, W20)) : a.value === "thin" ? (openBlock(), createElementBlock("g", $20, q13)) : createCommentVNode("", true)
+    ], 16, v4));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhCpu.vue.mjs
-var g2 = ["width", "height", "fill", "transform"];
-var y9 = { key: 0 };
+var g3 = ["width", "height", "fill", "transform"];
+var y10 = { key: 0 };
 var A14 = /* @__PURE__ */ createBaseVNode("path", { d: "M156,88H100a12,12,0,0,0-12,12v56a12,12,0,0,0,12,12h56a12,12,0,0,0,12-12V100A12,12,0,0,0,156,88Zm-12,56H112V112h32Zm88-4H220V116h12a12,12,0,0,0,0-24H220V56a20,20,0,0,0-20-20H164V24a12,12,0,0,0-24,0V36H116V24a12,12,0,0,0-24,0V36H56A20,20,0,0,0,36,56V92H24a12,12,0,0,0,0,24H36v24H24a12,12,0,0,0,0,24H36v36a20,20,0,0,0,20,20H92v12a12,12,0,0,0,24,0V220h24v12a12,12,0,0,0,24,0V220h36a20,20,0,0,0,20-20V164h12a12,12,0,0,0,0-24Zm-36,56H60V60H196Z" }, null, -1);
-var f13 = [
+var f14 = [
   A14
 ];
-var M19 = { key: 1 };
-var w20 = /* @__PURE__ */ createBaseVNode("path", {
+var M20 = { key: 1 };
+var w21 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M200,48H56a8,8,0,0,0-8,8V200a8,8,0,0,0,8,8H200a8,8,0,0,0,8-8V56A8,8,0,0,0,200,48ZM152,152H104V104h48Z",
   opacity: "0.2"
 }, null, -1);
-var k20 = /* @__PURE__ */ createBaseVNode("path", { d: "M152,96H104a8,8,0,0,0-8,8v48a8,8,0,0,0,8,8h48a8,8,0,0,0,8-8V104A8,8,0,0,0,152,96Zm-8,48H112V112h32Zm88,0H216V112h16a8,8,0,0,0,0-16H216V56a16,16,0,0,0-16-16H160V24a8,8,0,0,0-16,0V40H112V24a8,8,0,0,0-16,0V40H56A16,16,0,0,0,40,56V96H24a8,8,0,0,0,0,16H40v32H24a8,8,0,0,0,0,16H40v40a16,16,0,0,0,16,16H96v16a8,8,0,0,0,16,0V216h32v16a8,8,0,0,0,16,0V216h40a16,16,0,0,0,16-16V160h16a8,8,0,0,0,0-16Zm-32,56H56V56H200v95.87s0,.09,0,.13,0,.09,0,.13V200Z" }, null, -1);
-var x20 = [
-  w20,
-  k20
+var k21 = /* @__PURE__ */ createBaseVNode("path", { d: "M152,96H104a8,8,0,0,0-8,8v48a8,8,0,0,0,8,8h48a8,8,0,0,0,8-8V104A8,8,0,0,0,152,96Zm-8,48H112V112h32Zm88,0H216V112h16a8,8,0,0,0,0-16H216V56a16,16,0,0,0-16-16H160V24a8,8,0,0,0-16,0V40H112V24a8,8,0,0,0-16,0V40H56A16,16,0,0,0,40,56V96H24a8,8,0,0,0,0,16H40v32H24a8,8,0,0,0,0,16H40v40a16,16,0,0,0,16,16H96v16a8,8,0,0,0,16,0V216h32v16a8,8,0,0,0,16,0V216h40a16,16,0,0,0,16-16V160h16a8,8,0,0,0,0-16Zm-32,56H56V56H200v95.87s0,.09,0,.13,0,.09,0,.13V200Z" }, null, -1);
+var x21 = [
+  w21,
+  k21
 ];
-var C19 = { key: 2 };
-var S20 = /* @__PURE__ */ createBaseVNode("path", { d: "M104,104h48v48H104Zm136,48a8,8,0,0,1-8,8H216v40a16,16,0,0,1-16,16H160v16a8,8,0,0,1-16,0V216H112v16a8,8,0,0,1-16,0V216H56a16,16,0,0,1-16-16V160H24a8,8,0,0,1,0-16H40V112H24a8,8,0,0,1,0-16H40V56A16,16,0,0,1,56,40H96V24a8,8,0,0,1,16,0V40h32V24a8,8,0,0,1,16,0V40h40a16,16,0,0,1,16,16V96h16a8,8,0,0,1,0,16H216v32h16A8,8,0,0,1,240,152ZM168,96a8,8,0,0,0-8-8H96a8,8,0,0,0-8,8v64a8,8,0,0,0,8,8h64a8,8,0,0,0,8-8Z" }, null, -1);
-var z20 = [
-  S20
+var C20 = { key: 2 };
+var S21 = /* @__PURE__ */ createBaseVNode("path", { d: "M104,104h48v48H104Zm136,48a8,8,0,0,1-8,8H216v40a16,16,0,0,1-16,16H160v16a8,8,0,0,1-16,0V216H112v16a8,8,0,0,1-16,0V216H56a16,16,0,0,1-16-16V160H24a8,8,0,0,1,0-16H40V112H24a8,8,0,0,1,0-16H40V56A16,16,0,0,1,56,40H96V24a8,8,0,0,1,16,0V40h32V24a8,8,0,0,1,16,0V40h40a16,16,0,0,1,16,16V96h16a8,8,0,0,1,0,16H216v32h16A8,8,0,0,1,240,152ZM168,96a8,8,0,0,0-8-8H96a8,8,0,0,0-8,8v64a8,8,0,0,0,8,8h64a8,8,0,0,0,8-8Z" }, null, -1);
+var z21 = [
+  S21
 ];
-var B20 = { key: 3 };
-var N20 = /* @__PURE__ */ createBaseVNode("path", { d: "M152,98H104a6,6,0,0,0-6,6v48a6,6,0,0,0,6,6h48a6,6,0,0,0,6-6V104A6,6,0,0,0,152,98Zm-6,48H110V110h36Zm86,0H214V110h18a6,6,0,0,0,0-12H214V56a14,14,0,0,0-14-14H158V24a6,6,0,0,0-12,0V42H110V24a6,6,0,0,0-12,0V42H56A14,14,0,0,0,42,56V98H24a6,6,0,0,0,0,12H42v36H24a6,6,0,0,0,0,12H42v42a14,14,0,0,0,14,14H98v18a6,6,0,0,0,12,0V214h36v18a6,6,0,0,0,12,0V214h42a14,14,0,0,0,14-14V158h18a6,6,0,0,0,0-12Zm-30,54a2,2,0,0,1-2,2H56a2,2,0,0,1-2-2V56a2,2,0,0,1,2-2H200a2,2,0,0,1,2,2Z" }, null, -1);
-var b20 = [
-  N20
+var B21 = { key: 3 };
+var N21 = /* @__PURE__ */ createBaseVNode("path", { d: "M152,98H104a6,6,0,0,0-6,6v48a6,6,0,0,0,6,6h48a6,6,0,0,0,6-6V104A6,6,0,0,0,152,98Zm-6,48H110V110h36Zm86,0H214V110h18a6,6,0,0,0,0-12H214V56a14,14,0,0,0-14-14H158V24a6,6,0,0,0-12,0V42H110V24a6,6,0,0,0-12,0V42H56A14,14,0,0,0,42,56V98H24a6,6,0,0,0,0,12H42v36H24a6,6,0,0,0,0,12H42v42a14,14,0,0,0,14,14H98v18a6,6,0,0,0,12,0V214h36v18a6,6,0,0,0,12,0V214h42a14,14,0,0,0,14-14V158h18a6,6,0,0,0,0-12Zm-30,54a2,2,0,0,1-2,2H56a2,2,0,0,1-2-2V56a2,2,0,0,1,2-2H200a2,2,0,0,1,2,2Z" }, null, -1);
+var b21 = [
+  N21
 ];
-var E20 = { key: 4 };
-var P20 = /* @__PURE__ */ createBaseVNode("path", { d: "M152,96H104a8,8,0,0,0-8,8v48a8,8,0,0,0,8,8h48a8,8,0,0,0,8-8V104A8,8,0,0,0,152,96Zm-8,48H112V112h32Zm88,0H216V112h16a8,8,0,0,0,0-16H216V56a16,16,0,0,0-16-16H160V24a8,8,0,0,0-16,0V40H112V24a8,8,0,0,0-16,0V40H56A16,16,0,0,0,40,56V96H24a8,8,0,0,0,0,16H40v32H24a8,8,0,0,0,0,16H40v40a16,16,0,0,0,16,16H96v16a8,8,0,0,0,16,0V216h32v16a8,8,0,0,0,16,0V216h40a16,16,0,0,0,16-16V160h16a8,8,0,0,0,0-16Zm-32,56H56V56H200v95.87s0,.09,0,.13,0,.09,0,.13V200Z" }, null, -1);
-var W20 = [
-  P20
+var E21 = { key: 4 };
+var P21 = /* @__PURE__ */ createBaseVNode("path", { d: "M152,96H104a8,8,0,0,0-8,8v48a8,8,0,0,0,8,8h48a8,8,0,0,0,8-8V104A8,8,0,0,0,152,96Zm-8,48H112V112h32Zm88,0H216V112h16a8,8,0,0,0,0-16H216V56a16,16,0,0,0-16-16H160V24a8,8,0,0,0-16,0V40H112V24a8,8,0,0,0-16,0V40H56A16,16,0,0,0,40,56V96H24a8,8,0,0,0,0,16H40v32H24a8,8,0,0,0,0,16H40v40a16,16,0,0,0,16,16H96v16a8,8,0,0,0,16,0V216h32v16a8,8,0,0,0,16,0V216h40a16,16,0,0,0,16-16V160h16a8,8,0,0,0,0-16Zm-32,56H56V56H200v95.87s0,.09,0,.13,0,.09,0,.13V200Z" }, null, -1);
+var W21 = [
+  P21
 ];
-var $20 = { key: 5 };
-var j20 = /* @__PURE__ */ createBaseVNode("path", { d: "M152,100H104a4,4,0,0,0-4,4v48a4,4,0,0,0,4,4h48a4,4,0,0,0,4-4V104A4,4,0,0,0,152,100Zm-4,48H108V108h40Zm84,0H212V108h20a4,4,0,0,0,0-8H212V56a12,12,0,0,0-12-12H156V24a4,4,0,0,0-8,0V44H108V24a4,4,0,0,0-8,0V44H56A12,12,0,0,0,44,56v44H24a4,4,0,0,0,0,8H44v40H24a4,4,0,0,0,0,8H44v44a12,12,0,0,0,12,12h44v20a4,4,0,0,0,8,0V212h40v20a4,4,0,0,0,8,0V212h44a12,12,0,0,0,12-12V156h20a4,4,0,0,0,0-8Zm-28,52a4,4,0,0,1-4,4H56a4,4,0,0,1-4-4V56a4,4,0,0,1,4-4H200a4,4,0,0,1,4,4Z" }, null, -1);
-var q13 = [
-  j20
+var $21 = { key: 5 };
+var j21 = /* @__PURE__ */ createBaseVNode("path", { d: "M152,100H104a4,4,0,0,0-4,4v48a4,4,0,0,0,4,4h48a4,4,0,0,0,4-4V104A4,4,0,0,0,152,100Zm-4,48H108V108h40Zm84,0H212V108h20a4,4,0,0,0,0-8H212V56a12,12,0,0,0-12-12H156V24a4,4,0,0,0-8,0V44H108V24a4,4,0,0,0-8,0V44H56A12,12,0,0,0,44,56v44H24a4,4,0,0,0,0,8H44v40H24a4,4,0,0,0,0,8H44v44a12,12,0,0,0,12,12h44v20a4,4,0,0,0,8,0V212h40v20a4,4,0,0,0,8,0V212h44a12,12,0,0,0,12-12V156h20a4,4,0,0,0,0-8Zm-28,52a4,4,0,0,1-4,4H56a4,4,0,0,1-4-4V56a4,4,0,0,1,4-4H200a4,4,0,0,1,4,4Z" }, null, -1);
+var q14 = [
+  j21
 ];
 var D11 = {
   name: "PhCpu"
@@ -31698,47 +31827,47 @@ var I5 = /* @__PURE__ */ defineComponent({
       transform: _.value
     }, n.$attrs), [
       renderSlot(n.$slots, "default"),
-      o.value === "bold" ? (openBlock(), createElementBlock("g", y9, f13)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", M19, x20)) : o.value === "fill" ? (openBlock(), createElementBlock("g", C19, z20)) : o.value === "light" ? (openBlock(), createElementBlock("g", B20, b20)) : o.value === "regular" ? (openBlock(), createElementBlock("g", E20, W20)) : o.value === "thin" ? (openBlock(), createElementBlock("g", $20, q13)) : createCommentVNode("", true)
-    ], 16, g2));
+      o.value === "bold" ? (openBlock(), createElementBlock("g", y10, f14)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", M20, x21)) : o.value === "fill" ? (openBlock(), createElementBlock("g", C20, z21)) : o.value === "light" ? (openBlock(), createElementBlock("g", B21, b21)) : o.value === "regular" ? (openBlock(), createElementBlock("g", E21, W21)) : o.value === "thin" ? (openBlock(), createElementBlock("g", $21, q14)) : createCommentVNode("", true)
+    ], 16, g3));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhDatabase.vue.mjs
 var V15 = ["width", "height", "fill", "transform"];
-var M20 = { key: 0 };
-var y10 = /* @__PURE__ */ createBaseVNode("path", { d: "M196,35.52C177.62,25.51,153.48,20,128,20S78.38,25.51,60,35.52C39.37,46.79,28,62.58,28,80v96c0,17.42,11.37,33.21,32,44.48,18.35,10,42.49,15.52,68,15.52s49.62-5.51,68-15.52c20.66-11.27,32-27.06,32-44.48V80C228,62.58,216.63,46.79,196,35.52ZM204,128c0,17-31.21,36-76,36s-76-19-76-36v-8.46a88.9,88.9,0,0,0,8,4.94c18.35,10,42.49,15.52,68,15.52s49.62-5.51,68-15.52a88.9,88.9,0,0,0,8-4.94ZM128,44c44.79,0,76,19,76,36s-31.21,36-76,36S52,97,52,80,83.21,44,128,44Zm0,168c-44.79,0-76-19-76-36v-8.46a88.9,88.9,0,0,0,8,4.94c18.35,10,42.49,15.52,68,15.52s49.62-5.51,68-15.52a88.9,88.9,0,0,0,8-4.94V176C204,193,172.79,212,128,212Z" }, null, -1);
-var S21 = [
-  y10
+var M21 = { key: 0 };
+var y11 = /* @__PURE__ */ createBaseVNode("path", { d: "M196,35.52C177.62,25.51,153.48,20,128,20S78.38,25.51,60,35.52C39.37,46.79,28,62.58,28,80v96c0,17.42,11.37,33.21,32,44.48,18.35,10,42.49,15.52,68,15.52s49.62-5.51,68-15.52c20.66-11.27,32-27.06,32-44.48V80C228,62.58,216.63,46.79,196,35.52ZM204,128c0,17-31.21,36-76,36s-76-19-76-36v-8.46a88.9,88.9,0,0,0,8,4.94c18.35,10,42.49,15.52,68,15.52s49.62-5.51,68-15.52a88.9,88.9,0,0,0,8-4.94ZM128,44c44.79,0,76,19,76,36s-31.21,36-76,36S52,97,52,80,83.21,44,128,44Zm0,168c-44.79,0-76-19-76-36v-8.46a88.9,88.9,0,0,0,8,4.94c18.35,10,42.49,15.52,68,15.52s49.62-5.51,68-15.52a88.9,88.9,0,0,0,8-4.94V176C204,193,172.79,212,128,212Z" }, null, -1);
+var S22 = [
+  y11
 ];
-var f14 = { key: 1 };
-var w21 = /* @__PURE__ */ createBaseVNode("path", {
+var f15 = { key: 1 };
+var w22 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M216,80c0,26.51-39.4,48-88,48S40,106.51,40,80s39.4-48,88-48S216,53.49,216,80Z",
   opacity: "0.2"
 }, null, -1);
-var k21 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24C74.17,24,32,48.6,32,80v96c0,31.4,42.17,56,96,56s96-24.6,96-56V80C224,48.6,181.83,24,128,24Zm80,104c0,9.62-7.88,19.43-21.61,26.92C170.93,163.35,150.19,168,128,168s-42.93-4.65-58.39-13.08C55.88,147.43,48,137.62,48,128V111.36c17.06,15,46.23,24.64,80,24.64s62.94-9.68,80-24.64ZM69.61,53.08C85.07,44.65,105.81,40,128,40s42.93,4.65,58.39,13.08C200.12,60.57,208,70.38,208,80s-7.88,19.43-21.61,26.92C170.93,115.35,150.19,120,128,120s-42.93-4.65-58.39-13.08C55.88,99.43,48,89.62,48,80S55.88,60.57,69.61,53.08ZM186.39,202.92C170.93,211.35,150.19,216,128,216s-42.93-4.65-58.39-13.08C55.88,195.43,48,185.62,48,176V159.36c17.06,15,46.23,24.64,80,24.64s62.94-9.68,80-24.64V176C208,185.62,200.12,195.43,186.39,202.92Z" }, null, -1);
-var x21 = [
-  w21,
-  k21
+var k22 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24C74.17,24,32,48.6,32,80v96c0,31.4,42.17,56,96,56s96-24.6,96-56V80C224,48.6,181.83,24,128,24Zm80,104c0,9.62-7.88,19.43-21.61,26.92C170.93,163.35,150.19,168,128,168s-42.93-4.65-58.39-13.08C55.88,147.43,48,137.62,48,128V111.36c17.06,15,46.23,24.64,80,24.64s62.94-9.68,80-24.64ZM69.61,53.08C85.07,44.65,105.81,40,128,40s42.93,4.65,58.39,13.08C200.12,60.57,208,70.38,208,80s-7.88,19.43-21.61,26.92C170.93,115.35,150.19,120,128,120s-42.93-4.65-58.39-13.08C55.88,99.43,48,89.62,48,80S55.88,60.57,69.61,53.08ZM186.39,202.92C170.93,211.35,150.19,216,128,216s-42.93-4.65-58.39-13.08C55.88,195.43,48,185.62,48,176V159.36c17.06,15,46.23,24.64,80,24.64s62.94-9.68,80-24.64V176C208,185.62,200.12,195.43,186.39,202.92Z" }, null, -1);
+var x22 = [
+  w22,
+  k22
 ];
-var z21 = { key: 2 };
-var B21 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24C74.17,24,32,48.6,32,80v96c0,31.4,42.17,56,96,56s96-24.6,96-56V80C224,48.6,181.83,24,128,24Zm80,104c0,9.62-7.88,19.43-21.61,26.92C170.93,163.35,150.19,168,128,168s-42.93-4.65-58.39-13.08C55.88,147.43,48,137.62,48,128V111.36c17.06,15,46.23,24.64,80,24.64s62.94-9.68,80-24.64Zm-21.61,74.92C170.93,211.35,150.19,216,128,216s-42.93-4.65-58.39-13.08C55.88,195.43,48,185.62,48,176V159.36c17.06,15,46.23,24.64,80,24.64s62.94-9.68,80-24.64V176C208,185.62,200.12,195.43,186.39,202.92Z" }, null, -1);
-var b21 = [
-  B21
+var z22 = { key: 2 };
+var B22 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24C74.17,24,32,48.6,32,80v96c0,31.4,42.17,56,96,56s96-24.6,96-56V80C224,48.6,181.83,24,128,24Zm80,104c0,9.62-7.88,19.43-21.61,26.92C170.93,163.35,150.19,168,128,168s-42.93-4.65-58.39-13.08C55.88,147.43,48,137.62,48,128V111.36c17.06,15,46.23,24.64,80,24.64s62.94-9.68,80-24.64Zm-21.61,74.92C170.93,211.35,150.19,216,128,216s-42.93-4.65-58.39-13.08C55.88,195.43,48,185.62,48,176V159.36c17.06,15,46.23,24.64,80,24.64s62.94-9.68,80-24.64V176C208,185.62,200.12,195.43,186.39,202.92Z" }, null, -1);
+var b22 = [
+  B22
 ];
-var N21 = { key: 3 };
-var E21 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,26C75.29,26,34,49.72,34,80v96c0,30.28,41.29,54,94,54s94-23.72,94-54V80C222,49.72,180.71,26,128,26Zm0,12c44.45,0,82,19.23,82,42s-37.55,42-82,42S46,102.77,46,80,83.55,38,128,38Zm82,138c0,22.77-37.55,42-82,42s-82-19.23-82-42V154.79C62,171.16,92.37,182,128,182s66-10.84,82-27.21Zm0-48c0,22.77-37.55,42-82,42s-82-19.23-82-42V106.79C62,123.16,92.37,134,128,134s66-10.84,82-27.21Z" }, null, -1);
-var P21 = [
-  E21
+var N22 = { key: 3 };
+var E22 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,26C75.29,26,34,49.72,34,80v96c0,30.28,41.29,54,94,54s94-23.72,94-54V80C222,49.72,180.71,26,128,26Zm0,12c44.45,0,82,19.23,82,42s-37.55,42-82,42S46,102.77,46,80,83.55,38,128,38Zm82,138c0,22.77-37.55,42-82,42s-82-19.23-82-42V154.79C62,171.16,92.37,182,128,182s66-10.84,82-27.21Zm0-48c0,22.77-37.55,42-82,42s-82-19.23-82-42V106.79C62,123.16,92.37,134,128,134s66-10.84,82-27.21Z" }, null, -1);
+var P22 = [
+  E22
 ];
-var W21 = { key: 4 };
-var $21 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24C74.17,24,32,48.6,32,80v96c0,31.4,42.17,56,96,56s96-24.6,96-56V80C224,48.6,181.83,24,128,24Zm80,104c0,9.62-7.88,19.43-21.61,26.92C170.93,163.35,150.19,168,128,168s-42.93-4.65-58.39-13.08C55.88,147.43,48,137.62,48,128V111.36c17.06,15,46.23,24.64,80,24.64s62.94-9.68,80-24.64ZM69.61,53.08C85.07,44.65,105.81,40,128,40s42.93,4.65,58.39,13.08C200.12,60.57,208,70.38,208,80s-7.88,19.43-21.61,26.92C170.93,115.35,150.19,120,128,120s-42.93-4.65-58.39-13.08C55.88,99.43,48,89.62,48,80S55.88,60.57,69.61,53.08ZM186.39,202.92C170.93,211.35,150.19,216,128,216s-42.93-4.65-58.39-13.08C55.88,195.43,48,185.62,48,176V159.36c17.06,15,46.23,24.64,80,24.64s62.94-9.68,80-24.64V176C208,185.62,200.12,195.43,186.39,202.92Z" }, null, -1);
-var j21 = [
-  $21
+var W22 = { key: 4 };
+var $22 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24C74.17,24,32,48.6,32,80v96c0,31.4,42.17,56,96,56s96-24.6,96-56V80C224,48.6,181.83,24,128,24Zm80,104c0,9.62-7.88,19.43-21.61,26.92C170.93,163.35,150.19,168,128,168s-42.93-4.65-58.39-13.08C55.88,147.43,48,137.62,48,128V111.36c17.06,15,46.23,24.64,80,24.64s62.94-9.68,80-24.64ZM69.61,53.08C85.07,44.65,105.81,40,128,40s42.93,4.65,58.39,13.08C200.12,60.57,208,70.38,208,80s-7.88,19.43-21.61,26.92C170.93,115.35,150.19,120,128,120s-42.93-4.65-58.39-13.08C55.88,99.43,48,89.62,48,80S55.88,60.57,69.61,53.08ZM186.39,202.92C170.93,211.35,150.19,216,128,216s-42.93-4.65-58.39-13.08C55.88,195.43,48,185.62,48,176V159.36c17.06,15,46.23,24.64,80,24.64s62.94-9.68,80-24.64V176C208,185.62,200.12,195.43,186.39,202.92Z" }, null, -1);
+var j22 = [
+  $22
 ];
 var D12 = { key: 5 };
-var q14 = /* @__PURE__ */ createBaseVNode("path", { d: "M192.14,42.55C174.94,33.17,152.16,28,128,28S81.06,33.17,63.86,42.55C45.89,52.35,36,65.65,36,80v96c0,14.35,9.89,27.65,27.86,37.45,17.2,9.38,40,14.55,64.14,14.55s46.94-5.17,64.14-14.55c18-9.8,27.86-23.1,27.86-37.45V80C220,65.65,210.11,52.35,192.14,42.55ZM212,176c0,11.29-8.41,22.1-23.69,30.43C172.27,215.18,150.85,220,128,220s-44.27-4.82-60.31-13.57C52.41,198.1,44,187.29,44,176V149.48c4.69,5.93,11.37,11.34,19.86,16,17.2,9.38,40,14.55,64.14,14.55s46.94-5.17,64.14-14.55c8.49-4.63,15.17-10,19.86-16Zm0-48c0,11.29-8.41,22.1-23.69,30.43C172.27,167.18,150.85,172,128,172s-44.27-4.82-60.31-13.57C52.41,150.1,44,139.29,44,128V101.48c4.69,5.93,11.37,11.34,19.86,16,17.2,9.38,40,14.55,64.14,14.55s46.94-5.17,64.14-14.55c8.49-4.63,15.17-10,19.86-16Zm-23.69-17.57C172.27,119.18,150.85,124,128,124s-44.27-4.82-60.31-13.57C52.41,102.1,44,91.29,44,80s8.41-22.1,23.69-30.43C83.73,40.82,105.15,36,128,36s44.27,4.82,60.31,13.57C203.59,57.9,212,68.71,212,80S203.59,102.1,188.31,110.43Z" }, null, -1);
+var q15 = /* @__PURE__ */ createBaseVNode("path", { d: "M192.14,42.55C174.94,33.17,152.16,28,128,28S81.06,33.17,63.86,42.55C45.89,52.35,36,65.65,36,80v96c0,14.35,9.89,27.65,27.86,37.45,17.2,9.38,40,14.55,64.14,14.55s46.94-5.17,64.14-14.55c18-9.8,27.86-23.1,27.86-37.45V80C220,65.65,210.11,52.35,192.14,42.55ZM212,176c0,11.29-8.41,22.1-23.69,30.43C172.27,215.18,150.85,220,128,220s-44.27-4.82-60.31-13.57C52.41,198.1,44,187.29,44,176V149.48c4.69,5.93,11.37,11.34,19.86,16,17.2,9.38,40,14.55,64.14,14.55s46.94-5.17,64.14-14.55c8.49-4.63,15.17-10,19.86-16Zm0-48c0,11.29-8.41,22.1-23.69,30.43C172.27,167.18,150.85,172,128,172s-44.27-4.82-60.31-13.57C52.41,150.1,44,139.29,44,128V101.48c4.69,5.93,11.37,11.34,19.86,16,17.2,9.38,40,14.55,64.14,14.55s46.94-5.17,64.14-14.55c8.49-4.63,15.17-10,19.86-16Zm-23.69-17.57C172.27,119.18,150.85,124,128,124s-44.27-4.82-60.31-13.57C52.41,102.1,44,91.29,44,80s8.41-22.1,23.69-30.43C83.73,40.82,105.15,36,128,36s44.27,4.82,60.31,13.57C203.59,57.9,212,68.71,212,80S203.59,102.1,188.31,110.43Z" }, null, -1);
 var A15 = [
-  q14
+  q15
 ];
 var F7 = {
   name: "PhDatabase"
@@ -31770,52 +31899,52 @@ var I6 = /* @__PURE__ */ defineComponent({
       transform: u.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      o.value === "bold" ? (openBlock(), createElementBlock("g", M20, S21)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", f14, x21)) : o.value === "fill" ? (openBlock(), createElementBlock("g", z21, b21)) : o.value === "light" ? (openBlock(), createElementBlock("g", N21, P21)) : o.value === "regular" ? (openBlock(), createElementBlock("g", W21, j21)) : o.value === "thin" ? (openBlock(), createElementBlock("g", D12, A15)) : createCommentVNode("", true)
+      o.value === "bold" ? (openBlock(), createElementBlock("g", M21, S22)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", f15, x22)) : o.value === "fill" ? (openBlock(), createElementBlock("g", z22, b22)) : o.value === "light" ? (openBlock(), createElementBlock("g", N22, P22)) : o.value === "regular" ? (openBlock(), createElementBlock("g", W22, j22)) : o.value === "thin" ? (openBlock(), createElementBlock("g", D12, A15)) : createCommentVNode("", true)
     ], 16, V15));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhDownloadSimple.vue.mjs
-var y11 = ["width", "height", "fill", "transform"];
+var y12 = ["width", "height", "fill", "transform"];
 var Z15 = { key: 0 };
-var f15 = /* @__PURE__ */ createBaseVNode("path", { d: "M228,144v64a12,12,0,0,1-12,12H40a12,12,0,0,1-12-12V144a12,12,0,0,1,24,0v52H204V144a12,12,0,0,1,24,0Zm-108.49,8.49a12,12,0,0,0,17,0l40-40a12,12,0,0,0-17-17L140,115V32a12,12,0,0,0-24,0v83L96.49,95.51a12,12,0,0,0-17,17Z" }, null, -1);
-var w22 = [
-  f15
+var f16 = /* @__PURE__ */ createBaseVNode("path", { d: "M228,144v64a12,12,0,0,1-12,12H40a12,12,0,0,1-12-12V144a12,12,0,0,1,24,0v52H204V144a12,12,0,0,1,24,0Zm-108.49,8.49a12,12,0,0,0,17,0l40-40a12,12,0,0,0-17-17L140,115V32a12,12,0,0,0-24,0v83L96.49,95.51a12,12,0,0,0-17,17Z" }, null, -1);
+var w23 = [
+  f16
 ];
 var L14 = { key: 1 };
-var M21 = /* @__PURE__ */ createBaseVNode("path", {
+var M22 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M216,48V208H40V48A16,16,0,0,1,56,32H200A16,16,0,0,1,216,48Z",
   opacity: "0.2"
 }, null, -1);
-var k22 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0Zm-101.66,5.66a8,8,0,0,0,11.32,0l40-40a8,8,0,0,0-11.32-11.32L136,124.69V32a8,8,0,0,0-16,0v92.69L93.66,98.34a8,8,0,0,0-11.32,11.32Z" }, null, -1);
-var S22 = [
-  M21,
-  k22
+var k23 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0Zm-101.66,5.66a8,8,0,0,0,11.32,0l40-40a8,8,0,0,0-11.32-11.32L136,124.69V32a8,8,0,0,0-16,0v92.69L93.66,98.34a8,8,0,0,0-11.32,11.32Z" }, null, -1);
+var S23 = [
+  M22,
+  k23
 ];
-var x22 = { key: 2 };
-var z22 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0Zm-101.66,5.66a8,8,0,0,0,11.32,0l40-40A8,8,0,0,0,168,96H136V32a8,8,0,0,0-16,0V96H88a8,8,0,0,0-5.66,13.66Z" }, null, -1);
-var C20 = [
-  z22
+var x23 = { key: 2 };
+var z23 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0Zm-101.66,5.66a8,8,0,0,0,11.32,0l40-40A8,8,0,0,0,168,96H136V32a8,8,0,0,0-16,0V96H88a8,8,0,0,0-5.66,13.66Z" }, null, -1);
+var C21 = [
+  z23
 ];
-var B22 = { key: 3 };
+var B23 = { key: 3 };
 var A16 = /* @__PURE__ */ createBaseVNode("path", { d: "M222,144v64a6,6,0,0,1-6,6H40a6,6,0,0,1-6-6V144a6,6,0,0,1,12,0v58H210V144a6,6,0,0,1,12,0Zm-98.24,4.24a6,6,0,0,0,8.48,0l40-40a6,6,0,0,0-8.48-8.48L134,129.51V32a6,6,0,0,0-12,0v97.51L92.24,99.76a6,6,0,0,0-8.48,8.48Z" }, null, -1);
-var N22 = [
+var N23 = [
   A16
 ];
-var b22 = { key: 4 };
-var E22 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0Zm-101.66,5.66a8,8,0,0,0,11.32,0l40-40a8,8,0,0,0-11.32-11.32L136,124.69V32a8,8,0,0,0-16,0v92.69L93.66,98.34a8,8,0,0,0-11.32,11.32Z" }, null, -1);
-var P22 = [
-  E22
+var b23 = { key: 4 };
+var E23 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0Zm-101.66,5.66a8,8,0,0,0,11.32,0l40-40a8,8,0,0,0-11.32-11.32L136,124.69V32a8,8,0,0,0-16,0v92.69L93.66,98.34a8,8,0,0,0-11.32,11.32Z" }, null, -1);
+var P23 = [
+  E23
 ];
-var W22 = { key: 5 };
-var $22 = /* @__PURE__ */ createBaseVNode("path", { d: "M220,144v64a4,4,0,0,1-4,4H40a4,4,0,0,1-4-4V144a4,4,0,0,1,8,0v60H212V144a4,4,0,0,1,8,0Zm-94.83,2.83a4,4,0,0,0,5.66,0l40-40a4,4,0,1,0-5.66-5.66L132,134.34V32a4,4,0,0,0-8,0V134.34L90.83,101.17a4,4,0,0,0-5.66,5.66Z" }, null, -1);
-var j22 = [
-  $22
+var W23 = { key: 5 };
+var $23 = /* @__PURE__ */ createBaseVNode("path", { d: "M220,144v64a4,4,0,0,1-4,4H40a4,4,0,0,1-4-4V144a4,4,0,0,1,8,0v60H212V144a4,4,0,0,1,8,0Zm-94.83,2.83a4,4,0,0,0,5.66,0l40-40a4,4,0,1,0-5.66-5.66L132,134.34V32a4,4,0,0,0-8,0V134.34L90.83,101.17a4,4,0,0,0-5.66,5.66Z" }, null, -1);
+var j23 = [
+  $23
 ];
 var D13 = {
   name: "PhDownloadSimple"
 };
-var G10 = /* @__PURE__ */ defineComponent({
+var G11 = /* @__PURE__ */ defineComponent({
   ...D13,
   props: {
     weight: {
@@ -31842,47 +31971,47 @@ var G10 = /* @__PURE__ */ defineComponent({
       transform: p.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      a.value === "bold" ? (openBlock(), createElementBlock("g", Z15, w22)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", L14, S22)) : a.value === "fill" ? (openBlock(), createElementBlock("g", x22, C20)) : a.value === "light" ? (openBlock(), createElementBlock("g", B22, N22)) : a.value === "regular" ? (openBlock(), createElementBlock("g", b22, P22)) : a.value === "thin" ? (openBlock(), createElementBlock("g", W22, j22)) : createCommentVNode("", true)
-    ], 16, y11));
+      a.value === "bold" ? (openBlock(), createElementBlock("g", Z15, w23)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", L14, S23)) : a.value === "fill" ? (openBlock(), createElementBlock("g", x23, C21)) : a.value === "light" ? (openBlock(), createElementBlock("g", B23, N23)) : a.value === "regular" ? (openBlock(), createElementBlock("g", b23, P23)) : a.value === "thin" ? (openBlock(), createElementBlock("g", W23, j23)) : createCommentVNode("", true)
+    ], 16, y12));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhEye.vue.mjs
-var v4 = ["width", "height", "fill", "transform"];
-var y12 = { key: 0 };
-var M22 = /* @__PURE__ */ createBaseVNode("path", { d: "M251,123.13c-.37-.81-9.13-20.26-28.48-39.61C196.63,57.67,164,44,128,44S59.37,57.67,33.51,83.52C14.16,102.87,5.4,122.32,5,123.13a12.08,12.08,0,0,0,0,9.75c.37.82,9.13,20.26,28.49,39.61C59.37,198.34,92,212,128,212s68.63-13.66,94.48-39.51c19.36-19.35,28.12-38.79,28.49-39.61A12.08,12.08,0,0,0,251,123.13Zm-46.06,33C183.47,177.27,157.59,188,128,188s-55.47-10.73-76.91-31.88A130.36,130.36,0,0,1,29.52,128,130.45,130.45,0,0,1,51.09,99.89C72.54,78.73,98.41,68,128,68s55.46,10.73,76.91,31.89A130.36,130.36,0,0,1,226.48,128,130.45,130.45,0,0,1,204.91,156.12ZM128,84a44,44,0,1,0,44,44A44.05,44.05,0,0,0,128,84Zm0,64a20,20,0,1,1,20-20A20,20,0,0,1,128,148Z" }, null, -1);
-var S23 = [
-  M22
+var v5 = ["width", "height", "fill", "transform"];
+var y13 = { key: 0 };
+var M23 = /* @__PURE__ */ createBaseVNode("path", { d: "M251,123.13c-.37-.81-9.13-20.26-28.48-39.61C196.63,57.67,164,44,128,44S59.37,57.67,33.51,83.52C14.16,102.87,5.4,122.32,5,123.13a12.08,12.08,0,0,0,0,9.75c.37.82,9.13,20.26,28.49,39.61C59.37,198.34,92,212,128,212s68.63-13.66,94.48-39.51c19.36-19.35,28.12-38.79,28.49-39.61A12.08,12.08,0,0,0,251,123.13Zm-46.06,33C183.47,177.27,157.59,188,128,188s-55.47-10.73-76.91-31.88A130.36,130.36,0,0,1,29.52,128,130.45,130.45,0,0,1,51.09,99.89C72.54,78.73,98.41,68,128,68s55.46,10.73,76.91,31.89A130.36,130.36,0,0,1,226.48,128,130.45,130.45,0,0,1,204.91,156.12ZM128,84a44,44,0,1,0,44,44A44.05,44.05,0,0,0,128,84Zm0,64a20,20,0,1,1,20-20A20,20,0,0,1,128,148Z" }, null, -1);
+var S24 = [
+  M23
 ];
-var f16 = { key: 1 };
-var w23 = /* @__PURE__ */ createBaseVNode("path", {
+var f17 = { key: 1 };
+var w24 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M128,56C48,56,16,128,16,128s32,72,112,72,112-72,112-72S208,56,128,56Zm0,112a40,40,0,1,1,40-40A40,40,0,0,1,128,168Z",
   opacity: "0.2"
 }, null, -1);
-var k23 = /* @__PURE__ */ createBaseVNode("path", { d: "M247.31,124.76c-.35-.79-8.82-19.58-27.65-38.41C194.57,61.26,162.88,48,128,48S61.43,61.26,36.34,86.35C17.51,105.18,9,124,8.69,124.76a8,8,0,0,0,0,6.5c.35.79,8.82,19.57,27.65,38.4C61.43,194.74,93.12,208,128,208s66.57-13.26,91.66-38.34c18.83-18.83,27.3-37.61,27.65-38.4A8,8,0,0,0,247.31,124.76ZM128,192c-30.78,0-57.67-11.19-79.93-33.25A133.47,133.47,0,0,1,25,128,133.33,133.33,0,0,1,48.07,97.25C70.33,75.19,97.22,64,128,64s57.67,11.19,79.93,33.25A133.46,133.46,0,0,1,231.05,128C223.84,141.46,192.43,192,128,192Zm0-112a48,48,0,1,0,48,48A48.05,48.05,0,0,0,128,80Zm0,80a32,32,0,1,1,32-32A32,32,0,0,1,128,160Z" }, null, -1);
-var x23 = [
-  w23,
-  k23
+var k24 = /* @__PURE__ */ createBaseVNode("path", { d: "M247.31,124.76c-.35-.79-8.82-19.58-27.65-38.41C194.57,61.26,162.88,48,128,48S61.43,61.26,36.34,86.35C17.51,105.18,9,124,8.69,124.76a8,8,0,0,0,0,6.5c.35.79,8.82,19.57,27.65,38.4C61.43,194.74,93.12,208,128,208s66.57-13.26,91.66-38.34c18.83-18.83,27.3-37.61,27.65-38.4A8,8,0,0,0,247.31,124.76ZM128,192c-30.78,0-57.67-11.19-79.93-33.25A133.47,133.47,0,0,1,25,128,133.33,133.33,0,0,1,48.07,97.25C70.33,75.19,97.22,64,128,64s57.67,11.19,79.93,33.25A133.46,133.46,0,0,1,231.05,128C223.84,141.46,192.43,192,128,192Zm0-112a48,48,0,1,0,48,48A48.05,48.05,0,0,0,128,80Zm0,80a32,32,0,1,1,32-32A32,32,0,0,1,128,160Z" }, null, -1);
+var x24 = [
+  w24,
+  k24
 ];
-var z23 = { key: 2 };
-var B23 = /* @__PURE__ */ createBaseVNode("path", { d: "M247.31,124.76c-.35-.79-8.82-19.58-27.65-38.41C194.57,61.26,162.88,48,128,48S61.43,61.26,36.34,86.35C17.51,105.18,9,124,8.69,124.76a8,8,0,0,0,0,6.5c.35.79,8.82,19.57,27.65,38.4C61.43,194.74,93.12,208,128,208s66.57-13.26,91.66-38.34c18.83-18.83,27.3-37.61,27.65-38.4A8,8,0,0,0,247.31,124.76ZM128,168a40,40,0,1,1,40-40A40,40,0,0,1,128,168Z" }, null, -1);
-var E23 = [
-  B23
+var z24 = { key: 2 };
+var B24 = /* @__PURE__ */ createBaseVNode("path", { d: "M247.31,124.76c-.35-.79-8.82-19.58-27.65-38.41C194.57,61.26,162.88,48,128,48S61.43,61.26,36.34,86.35C17.51,105.18,9,124,8.69,124.76a8,8,0,0,0,0,6.5c.35.79,8.82,19.57,27.65,38.4C61.43,194.74,93.12,208,128,208s66.57-13.26,91.66-38.34c18.83-18.83,27.3-37.61,27.65-38.4A8,8,0,0,0,247.31,124.76ZM128,168a40,40,0,1,1,40-40A40,40,0,0,1,128,168Z" }, null, -1);
+var E24 = [
+  B24
 ];
-var N23 = { key: 3 };
-var b23 = /* @__PURE__ */ createBaseVNode("path", { d: "M245.48,125.57c-.34-.78-8.66-19.23-27.24-37.81C201,70.54,171.38,50,128,50S55,70.54,37.76,87.76c-18.58,18.58-26.9,37-27.24,37.81a6,6,0,0,0,0,4.88c.34.77,8.66,19.22,27.24,37.8C55,185.47,84.62,206,128,206s73-20.53,90.24-37.75c18.58-18.58,26.9-37,27.24-37.8A6,6,0,0,0,245.48,125.57ZM128,194c-31.38,0-58.78-11.42-81.45-33.93A134.77,134.77,0,0,1,22.69,128,134.56,134.56,0,0,1,46.55,95.94C69.22,73.42,96.62,62,128,62s58.78,11.42,81.45,33.94A134.56,134.56,0,0,1,233.31,128C226.94,140.21,195,194,128,194Zm0-112a46,46,0,1,0,46,46A46.06,46.06,0,0,0,128,82Zm0,80a34,34,0,1,1,34-34A34,34,0,0,1,128,162Z" }, null, -1);
-var P23 = [
-  b23
+var N24 = { key: 3 };
+var b24 = /* @__PURE__ */ createBaseVNode("path", { d: "M245.48,125.57c-.34-.78-8.66-19.23-27.24-37.81C201,70.54,171.38,50,128,50S55,70.54,37.76,87.76c-18.58,18.58-26.9,37-27.24,37.81a6,6,0,0,0,0,4.88c.34.77,8.66,19.22,27.24,37.8C55,185.47,84.62,206,128,206s73-20.53,90.24-37.75c18.58-18.58,26.9-37,27.24-37.8A6,6,0,0,0,245.48,125.57ZM128,194c-31.38,0-58.78-11.42-81.45-33.93A134.77,134.77,0,0,1,22.69,128,134.56,134.56,0,0,1,46.55,95.94C69.22,73.42,96.62,62,128,62s58.78,11.42,81.45,33.94A134.56,134.56,0,0,1,233.31,128C226.94,140.21,195,194,128,194Zm0-112a46,46,0,1,0,46,46A46.06,46.06,0,0,0,128,82Zm0,80a34,34,0,1,1,34-34A34,34,0,0,1,128,162Z" }, null, -1);
+var P24 = [
+  b24
 ];
 var V16 = { key: 4 };
-var W23 = /* @__PURE__ */ createBaseVNode("path", { d: "M247.31,124.76c-.35-.79-8.82-19.58-27.65-38.41C194.57,61.26,162.88,48,128,48S61.43,61.26,36.34,86.35C17.51,105.18,9,124,8.69,124.76a8,8,0,0,0,0,6.5c.35.79,8.82,19.57,27.65,38.4C61.43,194.74,93.12,208,128,208s66.57-13.26,91.66-38.34c18.83-18.83,27.3-37.61,27.65-38.4A8,8,0,0,0,247.31,124.76ZM128,192c-30.78,0-57.67-11.19-79.93-33.25A133.47,133.47,0,0,1,25,128,133.33,133.33,0,0,1,48.07,97.25C70.33,75.19,97.22,64,128,64s57.67,11.19,79.93,33.25A133.46,133.46,0,0,1,231.05,128C223.84,141.46,192.43,192,128,192Zm0-112a48,48,0,1,0,48,48A48.05,48.05,0,0,0,128,80Zm0,80a32,32,0,1,1,32-32A32,32,0,0,1,128,160Z" }, null, -1);
-var $23 = [
-  W23
+var W24 = /* @__PURE__ */ createBaseVNode("path", { d: "M247.31,124.76c-.35-.79-8.82-19.58-27.65-38.41C194.57,61.26,162.88,48,128,48S61.43,61.26,36.34,86.35C17.51,105.18,9,124,8.69,124.76a8,8,0,0,0,0,6.5c.35.79,8.82,19.57,27.65,38.4C61.43,194.74,93.12,208,128,208s66.57-13.26,91.66-38.34c18.83-18.83,27.3-37.61,27.65-38.4A8,8,0,0,0,247.31,124.76ZM128,192c-30.78,0-57.67-11.19-79.93-33.25A133.47,133.47,0,0,1,25,128,133.33,133.33,0,0,1,48.07,97.25C70.33,75.19,97.22,64,128,64s57.67,11.19,79.93,33.25A133.46,133.46,0,0,1,231.05,128C223.84,141.46,192.43,192,128,192Zm0-112a48,48,0,1,0,48,48A48.05,48.05,0,0,0,128,80Zm0,80a32,32,0,1,1,32-32A32,32,0,0,1,128,160Z" }, null, -1);
+var $24 = [
+  W24
 ];
-var j23 = { key: 5 };
-var q15 = /* @__PURE__ */ createBaseVNode("path", { d: "M243.66,126.38c-.34-.76-8.52-18.89-26.83-37.2C199.87,72.22,170.7,52,128,52S56.13,72.22,39.17,89.18c-18.31,18.31-26.49,36.44-26.83,37.2a4.08,4.08,0,0,0,0,3.25c.34.77,8.52,18.89,26.83,37.2,17,17,46.14,37.17,88.83,37.17s71.87-20.21,88.83-37.17c18.31-18.31,26.49-36.43,26.83-37.2A4.08,4.08,0,0,0,243.66,126.38Zm-32.7,35c-23.07,23-51,34.62-83,34.62s-59.89-11.65-83-34.62A135.71,135.71,0,0,1,20.44,128,135.69,135.69,0,0,1,45,94.62C68.11,71.65,96,60,128,60s59.89,11.65,83,34.62A135.79,135.79,0,0,1,235.56,128,135.71,135.71,0,0,1,211,161.38ZM128,84a44,44,0,1,0,44,44A44.05,44.05,0,0,0,128,84Zm0,80a36,36,0,1,1,36-36A36,36,0,0,1,128,164Z" }, null, -1);
+var j24 = { key: 5 };
+var q16 = /* @__PURE__ */ createBaseVNode("path", { d: "M243.66,126.38c-.34-.76-8.52-18.89-26.83-37.2C199.87,72.22,170.7,52,128,52S56.13,72.22,39.17,89.18c-18.31,18.31-26.49,36.44-26.83,37.2a4.08,4.08,0,0,0,0,3.25c.34.77,8.52,18.89,26.83,37.2,17,17,46.14,37.17,88.83,37.17s71.87-20.21,88.83-37.17c18.31-18.31,26.49-36.43,26.83-37.2A4.08,4.08,0,0,0,243.66,126.38Zm-32.7,35c-23.07,23-51,34.62-83,34.62s-59.89-11.65-83-34.62A135.71,135.71,0,0,1,20.44,128,135.69,135.69,0,0,1,45,94.62C68.11,71.65,96,60,128,60s59.89,11.65,83,34.62A135.79,135.79,0,0,1,235.56,128,135.71,135.71,0,0,1,211,161.38ZM128,84a44,44,0,1,0,44,44A44.05,44.05,0,0,0,128,84Zm0,80a36,36,0,1,1,36-36A36,36,0,0,1,128,164Z" }, null, -1);
 var D14 = [
-  q15
+  q16
 ];
 var F8 = {
   name: "PhEye"
@@ -31914,52 +32043,52 @@ var I7 = /* @__PURE__ */ defineComponent({
       transform: C.value
     }, l.$attrs), [
       renderSlot(l.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", y12, S23)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", f16, x23)) : s.value === "fill" ? (openBlock(), createElementBlock("g", z23, E23)) : s.value === "light" ? (openBlock(), createElementBlock("g", N23, P23)) : s.value === "regular" ? (openBlock(), createElementBlock("g", V16, $23)) : s.value === "thin" ? (openBlock(), createElementBlock("g", j23, D14)) : createCommentVNode("", true)
-    ], 16, v4));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", y13, S24)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", f17, x24)) : s.value === "fill" ? (openBlock(), createElementBlock("g", z24, E24)) : s.value === "light" ? (openBlock(), createElementBlock("g", N24, P24)) : s.value === "regular" ? (openBlock(), createElementBlock("g", V16, $24)) : s.value === "thin" ? (openBlock(), createElementBlock("g", j24, D14)) : createCommentVNode("", true)
+    ], 16, v5));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhEyeSlash.vue.mjs
-var v5 = ["width", "height", "fill", "transform"];
-var y13 = { key: 0 };
-var M23 = /* @__PURE__ */ createBaseVNode("path", { d: "M56.88,31.93A12,12,0,1,0,39.12,48.07l16,17.65C20.67,88.66,5.72,121.58,5,123.13a12.08,12.08,0,0,0,0,9.75c.37.82,9.13,20.26,28.49,39.61C59.37,198.34,92,212,128,212a131.34,131.34,0,0,0,51-10l20.09,22.1a12,12,0,0,0,17.76-16.14ZM128,188c-29.59,0-55.47-10.73-76.91-31.88A130.69,130.69,0,0,1,29.52,128c5.27-9.31,18.79-29.9,42-44.29l90.09,99.11A109.33,109.33,0,0,1,128,188Zm123-55.12c-.36.81-9,20-28,39.16a12,12,0,1,1-17-16.9A130.48,130.48,0,0,0,226.48,128a130.36,130.36,0,0,0-21.57-28.12C183.46,78.73,157.59,68,128,68c-3.35,0-6.7.14-10,.42a12,12,0,1,1-2-23.91c3.93-.34,8-.51,12-.51,36,0,68.63,13.67,94.49,39.52,19.35,19.35,28.11,38.8,28.48,39.61A12.08,12.08,0,0,1,251,132.88Z" }, null, -1);
-var f17 = [
-  M23
+var v6 = ["width", "height", "fill", "transform"];
+var y14 = { key: 0 };
+var M24 = /* @__PURE__ */ createBaseVNode("path", { d: "M56.88,31.93A12,12,0,1,0,39.12,48.07l16,17.65C20.67,88.66,5.72,121.58,5,123.13a12.08,12.08,0,0,0,0,9.75c.37.82,9.13,20.26,28.49,39.61C59.37,198.34,92,212,128,212a131.34,131.34,0,0,0,51-10l20.09,22.1a12,12,0,0,0,17.76-16.14ZM128,188c-29.59,0-55.47-10.73-76.91-31.88A130.69,130.69,0,0,1,29.52,128c5.27-9.31,18.79-29.9,42-44.29l90.09,99.11A109.33,109.33,0,0,1,128,188Zm123-55.12c-.36.81-9,20-28,39.16a12,12,0,1,1-17-16.9A130.48,130.48,0,0,0,226.48,128a130.36,130.36,0,0,0-21.57-28.12C183.46,78.73,157.59,68,128,68c-3.35,0-6.7.14-10,.42a12,12,0,1,1-2-23.91c3.93-.34,8-.51,12-.51,36,0,68.63,13.67,94.49,39.52,19.35,19.35,28.11,38.8,28.48,39.61A12.08,12.08,0,0,1,251,132.88Z" }, null, -1);
+var f18 = [
+  M24
 ];
-var w24 = { key: 1 };
-var k24 = /* @__PURE__ */ createBaseVNode("path", {
+var w25 = { key: 1 };
+var k25 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M128,56C48,56,16,128,16,128s32,72,112,72,112-72,112-72S208,56,128,56Zm0,112a40,40,0,1,1,40-40A40,40,0,0,1,128,168Z",
   opacity: "0.2"
 }, null, -1);
-var S24 = /* @__PURE__ */ createBaseVNode("path", { d: "M53.92,34.62A8,8,0,1,0,42.08,45.38L61.32,66.55C25,88.84,9.38,123.2,8.69,124.76a8,8,0,0,0,0,6.5c.35.79,8.82,19.57,27.65,38.4C61.43,194.74,93.12,208,128,208a127.11,127.11,0,0,0,52.07-10.83l22,24.21a8,8,0,1,0,11.84-10.76Zm47.33,75.84,41.67,45.85a32,32,0,0,1-41.67-45.85ZM128,192c-30.78,0-57.67-11.19-79.93-33.25A133.16,133.16,0,0,1,25,128c4.69-8.79,19.66-33.39,47.35-49.38l18,19.75a48,48,0,0,0,63.66,70l14.73,16.2A112,112,0,0,1,128,192Zm6-95.43a8,8,0,0,1,3-15.72,48.16,48.16,0,0,1,38.77,42.64,8,8,0,0,1-7.22,8.71,6.39,6.39,0,0,1-.75,0,8,8,0,0,1-8-7.26A32.09,32.09,0,0,0,134,96.57Zm113.28,34.69c-.42.94-10.55,23.37-33.36,43.8a8,8,0,1,1-10.67-11.92A132.77,132.77,0,0,0,231.05,128a133.15,133.15,0,0,0-23.12-30.77C185.67,75.19,158.78,64,128,64a118.37,118.37,0,0,0-19.36,1.57A8,8,0,1,1,106,49.79,134,134,0,0,1,128,48c34.88,0,66.57,13.26,91.66,38.35,18.83,18.83,27.3,37.62,27.65,38.41A8,8,0,0,1,247.31,131.26Z" }, null, -1);
+var S25 = /* @__PURE__ */ createBaseVNode("path", { d: "M53.92,34.62A8,8,0,1,0,42.08,45.38L61.32,66.55C25,88.84,9.38,123.2,8.69,124.76a8,8,0,0,0,0,6.5c.35.79,8.82,19.57,27.65,38.4C61.43,194.74,93.12,208,128,208a127.11,127.11,0,0,0,52.07-10.83l22,24.21a8,8,0,1,0,11.84-10.76Zm47.33,75.84,41.67,45.85a32,32,0,0,1-41.67-45.85ZM128,192c-30.78,0-57.67-11.19-79.93-33.25A133.16,133.16,0,0,1,25,128c4.69-8.79,19.66-33.39,47.35-49.38l18,19.75a48,48,0,0,0,63.66,70l14.73,16.2A112,112,0,0,1,128,192Zm6-95.43a8,8,0,0,1,3-15.72,48.16,48.16,0,0,1,38.77,42.64,8,8,0,0,1-7.22,8.71,6.39,6.39,0,0,1-.75,0,8,8,0,0,1-8-7.26A32.09,32.09,0,0,0,134,96.57Zm113.28,34.69c-.42.94-10.55,23.37-33.36,43.8a8,8,0,1,1-10.67-11.92A132.77,132.77,0,0,0,231.05,128a133.15,133.15,0,0,0-23.12-30.77C185.67,75.19,158.78,64,128,64a118.37,118.37,0,0,0-19.36,1.57A8,8,0,1,1,106,49.79,134,134,0,0,1,128,48c34.88,0,66.57,13.26,91.66,38.35,18.83,18.83,27.3,37.62,27.65,38.41A8,8,0,0,1,247.31,131.26Z" }, null, -1);
 var L15 = [
-  k24,
-  S24
+  k25,
+  S25
 ];
-var x24 = { key: 2 };
-var z24 = /* @__PURE__ */ createBaseVNode("path", { d: "M96.68,57.87a4,4,0,0,1,2.08-6.6A130.13,130.13,0,0,1,128,48c34.88,0,66.57,13.26,91.66,38.35,18.83,18.83,27.3,37.62,27.65,38.41a8,8,0,0,1,0,6.5c-.35.79-8.82,19.57-27.65,38.4q-4.28,4.26-8.79,8.07a4,4,0,0,1-5.55-.36ZM213.92,210.62a8,8,0,1,1-11.84,10.76L180,197.13A127.21,127.21,0,0,1,128,208c-34.88,0-66.57-13.26-91.66-38.34C17.51,150.83,9,132.05,8.69,131.26a8,8,0,0,1,0-6.5C9,124,17.51,105.18,36.34,86.35a135,135,0,0,1,25-19.78L42.08,45.38A8,8,0,1,1,53.92,34.62Zm-65.49-48.25-52.69-58a40,40,0,0,0,52.69,58Z" }, null, -1);
-var B24 = [
-  z24
+var x25 = { key: 2 };
+var z25 = /* @__PURE__ */ createBaseVNode("path", { d: "M96.68,57.87a4,4,0,0,1,2.08-6.6A130.13,130.13,0,0,1,128,48c34.88,0,66.57,13.26,91.66,38.35,18.83,18.83,27.3,37.62,27.65,38.41a8,8,0,0,1,0,6.5c-.35.79-8.82,19.57-27.65,38.4q-4.28,4.26-8.79,8.07a4,4,0,0,1-5.55-.36ZM213.92,210.62a8,8,0,1,1-11.84,10.76L180,197.13A127.21,127.21,0,0,1,128,208c-34.88,0-66.57-13.26-91.66-38.34C17.51,150.83,9,132.05,8.69,131.26a8,8,0,0,1,0-6.5C9,124,17.51,105.18,36.34,86.35a135,135,0,0,1,25-19.78L42.08,45.38A8,8,0,1,1,53.92,34.62Zm-65.49-48.25-52.69-58a40,40,0,0,0,52.69,58Z" }, null, -1);
+var B25 = [
+  z25
 ];
-var E24 = { key: 3 };
-var N24 = /* @__PURE__ */ createBaseVNode("path", { d: "M52.44,36A6,6,0,0,0,43.56,44L64.44,67c-37.28,21.9-53.23,57-53.92,58.57a6,6,0,0,0,0,4.88c.34.77,8.66,19.22,27.24,37.8C55,185.47,84.62,206,128,206a124.91,124.91,0,0,0,52.57-11.25l23,25.29a6,6,0,0,0,8.88-8.08Zm48.62,71.32,45,49.52a34,34,0,0,1-45-49.52ZM128,194c-31.38,0-58.78-11.42-81.45-33.93A134.57,134.57,0,0,1,22.69,128c4.29-8.2,20.1-35.18,50-51.91L92.89,98.3a46,46,0,0,0,61.35,67.48l17.81,19.6A113.47,113.47,0,0,1,128,194Zm6.4-99.4a6,6,0,0,1,2.25-11.79,46.17,46.17,0,0,1,37.15,40.87,6,6,0,0,1-5.42,6.53l-.56,0a6,6,0,0,1-6-5.45A34.1,34.1,0,0,0,134.4,94.6Zm111.08,35.85c-.41.92-10.37,23-32.86,43.12a6,6,0,1,1-8-8.94A134.07,134.07,0,0,0,233.31,128a134.67,134.67,0,0,0-23.86-32.07C186.78,73.42,159.38,62,128,62a120.19,120.19,0,0,0-19.69,1.6,6,6,0,1,1-2-11.83A131.12,131.12,0,0,1,128,50c43.38,0,73,20.54,90.24,37.76,18.58,18.58,26.9,37,27.24,37.81A6,6,0,0,1,245.48,130.45Z" }, null, -1);
-var b24 = [
-  N24
+var E25 = { key: 3 };
+var N25 = /* @__PURE__ */ createBaseVNode("path", { d: "M52.44,36A6,6,0,0,0,43.56,44L64.44,67c-37.28,21.9-53.23,57-53.92,58.57a6,6,0,0,0,0,4.88c.34.77,8.66,19.22,27.24,37.8C55,185.47,84.62,206,128,206a124.91,124.91,0,0,0,52.57-11.25l23,25.29a6,6,0,0,0,8.88-8.08Zm48.62,71.32,45,49.52a34,34,0,0,1-45-49.52ZM128,194c-31.38,0-58.78-11.42-81.45-33.93A134.57,134.57,0,0,1,22.69,128c4.29-8.2,20.1-35.18,50-51.91L92.89,98.3a46,46,0,0,0,61.35,67.48l17.81,19.6A113.47,113.47,0,0,1,128,194Zm6.4-99.4a6,6,0,0,1,2.25-11.79,46.17,46.17,0,0,1,37.15,40.87,6,6,0,0,1-5.42,6.53l-.56,0a6,6,0,0,1-6-5.45A34.1,34.1,0,0,0,134.4,94.6Zm111.08,35.85c-.41.92-10.37,23-32.86,43.12a6,6,0,1,1-8-8.94A134.07,134.07,0,0,0,233.31,128a134.67,134.67,0,0,0-23.86-32.07C186.78,73.42,159.38,62,128,62a120.19,120.19,0,0,0-19.69,1.6,6,6,0,1,1-2-11.83A131.12,131.12,0,0,1,128,50c43.38,0,73,20.54,90.24,37.76,18.58,18.58,26.9,37,27.24,37.81A6,6,0,0,1,245.48,130.45Z" }, null, -1);
+var b25 = [
+  N25
 ];
-var P24 = { key: 4 };
+var P25 = { key: 4 };
 var V17 = /* @__PURE__ */ createBaseVNode("path", { d: "M53.92,34.62A8,8,0,1,0,42.08,45.38L61.32,66.55C25,88.84,9.38,123.2,8.69,124.76a8,8,0,0,0,0,6.5c.35.79,8.82,19.57,27.65,38.4C61.43,194.74,93.12,208,128,208a127.11,127.11,0,0,0,52.07-10.83l22,24.21a8,8,0,1,0,11.84-10.76Zm47.33,75.84,41.67,45.85a32,32,0,0,1-41.67-45.85ZM128,192c-30.78,0-57.67-11.19-79.93-33.25A133.16,133.16,0,0,1,25,128c4.69-8.79,19.66-33.39,47.35-49.38l18,19.75a48,48,0,0,0,63.66,70l14.73,16.2A112,112,0,0,1,128,192Zm6-95.43a8,8,0,0,1,3-15.72,48.16,48.16,0,0,1,38.77,42.64,8,8,0,0,1-7.22,8.71,6.39,6.39,0,0,1-.75,0,8,8,0,0,1-8-7.26A32.09,32.09,0,0,0,134,96.57Zm113.28,34.69c-.42.94-10.55,23.37-33.36,43.8a8,8,0,1,1-10.67-11.92A132.77,132.77,0,0,0,231.05,128a133.15,133.15,0,0,0-23.12-30.77C185.67,75.19,158.78,64,128,64a118.37,118.37,0,0,0-19.36,1.57A8,8,0,1,1,106,49.79,134,134,0,0,1,128,48c34.88,0,66.57,13.26,91.66,38.35,18.83,18.83,27.3,37.62,27.65,38.41A8,8,0,0,1,247.31,131.26Z" }, null, -1);
-var W24 = [
+var W25 = [
   V17
 ];
-var $24 = { key: 5 };
-var j24 = /* @__PURE__ */ createBaseVNode("path", { d: "M51,37.31A4,4,0,0,0,45,42.69L67.59,67.5C29.34,89,13,124.81,12.34,126.38a4.08,4.08,0,0,0,0,3.25c.34.77,8.52,18.89,26.83,37.2,17,17,46.14,37.17,88.83,37.17a122.59,122.59,0,0,0,53.06-11.69l24,26.38a4,4,0,1,0,5.92-5.38ZM149.1,157.16A36,36,0,0,1,101,104.22ZM128,196c-32,0-59.89-11.65-83-34.62A135.81,135.81,0,0,1,20.44,128c3.65-7.23,20.09-36.81,52.68-54.43l22.45,24.7a44,44,0,0,0,59,64.83l20.89,23A114.94,114.94,0,0,1,128,196Zm6.78-103.36a4,4,0,0,1,1.49-7.86,44.15,44.15,0,0,1,35.54,39.09,4,4,0,0,1-3.61,4.35l-.38,0a4,4,0,0,1-4-3.63A36.1,36.1,0,0,0,134.78,92.64Zm108.88,37c-.41.91-10.2,22.58-32.38,42.45a4,4,0,0,1-2.67,1,4,4,0,0,1-2.67-7A136.71,136.71,0,0,0,235.56,128,136.07,136.07,0,0,0,211,94.62C187.89,71.65,160,60,128,60a122,122,0,0,0-20,1.63,4,4,0,0,1-1.32-7.89A129.3,129.3,0,0,1,128,52c42.7,0,71.87,20.22,88.83,37.18,18.31,18.31,26.49,36.44,26.83,37.2A4.08,4.08,0,0,1,243.66,129.63Z" }, null, -1);
-var q16 = [
-  j24
+var $25 = { key: 5 };
+var j25 = /* @__PURE__ */ createBaseVNode("path", { d: "M51,37.31A4,4,0,0,0,45,42.69L67.59,67.5C29.34,89,13,124.81,12.34,126.38a4.08,4.08,0,0,0,0,3.25c.34.77,8.52,18.89,26.83,37.2,17,17,46.14,37.17,88.83,37.17a122.59,122.59,0,0,0,53.06-11.69l24,26.38a4,4,0,1,0,5.92-5.38ZM149.1,157.16A36,36,0,0,1,101,104.22ZM128,196c-32,0-59.89-11.65-83-34.62A135.81,135.81,0,0,1,20.44,128c3.65-7.23,20.09-36.81,52.68-54.43l22.45,24.7a44,44,0,0,0,59,64.83l20.89,23A114.94,114.94,0,0,1,128,196Zm6.78-103.36a4,4,0,0,1,1.49-7.86,44.15,44.15,0,0,1,35.54,39.09,4,4,0,0,1-3.61,4.35l-.38,0a4,4,0,0,1-4-3.63A36.1,36.1,0,0,0,134.78,92.64Zm108.88,37c-.41.91-10.2,22.58-32.38,42.45a4,4,0,0,1-2.67,1,4,4,0,0,1-2.67-7A136.71,136.71,0,0,0,235.56,128,136.07,136.07,0,0,0,211,94.62C187.89,71.65,160,60,128,60a122,122,0,0,0-20,1.63,4,4,0,0,1-1.32-7.89A129.3,129.3,0,0,1,128,52c42.7,0,71.87,20.22,88.83,37.18,18.31,18.31,26.49,36.44,26.83,37.2A4.08,4.08,0,0,1,243.66,129.63Z" }, null, -1);
+var q17 = [
+  j25
 ];
 var D15 = {
   name: "PhEyeSlash"
 };
-var H12 = /* @__PURE__ */ defineComponent({
+var H13 = /* @__PURE__ */ defineComponent({
   ...D15,
   props: {
     weight: {
@@ -31986,46 +32115,46 @@ var H12 = /* @__PURE__ */ defineComponent({
       transform: u.value
     }, i.$attrs), [
       renderSlot(i.$slots, "default"),
-      a.value === "bold" ? (openBlock(), createElementBlock("g", y13, f17)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", w24, L15)) : a.value === "fill" ? (openBlock(), createElementBlock("g", x24, B24)) : a.value === "light" ? (openBlock(), createElementBlock("g", E24, b24)) : a.value === "regular" ? (openBlock(), createElementBlock("g", P24, W24)) : a.value === "thin" ? (openBlock(), createElementBlock("g", $24, q16)) : createCommentVNode("", true)
-    ], 16, v5));
+      a.value === "bold" ? (openBlock(), createElementBlock("g", y14, f18)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", w25, L15)) : a.value === "fill" ? (openBlock(), createElementBlock("g", x25, B25)) : a.value === "light" ? (openBlock(), createElementBlock("g", E25, b25)) : a.value === "regular" ? (openBlock(), createElementBlock("g", P25, W25)) : a.value === "thin" ? (openBlock(), createElementBlock("g", $25, q17)) : createCommentVNode("", true)
+    ], 16, v6));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhFlagCheckered.vue.mjs
 var u = ["width", "height", "fill", "transform"];
 var p2 = { key: 0 };
-var g3 = /* @__PURE__ */ createBaseVNode("path", { d: "M229,45a12,12,0,0,0-12.85,1.84c-24.71,21.41-44.53,13.31-74.82-1.68C113.19,31.27,78.17,13.94,40.14,46.88A12,12,0,0,0,36,56V224a12,12,0,0,0,24,0V181.71c22.84-17.13,42.1-9.11,70.68,5,16.23,8,34.74,17.2,54.8,17.2,14.72,0,30.28-4.94,46.38-18.88A12,12,0,0,0,236,176V56A12,12,0,0,0,229,45ZM185.48,83.91A63,63,0,0,0,212,78.08v32.15c-11,8.26-21.2,10.67-32,9.37V83.66C181.81,83.81,183.64,83.91,185.48,83.91ZM156,78.08v34.09c-4.64-2-9.5-4.4-14.68-7A255.21,255.21,0,0,0,116,93.83V59.75c4.64,2,9.5,4.4,14.68,7A252.91,252.91,0,0,0,156,78.08ZM92,52.32V88.24a63.33,63.33,0,0,0-32,5.61V61.68C71,53.42,81.2,51,92,52.32ZM86.52,148A63,63,0,0,0,60,153.86V121.7c11-8.25,21.2-10.66,32-9.36v35.94C90.19,148.13,88.36,148,86.52,148ZM116,153.86V119.77c4.64,2,9.5,4.4,14.68,7A252.91,252.91,0,0,0,156,138.1v34.09c-4.64-2.05-9.5-4.4-14.68-7A250.66,250.66,0,0,0,116,153.86Zm64,25.76V143.68c1.81.14,3.64.24,5.48.24A62.85,62.85,0,0,0,212,138.07v32.19C201,178.52,190.8,180.92,180,179.62Z" }, null, -1);
-var y14 = [
-  g3
+var g4 = /* @__PURE__ */ createBaseVNode("path", { d: "M229,45a12,12,0,0,0-12.85,1.84c-24.71,21.41-44.53,13.31-74.82-1.68C113.19,31.27,78.17,13.94,40.14,46.88A12,12,0,0,0,36,56V224a12,12,0,0,0,24,0V181.71c22.84-17.13,42.1-9.11,70.68,5,16.23,8,34.74,17.2,54.8,17.2,14.72,0,30.28-4.94,46.38-18.88A12,12,0,0,0,236,176V56A12,12,0,0,0,229,45ZM185.48,83.91A63,63,0,0,0,212,78.08v32.15c-11,8.26-21.2,10.67-32,9.37V83.66C181.81,83.81,183.64,83.91,185.48,83.91ZM156,78.08v34.09c-4.64-2-9.5-4.4-14.68-7A255.21,255.21,0,0,0,116,93.83V59.75c4.64,2,9.5,4.4,14.68,7A252.91,252.91,0,0,0,156,78.08ZM92,52.32V88.24a63.33,63.33,0,0,0-32,5.61V61.68C71,53.42,81.2,51,92,52.32ZM86.52,148A63,63,0,0,0,60,153.86V121.7c11-8.25,21.2-10.66,32-9.36v35.94C90.19,148.13,88.36,148,86.52,148ZM116,153.86V119.77c4.64,2,9.5,4.4,14.68,7A252.91,252.91,0,0,0,156,138.1v34.09c-4.64-2.05-9.5-4.4-14.68-7A250.66,250.66,0,0,0,116,153.86Zm64,25.76V143.68c1.81.14,3.64.24,5.48.24A62.85,62.85,0,0,0,212,138.07v32.19C201,178.52,190.8,180.92,180,179.62Z" }, null, -1);
+var y15 = [
+  g4
 ];
-var f18 = { key: 1 };
-var w25 = /* @__PURE__ */ createBaseVNode("path", {
+var f19 = { key: 1 };
+var w26 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M224,56v60c-19.89,17.23-38.23,18.39-56,13.48v-60C185.76,74.39,204.11,73.23,224,56ZM104,102.52v-60C86.24,37.61,67.89,38.77,48,56v60c19.89-17.22,38.23-18.39,56-13.48v60c21.62,6,42.38,21,64,27v-60c-21.62-6-42.38-21-64-27Z",
   opacity: "0.2"
 }, null, -1);
-var k25 = /* @__PURE__ */ createBaseVNode("path", { d: "M227.32,48.75A8,8,0,0,0,218.76,50c-28,24.22-51.72,12.48-79.21-1.13C111.07,34.76,78.78,18.79,42.76,50A8,8,0,0,0,40,56V224a8,8,0,0,0,16,0V179.77c26.79-21.16,49.87-9.75,76.45,3.41,28.49,14.09,60.77,30.06,96.79-1.13a8,8,0,0,0,2.76-6V56A8,8,0,0,0,227.32,48.75ZM216,71.6v40.65c-14,11.06-27,13.22-40,10.88V79.34A60.05,60.05,0,0,0,216,71.6Zm-56,3.76v43c-6.66-2.67-13.43-6-20.45-9.48-8.82-4.37-18-8.91-27.55-12.18v-43c6.66,2.66,13.43,6,20.45,9.48C141.27,67.55,150.46,72.09,160,75.36ZM96,48.91V92.69a60.06,60.06,0,0,0-40,7.75V59.78C70,48.72,83,46.57,96,48.91ZM86.58,152A60.06,60.06,0,0,0,56,160.43V119.78c14-11.06,27-13.22,40-10.88v43.8A65.61,65.61,0,0,0,86.58,152ZM112,156.67v-43c6.66,2.66,13.43,6,20.45,9.48,8.82,4.37,18,8.9,27.55,12.17v43c-6.66-2.67-13.43-6-20.45-9.48C130.73,164.47,121.54,159.94,112,156.67Zm64,26.45v-43.8a65.61,65.61,0,0,0,9.42.72A60.11,60.11,0,0,0,216,131.57v40.68C202,183.31,189,185.46,176,183.12Z" }, null, -1);
-var x25 = [
-  w25,
-  k25
+var k26 = /* @__PURE__ */ createBaseVNode("path", { d: "M227.32,48.75A8,8,0,0,0,218.76,50c-28,24.22-51.72,12.48-79.21-1.13C111.07,34.76,78.78,18.79,42.76,50A8,8,0,0,0,40,56V224a8,8,0,0,0,16,0V179.77c26.79-21.16,49.87-9.75,76.45,3.41,28.49,14.09,60.77,30.06,96.79-1.13a8,8,0,0,0,2.76-6V56A8,8,0,0,0,227.32,48.75ZM216,71.6v40.65c-14,11.06-27,13.22-40,10.88V79.34A60.05,60.05,0,0,0,216,71.6Zm-56,3.76v43c-6.66-2.67-13.43-6-20.45-9.48-8.82-4.37-18-8.91-27.55-12.18v-43c6.66,2.66,13.43,6,20.45,9.48C141.27,67.55,150.46,72.09,160,75.36ZM96,48.91V92.69a60.06,60.06,0,0,0-40,7.75V59.78C70,48.72,83,46.57,96,48.91ZM86.58,152A60.06,60.06,0,0,0,56,160.43V119.78c14-11.06,27-13.22,40-10.88v43.8A65.61,65.61,0,0,0,86.58,152ZM112,156.67v-43c6.66,2.66,13.43,6,20.45,9.48,8.82,4.37,18,8.9,27.55,12.17v43c-6.66-2.67-13.43-6-20.45-9.48C130.73,164.47,121.54,159.94,112,156.67Zm64,26.45v-43.8a65.61,65.61,0,0,0,9.42.72A60.11,60.11,0,0,0,216,131.57v40.68C202,183.31,189,185.46,176,183.12Z" }, null, -1);
+var x26 = [
+  w26,
+  k26
 ];
-var S25 = { key: 2 };
-var z25 = /* @__PURE__ */ createBaseVNode("path", { d: "M227.32,48.75A8,8,0,0,0,218.76,50c-28,24.22-51.72,12.48-79.21-1.13C111.07,34.76,78.78,18.79,42.76,50h0A8,8,0,0,0,40,56V224a8,8,0,0,0,16,0V179.77c26.79-21.16,49.87-9.75,76.45,3.41,16.4,8.11,34.06,16.85,53,16.85,13.93,0,28.54-4.75,43.82-18a8,8,0,0,0,2.76-6V56A8,8,0,0,0,227.32,48.75ZM56,160.44V109.88c16.85-11.28,32.64-11.59,48-7.34v51.74C88.87,150.47,72.87,150.71,56,160.44ZM104,50.87c9.25,2.83,18.61,7.45,28.45,12.32,11.26,5.57,23.11,11.43,35.55,14.56v51.74c15.35,4.25,31.14,3.94,48-7.35v50.11c-16.87,13.32-32.27,13.72-48,8.91V129.49c-21.62-6-42.38-21-64-26.95Z" }, null, -1);
-var B25 = [
-  z25
+var S26 = { key: 2 };
+var z26 = /* @__PURE__ */ createBaseVNode("path", { d: "M227.32,48.75A8,8,0,0,0,218.76,50c-28,24.22-51.72,12.48-79.21-1.13C111.07,34.76,78.78,18.79,42.76,50h0A8,8,0,0,0,40,56V224a8,8,0,0,0,16,0V179.77c26.79-21.16,49.87-9.75,76.45,3.41,16.4,8.11,34.06,16.85,53,16.85,13.93,0,28.54-4.75,43.82-18a8,8,0,0,0,2.76-6V56A8,8,0,0,0,227.32,48.75ZM56,160.44V109.88c16.85-11.28,32.64-11.59,48-7.34v51.74C88.87,150.47,72.87,150.71,56,160.44ZM104,50.87c9.25,2.83,18.61,7.45,28.45,12.32,11.26,5.57,23.11,11.43,35.55,14.56v51.74c15.35,4.25,31.14,3.94,48-7.35v50.11c-16.87,13.32-32.27,13.72-48,8.91V129.49c-21.62-6-42.38-21-64-26.95Z" }, null, -1);
+var B26 = [
+  z26
 ];
-var N25 = { key: 3 };
-var b25 = /* @__PURE__ */ createBaseVNode("path", { d: "M226.49,50.5a6,6,0,0,0-6.42.92c-29,25.11-53.28,13.08-81.41-.84-27.92-13.82-59.57-29.49-94.59.84A6,6,0,0,0,42,56V224a6,6,0,0,0,12,0V178.78c28.08-22.79,51.88-11,79.34,2.59,27.92,13.82,59.58,29.48,94.59-.85A6,6,0,0,0,230,176V56A6,6,0,0,0,226.49,50.5ZM218,68v45.2c-15.53,12.6-29.75,14.65-44,11.65V76.88C188,79.33,202.64,77.78,218,68Zm-56,5.87v47.4c-7.6-2.85-15.31-6.66-23.34-10.64-9.16-4.53-18.71-9.26-28.66-12.5V50.71a255.17,255.17,0,0,1,23.34,10.63C142.5,65.87,152.05,70.59,162,73.83ZM98,47.13V95c-14-2.45-28.64-.89-44,8.93V58.75C69.53,46.15,83.75,44.13,98,47.13ZM86.63,154C76.13,154,65.24,156.79,54,164V118.79c15.53-12.61,29.75-14.65,44-11.65v47.93A66.32,66.32,0,0,0,86.63,154ZM110,158.11V110.72c7.6,2.84,15.31,6.66,23.34,10.63,9.16,4.53,18.71,9.26,28.66,12.5v47.39c-7.6-2.85-15.31-6.66-23.34-10.63C129.5,166.07,120,161.35,110,158.11Zm64,26.7V136.89a66.32,66.32,0,0,0,11.37,1c10.5,0,21.39-2.78,32.63-10v45.24C202.47,185.79,188.25,187.81,174,184.81Z" }, null, -1);
-var E25 = [
-  b25
+var N26 = { key: 3 };
+var b26 = /* @__PURE__ */ createBaseVNode("path", { d: "M226.49,50.5a6,6,0,0,0-6.42.92c-29,25.11-53.28,13.08-81.41-.84-27.92-13.82-59.57-29.49-94.59.84A6,6,0,0,0,42,56V224a6,6,0,0,0,12,0V178.78c28.08-22.79,51.88-11,79.34,2.59,27.92,13.82,59.58,29.48,94.59-.85A6,6,0,0,0,230,176V56A6,6,0,0,0,226.49,50.5ZM218,68v45.2c-15.53,12.6-29.75,14.65-44,11.65V76.88C188,79.33,202.64,77.78,218,68Zm-56,5.87v47.4c-7.6-2.85-15.31-6.66-23.34-10.64-9.16-4.53-18.71-9.26-28.66-12.5V50.71a255.17,255.17,0,0,1,23.34,10.63C142.5,65.87,152.05,70.59,162,73.83ZM98,47.13V95c-14-2.45-28.64-.89-44,8.93V58.75C69.53,46.15,83.75,44.13,98,47.13ZM86.63,154C76.13,154,65.24,156.79,54,164V118.79c15.53-12.61,29.75-14.65,44-11.65v47.93A66.32,66.32,0,0,0,86.63,154ZM110,158.11V110.72c7.6,2.84,15.31,6.66,23.34,10.63,9.16,4.53,18.71,9.26,28.66,12.5v47.39c-7.6-2.85-15.31-6.66-23.34-10.63C129.5,166.07,120,161.35,110,158.11Zm64,26.7V136.89a66.32,66.32,0,0,0,11.37,1c10.5,0,21.39-2.78,32.63-10v45.24C202.47,185.79,188.25,187.81,174,184.81Z" }, null, -1);
+var E26 = [
+  b26
 ];
-var P25 = { key: 4 };
-var W25 = /* @__PURE__ */ createBaseVNode("path", { d: "M227.32,48.75A8,8,0,0,0,218.76,50c-28,24.22-51.72,12.48-79.21-1.13C111.07,34.76,78.78,18.79,42.76,50A8,8,0,0,0,40,56V224a8,8,0,0,0,16,0V179.77c26.79-21.16,49.87-9.75,76.45,3.41,28.49,14.09,60.77,30.06,96.79-1.13a8,8,0,0,0,2.76-6V56A8,8,0,0,0,227.32,48.75ZM216,71.6v40.65c-14,11.06-27,13.22-40,10.88V79.34A60.05,60.05,0,0,0,216,71.6Zm-56,3.76v43c-6.66-2.67-13.43-6-20.45-9.48-8.82-4.37-18-8.91-27.55-12.18v-43c6.66,2.66,13.43,6,20.45,9.48C141.27,67.55,150.46,72.09,160,75.36ZM96,48.91V92.69a60.06,60.06,0,0,0-40,7.75V59.78C70,48.72,83,46.57,96,48.91ZM86.58,152A60.06,60.06,0,0,0,56,160.43V119.78c14-11.06,27-13.22,40-10.88v43.8A65.61,65.61,0,0,0,86.58,152ZM112,156.67v-43c6.66,2.66,13.43,6,20.45,9.48,8.82,4.37,18,8.9,27.55,12.17v43c-6.66-2.67-13.43-6-20.45-9.48C130.73,164.47,121.54,159.94,112,156.67Zm64,26.45v-43.8a65.61,65.61,0,0,0,9.42.72A60.11,60.11,0,0,0,216,131.57v40.68C202,183.31,189,185.46,176,183.12Z" }, null, -1);
-var $25 = [
-  W25
+var P26 = { key: 4 };
+var W26 = /* @__PURE__ */ createBaseVNode("path", { d: "M227.32,48.75A8,8,0,0,0,218.76,50c-28,24.22-51.72,12.48-79.21-1.13C111.07,34.76,78.78,18.79,42.76,50A8,8,0,0,0,40,56V224a8,8,0,0,0,16,0V179.77c26.79-21.16,49.87-9.75,76.45,3.41,28.49,14.09,60.77,30.06,96.79-1.13a8,8,0,0,0,2.76-6V56A8,8,0,0,0,227.32,48.75ZM216,71.6v40.65c-14,11.06-27,13.22-40,10.88V79.34A60.05,60.05,0,0,0,216,71.6Zm-56,3.76v43c-6.66-2.67-13.43-6-20.45-9.48-8.82-4.37-18-8.91-27.55-12.18v-43c6.66,2.66,13.43,6,20.45,9.48C141.27,67.55,150.46,72.09,160,75.36ZM96,48.91V92.69a60.06,60.06,0,0,0-40,7.75V59.78C70,48.72,83,46.57,96,48.91ZM86.58,152A60.06,60.06,0,0,0,56,160.43V119.78c14-11.06,27-13.22,40-10.88v43.8A65.61,65.61,0,0,0,86.58,152ZM112,156.67v-43c6.66,2.66,13.43,6,20.45,9.48,8.82,4.37,18,8.9,27.55,12.17v43c-6.66-2.67-13.43-6-20.45-9.48C130.73,164.47,121.54,159.94,112,156.67Zm64,26.45v-43.8a65.61,65.61,0,0,0,9.42.72A60.11,60.11,0,0,0,216,131.57v40.68C202,183.31,189,185.46,176,183.12Z" }, null, -1);
+var $26 = [
+  W26
 ];
-var j25 = { key: 5 };
+var j26 = { key: 5 };
 var F9 = /* @__PURE__ */ createBaseVNode("path", { d: "M225.66,52.44a4,4,0,0,0-4.28.61c-30,26-56,13.08-83.61-.56-28.7-14.2-58.38-28.88-92.39.56a4,4,0,0,0-1.38,3V224a4,4,0,0,0,8,0V177.87c29.41-24.39,55.08-11.69,82.23,1.74,28.7,14.19,58.38,28.88,92.39-.56a4,4,0,0,0,1.38-3v-120A4,4,0,0,0,225.66,52.44ZM220,64.32V114.2c-16.91,14-32.58,15.79-48,12.2V74.67C187.24,77.9,203.09,76.37,220,64.32Zm-56,8.23v51.54c-8.7-3-17.39-7.25-26.23-11.62-9.76-4.84-19.64-9.72-29.77-12.91V48c8.7,3,17.39,7.25,26.23,11.62C144,64.49,153.87,69.37,164,72.55ZM100,45.73V97.44c-15.24-3.23-31.09-1.69-48,10.37V57.93C68.91,43.9,84.58,42.15,100,45.73ZM52,167.78V117.9c16.91-14,32.58-15.79,48-12.2v51.72A64.48,64.48,0,0,0,86.64,156C75.52,156,64,159.2,52,167.78Zm56-8.23V108c8.71,3,17.39,7.25,26.23,11.62,9.76,4.83,19.64,9.71,29.77,12.89v51.54c-8.71-3-17.39-7.25-26.23-11.62C128,167.61,118.13,162.73,108,159.55Zm64,26.82V134.65a64.48,64.48,0,0,0,13.36,1.47c11.12,0,22.61-3.27,34.64-11.85v49.9C203.09,188.19,187.42,190,172,186.37Z" }, null, -1);
-var q17 = [
+var q18 = [
   F9
 ];
 var D16 = {
@@ -32058,52 +32187,52 @@ var I8 = /* @__PURE__ */ defineComponent({
       transform: Z.value
     }, l.$attrs), [
       renderSlot(l.$slots, "default"),
-      o.value === "bold" ? (openBlock(), createElementBlock("g", p2, y14)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", f18, x25)) : o.value === "fill" ? (openBlock(), createElementBlock("g", S25, B25)) : o.value === "light" ? (openBlock(), createElementBlock("g", N25, E25)) : o.value === "regular" ? (openBlock(), createElementBlock("g", P25, $25)) : o.value === "thin" ? (openBlock(), createElementBlock("g", j25, q17)) : createCommentVNode("", true)
+      o.value === "bold" ? (openBlock(), createElementBlock("g", p2, y15)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", f19, x26)) : o.value === "fill" ? (openBlock(), createElementBlock("g", S26, B26)) : o.value === "light" ? (openBlock(), createElementBlock("g", N26, E26)) : o.value === "regular" ? (openBlock(), createElementBlock("g", P26, $26)) : o.value === "thin" ? (openBlock(), createElementBlock("g", j26, q18)) : createCommentVNode("", true)
     ], 16, u));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhFlask.vue.mjs
-var v6 = ["width", "height", "fill", "transform"];
-var H13 = { key: 0 };
-var y15 = /* @__PURE__ */ createBaseVNode("path", { d: "M225.15,197.71,164,95.81V44h4a12,12,0,0,0,0-24H88a12,12,0,0,0,0,24h4V95.81L30.85,197.71A20,20,0,0,0,48,228H208a20,20,0,0,0,17.15-30.29ZM140,44V99.14a12,12,0,0,0,1.71,6.17l35.13,58.54c-10.79.86-25.15-1.31-43.42-10.56-14-7.08-27.46-11.33-40.27-12.76l21.14-35.22A12,12,0,0,0,116,99.14V44ZM55.06,204,79,164.19c13-1.11,27.62,2.42,43.62,10.52,19.61,9.92,36.25,13.31,49.85,13.31A75.44,75.44,0,0,0,190.11,186l10.83,18Z" }, null, -1);
+var v7 = ["width", "height", "fill", "transform"];
+var H14 = { key: 0 };
+var y16 = /* @__PURE__ */ createBaseVNode("path", { d: "M225.15,197.71,164,95.81V44h4a12,12,0,0,0,0-24H88a12,12,0,0,0,0,24h4V95.81L30.85,197.71A20,20,0,0,0,48,228H208a20,20,0,0,0,17.15-30.29ZM140,44V99.14a12,12,0,0,0,1.71,6.17l35.13,58.54c-10.79.86-25.15-1.31-43.42-10.56-14-7.08-27.46-11.33-40.27-12.76l21.14-35.22A12,12,0,0,0,116,99.14V44ZM55.06,204,79,164.19c13-1.11,27.62,2.42,43.62,10.52,19.61,9.92,36.25,13.31,49.85,13.31A75.44,75.44,0,0,0,190.11,186l10.83,18Z" }, null, -1);
 var A17 = [
-  y15
+  y16
 ];
-var f19 = { key: 1 };
+var f20 = { key: 1 };
 var L16 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M208,216H48a8,8,0,0,1-6.86-12.12l30.48-50.8h0c13.23-2.48,32-1.41,56.37,10.92,32.25,16.33,54.75,12.91,67.5,7.65h0l19.34,32.23A8,8,0,0,1,208,216Z",
   opacity: "0.2"
 }, null, -1);
-var w26 = /* @__PURE__ */ createBaseVNode("path", { d: "M221.69,199.77,160,96.92V40h8a8,8,0,0,0,0-16H88a8,8,0,0,0,0,16h8V96.92L34.31,199.77A16,16,0,0,0,48,224H208a16,16,0,0,0,13.72-24.23ZM110.86,103.25A7.93,7.93,0,0,0,112,99.14V40h32V99.14a7.93,7.93,0,0,0,1.14,4.11L183.36,167c-12,2.37-29.07,1.37-51.75-10.11-15.91-8.05-31.05-12.32-45.22-12.81ZM48,208l28.54-47.58c14.25-1.73,30.31,1.85,47.82,10.72,19,9.61,35,12.88,48,12.88a69.89,69.89,0,0,0,19.55-2.7L208,208Z" }, null, -1);
-var k26 = [
+var w27 = /* @__PURE__ */ createBaseVNode("path", { d: "M221.69,199.77,160,96.92V40h8a8,8,0,0,0,0-16H88a8,8,0,0,0,0,16h8V96.92L34.31,199.77A16,16,0,0,0,48,224H208a16,16,0,0,0,13.72-24.23ZM110.86,103.25A7.93,7.93,0,0,0,112,99.14V40h32V99.14a7.93,7.93,0,0,0,1.14,4.11L183.36,167c-12,2.37-29.07,1.37-51.75-10.11-15.91-8.05-31.05-12.32-45.22-12.81ZM48,208l28.54-47.58c14.25-1.73,30.31,1.85,47.82,10.72,19,9.61,35,12.88,48,12.88a69.89,69.89,0,0,0,19.55-2.7L208,208Z" }, null, -1);
+var k27 = [
   L16,
-  w26
+  w27
 ];
-var C21 = { key: 2 };
-var x26 = /* @__PURE__ */ createBaseVNode("path", { d: "M221.69,199.77,160,96.92V40h8a8,8,0,0,0,0-16H88a8,8,0,0,0,0,16h8V96.92L34.31,199.77A16,16,0,0,0,48,224H208a16,16,0,0,0,13.72-24.23Zm-90.08-42.91c-15.91-8.05-31.05-12.32-45.22-12.81l24.47-40.8A7.93,7.93,0,0,0,112,99.14V40h32V99.14a7.93,7.93,0,0,0,1.14,4.11L183.36,167C171.4,169.34,154.29,168.34,131.61,156.86Z" }, null, -1);
-var S26 = [
-  x26
+var C22 = { key: 2 };
+var x27 = /* @__PURE__ */ createBaseVNode("path", { d: "M221.69,199.77,160,96.92V40h8a8,8,0,0,0,0-16H88a8,8,0,0,0,0,16h8V96.92L34.31,199.77A16,16,0,0,0,48,224H208a16,16,0,0,0,13.72-24.23Zm-90.08-42.91c-15.91-8.05-31.05-12.32-45.22-12.81l24.47-40.8A7.93,7.93,0,0,0,112,99.14V40h32V99.14a7.93,7.93,0,0,0,1.14,4.11L183.36,167C171.4,169.34,154.29,168.34,131.61,156.86Z" }, null, -1);
+var S27 = [
+  x27
 ];
-var z26 = { key: 3 };
-var B26 = /* @__PURE__ */ createBaseVNode("path", { d: "M220,200.8,158,97.48V38h10a6,6,0,0,0,0-12H88a6,6,0,0,0,0,12H98V97.48L36,200.8A14,14,0,0,0,48,222H208a14,14,0,0,0,12-21.2ZM109.15,102.23a6,6,0,0,0,.85-3.09V38h36V99.14a6,6,0,0,0,.85,3.09l39.65,66.08c-12.41,3.16-30.86,3-55.79-9.66-16.94-8.58-33-12.8-47.83-12.64ZM209.72,209a2,2,0,0,1-1.74,1H48a2,2,0,0,1-1.71-3l29-48.41c14.89-2.08,31.68,1.55,49.94,10.79C144,178.8,159.67,182,172.42,182A67.89,67.89,0,0,0,192.89,179l16.8,28A2,2,0,0,1,209.72,209Z" }, null, -1);
-var N26 = [
-  B26
+var z27 = { key: 3 };
+var B27 = /* @__PURE__ */ createBaseVNode("path", { d: "M220,200.8,158,97.48V38h10a6,6,0,0,0,0-12H88a6,6,0,0,0,0,12H98V97.48L36,200.8A14,14,0,0,0,48,222H208a14,14,0,0,0,12-21.2ZM109.15,102.23a6,6,0,0,0,.85-3.09V38h36V99.14a6,6,0,0,0,.85,3.09l39.65,66.08c-12.41,3.16-30.86,3-55.79-9.66-16.94-8.58-33-12.8-47.83-12.64ZM209.72,209a2,2,0,0,1-1.74,1H48a2,2,0,0,1-1.71-3l29-48.41c14.89-2.08,31.68,1.55,49.94,10.79C144,178.8,159.67,182,172.42,182A67.89,67.89,0,0,0,192.89,179l16.8,28A2,2,0,0,1,209.72,209Z" }, null, -1);
+var N27 = [
+  B27
 ];
-var b26 = { key: 4 };
-var E26 = /* @__PURE__ */ createBaseVNode("path", { d: "M221.69,199.77,160,96.92V40h8a8,8,0,0,0,0-16H88a8,8,0,0,0,0,16h8V96.92L34.31,199.77A16,16,0,0,0,48,224H208a16,16,0,0,0,13.72-24.23ZM110.86,103.25A7.93,7.93,0,0,0,112,99.14V40h32V99.14a7.93,7.93,0,0,0,1.14,4.11L183.36,167c-12,2.37-29.07,1.37-51.75-10.11-15.91-8.05-31.05-12.32-45.22-12.81ZM48,208l28.54-47.58c14.25-1.74,30.31,1.85,47.82,10.72,19,9.61,35,12.88,48,12.88a69.89,69.89,0,0,0,19.55-2.7L208,208Z" }, null, -1);
-var P26 = [
-  E26
+var b27 = { key: 4 };
+var E27 = /* @__PURE__ */ createBaseVNode("path", { d: "M221.69,199.77,160,96.92V40h8a8,8,0,0,0,0-16H88a8,8,0,0,0,0,16h8V96.92L34.31,199.77A16,16,0,0,0,48,224H208a16,16,0,0,0,13.72-24.23ZM110.86,103.25A7.93,7.93,0,0,0,112,99.14V40h32V99.14a7.93,7.93,0,0,0,1.14,4.11L183.36,167c-12,2.37-29.07,1.37-51.75-10.11-15.91-8.05-31.05-12.32-45.22-12.81ZM48,208l28.54-47.58c14.25-1.74,30.31,1.85,47.82,10.72,19,9.61,35,12.88,48,12.88a69.89,69.89,0,0,0,19.55-2.7L208,208Z" }, null, -1);
+var P27 = [
+  E27
 ];
-var W26 = { key: 5 };
-var $26 = /* @__PURE__ */ createBaseVNode("path", { d: "M218.27,201.83,156,98V36h12a4,4,0,0,0,0-8H88a4,4,0,0,0,0,8h12V98L37.73,201.83A12,12,0,0,0,48,220H208a12,12,0,0,0,10.29-18.17ZM107.43,101.2a4.07,4.07,0,0,0,.57-2.06V36h40V99.14a4.07,4.07,0,0,0,.57,2.06l41,68.33c-12.76,3.94-32.54,4.68-59.75-9.1-18-9.14-35-13.24-50.54-12.29ZM211.46,210a3.94,3.94,0,0,1-3.48,2H48a4,4,0,0,1-3.43-6.06l29.53-49.21c15.54-2.43,33.05,1.21,52.07,10.84C144.54,176.86,160,180,172.42,180a65,65,0,0,0,21.36-3.46l17.63,29.38A3.92,3.92,0,0,1,211.46,210Z" }, null, -1);
-var j26 = [
-  $26
+var W27 = { key: 5 };
+var $27 = /* @__PURE__ */ createBaseVNode("path", { d: "M218.27,201.83,156,98V36h12a4,4,0,0,0,0-8H88a4,4,0,0,0,0,8h12V98L37.73,201.83A12,12,0,0,0,48,220H208a12,12,0,0,0,10.29-18.17ZM107.43,101.2a4.07,4.07,0,0,0,.57-2.06V36h40V99.14a4.07,4.07,0,0,0,.57,2.06l41,68.33c-12.76,3.94-32.54,4.68-59.75-9.1-18-9.14-35-13.24-50.54-12.29ZM211.46,210a3.94,3.94,0,0,1-3.48,2H48a4,4,0,0,1-3.43-6.06l29.53-49.21c15.54-2.43,33.05,1.21,52.07,10.84C144.54,176.86,160,180,172.42,180a65,65,0,0,0,21.36-3.46l17.63,29.38A3.92,3.92,0,0,1,211.46,210Z" }, null, -1);
+var j27 = [
+  $27
 ];
 var F10 = {
   name: "PhFlask"
 };
-var G11 = /* @__PURE__ */ defineComponent({
+var G12 = /* @__PURE__ */ defineComponent({
   ...F10,
   props: {
     weight: {
@@ -32130,47 +32259,47 @@ var G11 = /* @__PURE__ */ defineComponent({
       transform: V.value
     }, h.$attrs), [
       renderSlot(h.$slots, "default"),
-      a.value === "bold" ? (openBlock(), createElementBlock("g", H13, A17)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", f19, k26)) : a.value === "fill" ? (openBlock(), createElementBlock("g", C21, S26)) : a.value === "light" ? (openBlock(), createElementBlock("g", z26, N26)) : a.value === "regular" ? (openBlock(), createElementBlock("g", b26, P26)) : a.value === "thin" ? (openBlock(), createElementBlock("g", W26, j26)) : createCommentVNode("", true)
-    ], 16, v6));
+      a.value === "bold" ? (openBlock(), createElementBlock("g", H14, A17)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", f20, k27)) : a.value === "fill" ? (openBlock(), createElementBlock("g", C22, S27)) : a.value === "light" ? (openBlock(), createElementBlock("g", z27, N27)) : a.value === "regular" ? (openBlock(), createElementBlock("g", b27, P27)) : a.value === "thin" ? (openBlock(), createElementBlock("g", W27, j27)) : createCommentVNode("", true)
+    ], 16, v7));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhHandPalm.vue.mjs
-var y16 = ["width", "height", "fill", "transform"];
-var f20 = { key: 0 };
+var y17 = ["width", "height", "fill", "transform"];
+var f21 = { key: 0 };
 var Z16 = /* @__PURE__ */ createBaseVNode("path", { d: "M188,84a32,32,0,0,0-8,1V60a32,32,0,0,0-43.21-30A32,32,0,0,0,76,44v1A32,32,0,0,0,36,76v76a92,92,0,0,0,184,0V116A32,32,0,0,0,188,84Zm8,68a68,68,0,0,1-136,0V76a8,8,0,0,1,16,0v40a12,12,0,0,0,24,0V44a8,8,0,0,1,16,0v64a12,12,0,0,0,24,0V60a8,8,0,0,1,16,0v65.4A52.09,52.09,0,0,0,116,176a12,12,0,0,0,24,0,28,28,0,0,1,28-28,12,12,0,0,0,12-12V116a8,8,0,0,1,16,0Z" }, null, -1);
-var w27 = [
+var w28 = [
   Z16
 ];
-var M24 = { key: 1 };
-var k27 = /* @__PURE__ */ createBaseVNode("path", {
+var M25 = { key: 1 };
+var k28 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M208,116v36a80,80,0,0,1-160,0V76a20,20,0,0,1,40,0V44a20,20,0,0,1,40,0V60a20,20,0,0,1,40,0v56a20,20,0,0,1,40,0Z",
   opacity: "0.2"
 }, null, -1);
-var x27 = /* @__PURE__ */ createBaseVNode("path", { d: "M188,88a27.75,27.75,0,0,0-12,2.71V60a28,28,0,0,0-41.36-24.6A28,28,0,0,0,80,44v6.71A27.75,27.75,0,0,0,68,48,28,28,0,0,0,40,76v76a88,88,0,0,0,176,0V116A28,28,0,0,0,188,88Zm12,64a72,72,0,0,1-144,0V76a12,12,0,0,1,24,0v44a8,8,0,0,0,16,0V44a12,12,0,0,1,24,0v68a8,8,0,0,0,16,0V60a12,12,0,0,1,24,0v68.67A48.08,48.08,0,0,0,120,176a8,8,0,0,0,16,0,32,32,0,0,1,32-32,8,8,0,0,0,8-8V116a12,12,0,0,1,24,0Z" }, null, -1);
-var S27 = [
-  k27,
-  x27
+var x28 = /* @__PURE__ */ createBaseVNode("path", { d: "M188,88a27.75,27.75,0,0,0-12,2.71V60a28,28,0,0,0-41.36-24.6A28,28,0,0,0,80,44v6.71A27.75,27.75,0,0,0,68,48,28,28,0,0,0,40,76v76a88,88,0,0,0,176,0V116A28,28,0,0,0,188,88Zm12,64a72,72,0,0,1-144,0V76a12,12,0,0,1,24,0v44a8,8,0,0,0,16,0V44a12,12,0,0,1,24,0v68a8,8,0,0,0,16,0V60a12,12,0,0,1,24,0v68.67A48.08,48.08,0,0,0,120,176a8,8,0,0,0,16,0,32,32,0,0,1,32-32,8,8,0,0,0,8-8V116a12,12,0,0,1,24,0Z" }, null, -1);
+var S28 = [
+  k28,
+  x28
 ];
-var z27 = { key: 2 };
-var C22 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,104v48a88,88,0,0,1-176,0V64a16,16,0,0,1,32,0v56a8,8,0,0,0,16,0V32a16,16,0,0,1,32,0v80a8,8,0,0,0,16,0V48a16,16,0,0,1,32,0v80.67A48.08,48.08,0,0,0,128,176a8,8,0,0,0,16,0,32,32,0,0,1,32-32,8,8,0,0,0,8-8V104a16,16,0,0,1,32,0Z" }, null, -1);
-var B27 = [
-  C22
+var z28 = { key: 2 };
+var C23 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,104v48a88,88,0,0,1-176,0V64a16,16,0,0,1,32,0v56a8,8,0,0,0,16,0V32a16,16,0,0,1,32,0v80a8,8,0,0,0,16,0V48a16,16,0,0,1,32,0v80.67A48.08,48.08,0,0,0,128,176a8,8,0,0,0,16,0,32,32,0,0,1,32-32,8,8,0,0,0,8-8V104a16,16,0,0,1,32,0Z" }, null, -1);
+var B28 = [
+  C23
 ];
-var N27 = { key: 3 };
-var P27 = /* @__PURE__ */ createBaseVNode("path", { d: "M188,90a25.8,25.8,0,0,0-14,4.11V60a26,26,0,0,0-40.59-21.51A26,26,0,0,0,82,44V54.11A26,26,0,0,0,42,76v76a86,86,0,0,0,172,0V116A26,26,0,0,0,188,90Zm14,62a74,74,0,0,1-148,0V76a14,14,0,0,1,28,0v44a6,6,0,0,0,12,0V44a14,14,0,0,1,28,0v68a6,6,0,0,0,12,0V60a14,14,0,0,1,28,0v70.39A46.07,46.07,0,0,0,122,176a6,6,0,0,0,12,0,34,34,0,0,1,34-34,6,6,0,0,0,6-6V116a14,14,0,0,1,28,0Z" }, null, -1);
-var b27 = [
-  P27
+var N28 = { key: 3 };
+var P28 = /* @__PURE__ */ createBaseVNode("path", { d: "M188,90a25.8,25.8,0,0,0-14,4.11V60a26,26,0,0,0-40.59-21.51A26,26,0,0,0,82,44V54.11A26,26,0,0,0,42,76v76a86,86,0,0,0,172,0V116A26,26,0,0,0,188,90Zm14,62a74,74,0,0,1-148,0V76a14,14,0,0,1,28,0v44a6,6,0,0,0,12,0V44a14,14,0,0,1,28,0v68a6,6,0,0,0,12,0V60a14,14,0,0,1,28,0v70.39A46.07,46.07,0,0,0,122,176a6,6,0,0,0,12,0,34,34,0,0,1,34-34,6,6,0,0,0,6-6V116a14,14,0,0,1,28,0Z" }, null, -1);
+var b28 = [
+  P28
 ];
-var E27 = { key: 4 };
-var W27 = /* @__PURE__ */ createBaseVNode("path", { d: "M188,88a27.75,27.75,0,0,0-12,2.71V60a28,28,0,0,0-41.36-24.6A28,28,0,0,0,80,44v6.71A27.75,27.75,0,0,0,68,48,28,28,0,0,0,40,76v76a88,88,0,0,0,176,0V116A28,28,0,0,0,188,88Zm12,64a72,72,0,0,1-144,0V76a12,12,0,0,1,24,0v44a8,8,0,0,0,16,0V44a12,12,0,0,1,24,0v68a8,8,0,0,0,16,0V60a12,12,0,0,1,24,0v68.67A48.08,48.08,0,0,0,120,176a8,8,0,0,0,16,0,32,32,0,0,1,32-32,8,8,0,0,0,8-8V116a12,12,0,0,1,24,0Z" }, null, -1);
-var $27 = [
-  W27
+var E28 = { key: 4 };
+var W28 = /* @__PURE__ */ createBaseVNode("path", { d: "M188,88a27.75,27.75,0,0,0-12,2.71V60a28,28,0,0,0-41.36-24.6A28,28,0,0,0,80,44v6.71A27.75,27.75,0,0,0,68,48,28,28,0,0,0,40,76v76a88,88,0,0,0,176,0V116A28,28,0,0,0,188,88Zm12,64a72,72,0,0,1-144,0V76a12,12,0,0,1,24,0v44a8,8,0,0,0,16,0V44a12,12,0,0,1,24,0v68a8,8,0,0,0,16,0V60a12,12,0,0,1,24,0v68.67A48.08,48.08,0,0,0,120,176a8,8,0,0,0,16,0,32,32,0,0,1,32-32,8,8,0,0,0,8-8V116a12,12,0,0,1,24,0Z" }, null, -1);
+var $28 = [
+  W28
 ];
-var j27 = { key: 5 };
-var H14 = /* @__PURE__ */ createBaseVNode("path", { d: "M188,92a23.9,23.9,0,0,0-16,6.13V60a24,24,0,0,0-40.07-17.8A24,24,0,0,0,84,44V58.13A24,24,0,0,0,44,76v76a84,84,0,0,0,168,0V116A24,24,0,0,0,188,92Zm16,60a76,76,0,0,1-152,0V76a16,16,0,0,1,32,0v44a4,4,0,0,0,8,0V44a16,16,0,0,1,32,0v68a4,4,0,0,0,8,0V60a16,16,0,0,1,32,0v72.18A44.06,44.06,0,0,0,124,176a4,4,0,0,0,8,0,36,36,0,0,1,36-36,4,4,0,0,0,4-4V116a16,16,0,0,1,32,0Z" }, null, -1);
-var q18 = [
-  H14
+var j28 = { key: 5 };
+var H15 = /* @__PURE__ */ createBaseVNode("path", { d: "M188,92a23.9,23.9,0,0,0-16,6.13V60a24,24,0,0,0-40.07-17.8A24,24,0,0,0,84,44V58.13A24,24,0,0,0,44,76v76a84,84,0,0,0,168,0V116A24,24,0,0,0,188,92Zm16,60a76,76,0,0,1-152,0V76a16,16,0,0,1,32,0v44a4,4,0,0,0,8,0V44a16,16,0,0,1,32,0v68a4,4,0,0,0,8,0V60a16,16,0,0,1,32,0v72.18A44.06,44.06,0,0,0,124,176a4,4,0,0,0,8,0,36,36,0,0,1,36-36,4,4,0,0,0,4-4V116a16,16,0,0,1,32,0Z" }, null, -1);
+var q19 = [
+  H15
 ];
 var D17 = {
   name: "PhHandPalm"
@@ -32202,52 +32331,52 @@ var I9 = /* @__PURE__ */ defineComponent({
       transform: u.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      o.value === "bold" ? (openBlock(), createElementBlock("g", f20, w27)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", M24, S27)) : o.value === "fill" ? (openBlock(), createElementBlock("g", z27, B27)) : o.value === "light" ? (openBlock(), createElementBlock("g", N27, b27)) : o.value === "regular" ? (openBlock(), createElementBlock("g", E27, $27)) : o.value === "thin" ? (openBlock(), createElementBlock("g", j27, q18)) : createCommentVNode("", true)
-    ], 16, y16));
+      o.value === "bold" ? (openBlock(), createElementBlock("g", f21, w28)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", M25, S28)) : o.value === "fill" ? (openBlock(), createElementBlock("g", z28, B28)) : o.value === "light" ? (openBlock(), createElementBlock("g", N28, b28)) : o.value === "regular" ? (openBlock(), createElementBlock("g", E28, $28)) : o.value === "thin" ? (openBlock(), createElementBlock("g", j28, q19)) : createCommentVNode("", true)
+    ], 16, y17));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhInfo.vue.mjs
-var y17 = ["width", "height", "fill", "transform"];
-var f21 = { key: 0 };
-var M25 = /* @__PURE__ */ createBaseVNode("path", { d: "M108,84a16,16,0,1,1,16,16A16,16,0,0,1,108,84Zm128,44A108,108,0,1,1,128,20,108.12,108.12,0,0,1,236,128Zm-24,0a84,84,0,1,0-84,84A84.09,84.09,0,0,0,212,128Zm-72,36.68V132a20,20,0,0,0-20-20,12,12,0,0,0-4,23.32V168a20,20,0,0,0,20,20,12,12,0,0,0,4-23.32Z" }, null, -1);
-var w28 = [
-  M25
+var y18 = ["width", "height", "fill", "transform"];
+var f22 = { key: 0 };
+var M26 = /* @__PURE__ */ createBaseVNode("path", { d: "M108,84a16,16,0,1,1,16,16A16,16,0,0,1,108,84Zm128,44A108,108,0,1,1,128,20,108.12,108.12,0,0,1,236,128Zm-24,0a84,84,0,1,0-84,84A84.09,84.09,0,0,0,212,128Zm-72,36.68V132a20,20,0,0,0-20-20,12,12,0,0,0-4,23.32V168a20,20,0,0,0,20,20,12,12,0,0,0,4-23.32Z" }, null, -1);
+var w29 = [
+  M26
 ];
 var V18 = { key: 1 };
-var k28 = /* @__PURE__ */ createBaseVNode("path", {
+var k29 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M224,128a96,96,0,1,1-96-96A96,96,0,0,1,224,128Z",
   opacity: "0.2"
 }, null, -1);
-var x28 = /* @__PURE__ */ createBaseVNode("path", { d: "M144,176a8,8,0,0,1-8,8,16,16,0,0,1-16-16V128a8,8,0,0,1,0-16,16,16,0,0,1,16,16v40A8,8,0,0,1,144,176Zm88-48A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128ZM124,96a12,12,0,1,0-12-12A12,12,0,0,0,124,96Z" }, null, -1);
-var S28 = [
-  k28,
-  x28
+var x29 = /* @__PURE__ */ createBaseVNode("path", { d: "M144,176a8,8,0,0,1-8,8,16,16,0,0,1-16-16V128a8,8,0,0,1,0-16,16,16,0,0,1,16,16v40A8,8,0,0,1,144,176Zm88-48A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128ZM124,96a12,12,0,1,0-12-12A12,12,0,0,0,124,96Z" }, null, -1);
+var S29 = [
+  k29,
+  x29
 ];
-var z28 = { key: 2 };
-var C23 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-4,48a12,12,0,1,1-12,12A12,12,0,0,1,124,72Zm12,112a16,16,0,0,1-16-16V128a8,8,0,0,1,0-16,16,16,0,0,1,16,16v40a8,8,0,0,1,0,16Z" }, null, -1);
-var B28 = [
-  C23
+var z29 = { key: 2 };
+var C24 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-4,48a12,12,0,1,1-12,12A12,12,0,0,1,124,72Zm12,112a16,16,0,0,1-16-16V128a8,8,0,0,1,0-16,16,16,0,0,1,16,16v40a8,8,0,0,1,0,16Z" }, null, -1);
+var B29 = [
+  C24
 ];
-var N28 = { key: 3 };
-var b28 = /* @__PURE__ */ createBaseVNode("path", { d: "M142,176a6,6,0,0,1-6,6,14,14,0,0,1-14-14V128a2,2,0,0,0-2-2,6,6,0,0,1,0-12,14,14,0,0,1,14,14v40a2,2,0,0,0,2,2A6,6,0,0,1,142,176ZM124,94a10,10,0,1,0-10-10A10,10,0,0,0,124,94Zm106,34A102,102,0,1,1,128,26,102.12,102.12,0,0,1,230,128Zm-12,0a90,90,0,1,0-90,90A90.1,90.1,0,0,0,218,128Z" }, null, -1);
-var E28 = [
-  b28
+var N29 = { key: 3 };
+var b29 = /* @__PURE__ */ createBaseVNode("path", { d: "M142,176a6,6,0,0,1-6,6,14,14,0,0,1-14-14V128a2,2,0,0,0-2-2,6,6,0,0,1,0-12,14,14,0,0,1,14,14v40a2,2,0,0,0,2,2A6,6,0,0,1,142,176ZM124,94a10,10,0,1,0-10-10A10,10,0,0,0,124,94Zm106,34A102,102,0,1,1,128,26,102.12,102.12,0,0,1,230,128Zm-12,0a90,90,0,1,0-90,90A90.1,90.1,0,0,0,218,128Z" }, null, -1);
+var E29 = [
+  b29
 ];
-var P28 = { key: 4 };
-var W28 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm16-40a8,8,0,0,1-8,8,16,16,0,0,1-16-16V128a8,8,0,0,1,0-16,16,16,0,0,1,16,16v40A8,8,0,0,1,144,176ZM112,84a12,12,0,1,1,12,12A12,12,0,0,1,112,84Z" }, null, -1);
-var $28 = [
-  W28
+var P29 = { key: 4 };
+var W29 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm16-40a8,8,0,0,1-8,8,16,16,0,0,1-16-16V128a8,8,0,0,1,0-16,16,16,0,0,1,16,16v40A8,8,0,0,1,144,176ZM112,84a12,12,0,1,1,12,12A12,12,0,0,1,112,84Z" }, null, -1);
+var $29 = [
+  W29
 ];
-var j28 = { key: 5 };
+var j29 = { key: 5 };
 var I10 = /* @__PURE__ */ createBaseVNode("path", { d: "M140,176a4,4,0,0,1-4,4,12,12,0,0,1-12-12V128a4,4,0,0,0-4-4,4,4,0,0,1,0-8,12,12,0,0,1,12,12v40a4,4,0,0,0,4,4A4,4,0,0,1,140,176ZM124,92a8,8,0,1,0-8-8A8,8,0,0,0,124,92Zm104,36A100,100,0,1,1,128,28,100.11,100.11,0,0,1,228,128Zm-8,0a92,92,0,1,0-92,92A92.1,92.1,0,0,0,220,128Z" }, null, -1);
-var q19 = [
+var q20 = [
   I10
 ];
 var D18 = {
   name: "PhInfo"
 };
-var H15 = /* @__PURE__ */ defineComponent({
+var H16 = /* @__PURE__ */ defineComponent({
   ...D18,
   props: {
     weight: {
@@ -32274,47 +32403,47 @@ var H15 = /* @__PURE__ */ defineComponent({
       transform: p.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", f21, w28)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", V18, S28)) : s.value === "fill" ? (openBlock(), createElementBlock("g", z28, B28)) : s.value === "light" ? (openBlock(), createElementBlock("g", N28, E28)) : s.value === "regular" ? (openBlock(), createElementBlock("g", P28, $28)) : s.value === "thin" ? (openBlock(), createElementBlock("g", j28, q19)) : createCommentVNode("", true)
-    ], 16, y17));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", f22, w29)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", V18, S29)) : s.value === "fill" ? (openBlock(), createElementBlock("g", z29, B29)) : s.value === "light" ? (openBlock(), createElementBlock("g", N29, E29)) : s.value === "regular" ? (openBlock(), createElementBlock("g", P29, $29)) : s.value === "thin" ? (openBlock(), createElementBlock("g", j29, q20)) : createCommentVNode("", true)
+    ], 16, y18));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhKey.vue.mjs
 var m = ["width", "height", "fill", "transform"];
-var M26 = { key: 0 };
+var M27 = { key: 0 };
 var Z17 = /* @__PURE__ */ createBaseVNode("path", { d: "M196,76a16,16,0,1,1-16-16A16,16,0,0,1,196,76Zm48,22.74A84.3,84.3,0,0,1,160.11,180H160a83.52,83.52,0,0,1-23.65-3.38l-7.86,7.87A12,12,0,0,1,120,188H108v12a12,12,0,0,1-12,12H84v12a12,12,0,0,1-12,12H40a20,20,0,0,1-20-20V187.31a19.86,19.86,0,0,1,5.86-14.14l53.52-53.52A84,84,0,1,1,244,98.74ZM202.43,53.57A59.48,59.48,0,0,0,158,36c-32,1-58,27.89-58,59.89a59.69,59.69,0,0,0,4.2,22.19,12,12,0,0,1-2.55,13.21L44,189v23H60V200a12,12,0,0,1,12-12H84V176a12,12,0,0,1,12-12h19l9.65-9.65a12,12,0,0,1,13.22-2.55A59.58,59.58,0,0,0,160,156h.08c32,0,58.87-26.07,59.89-58A59.55,59.55,0,0,0,202.43,53.57Z" }, null, -1);
-var y18 = [
+var y19 = [
   Z17
 ];
-var f22 = { key: 1 };
-var w29 = /* @__PURE__ */ createBaseVNode("path", {
+var f23 = { key: 1 };
+var w30 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M232,98.36C230.73,136.92,198.67,168,160.09,168a71.68,71.68,0,0,1-26.92-5.17h0L120,176H96v24H72v24H40a8,8,0,0,1-8-8V187.31a8,8,0,0,1,2.34-5.65l58.83-58.83h0A71.68,71.68,0,0,1,88,95.91c0-38.58,31.08-70.64,69.64-71.87A72,72,0,0,1,232,98.36Z",
   opacity: "0.2"
 }, null, -1);
 var L17 = /* @__PURE__ */ createBaseVNode("path", { d: "M216.57,39.43A80,80,0,0,0,83.91,120.78L28.69,176A15.86,15.86,0,0,0,24,187.31V216a16,16,0,0,0,16,16H72a8,8,0,0,0,8-8V208H96a8,8,0,0,0,8-8V184h16a8,8,0,0,0,5.66-2.34l9.56-9.57A79.73,79.73,0,0,0,160,176h.1A80,80,0,0,0,216.57,39.43ZM224,98.1c-1.09,34.09-29.75,61.86-63.89,61.9H160a63.7,63.7,0,0,1-23.65-4.51,8,8,0,0,0-8.84,1.68L116.69,168H96a8,8,0,0,0-8,8v16H72a8,8,0,0,0-8,8v16H40V187.31l58.83-58.82a8,8,0,0,0,1.68-8.84A63.72,63.72,0,0,1,96,95.92c0-34.14,27.81-62.8,61.9-63.89A64,64,0,0,1,224,98.1ZM192,76a12,12,0,1,1-12-12A12,12,0,0,1,192,76Z" }, null, -1);
-var k29 = [
-  w29,
+var k30 = [
+  w30,
   L17
 ];
-var C24 = { key: 2 };
-var x29 = /* @__PURE__ */ createBaseVNode("path", { d: "M216.57,39.43A80,80,0,0,0,83.91,120.78L28.69,176A15.86,15.86,0,0,0,24,187.31V216a16,16,0,0,0,16,16H72a8,8,0,0,0,8-8V208H96a8,8,0,0,0,8-8V184h16a8,8,0,0,0,5.66-2.34l9.56-9.57A79.73,79.73,0,0,0,160,176h.1A80,80,0,0,0,216.57,39.43ZM180,92a16,16,0,1,1,16-16A16,16,0,0,1,180,92Z" }, null, -1);
-var S29 = [
-  x29
+var C25 = { key: 2 };
+var x30 = /* @__PURE__ */ createBaseVNode("path", { d: "M216.57,39.43A80,80,0,0,0,83.91,120.78L28.69,176A15.86,15.86,0,0,0,24,187.31V216a16,16,0,0,0,16,16H72a8,8,0,0,0,8-8V208H96a8,8,0,0,0,8-8V184h16a8,8,0,0,0,5.66-2.34l9.56-9.57A79.73,79.73,0,0,0,160,176h.1A80,80,0,0,0,216.57,39.43ZM180,92a16,16,0,1,1,16-16A16,16,0,0,1,180,92Z" }, null, -1);
+var S30 = [
+  x30
 ];
-var z29 = { key: 3 };
-var B29 = /* @__PURE__ */ createBaseVNode("path", { d: "M215.15,40.85A78,78,0,0,0,86.2,121.31l-56.1,56.1a13.94,13.94,0,0,0-4.1,9.9V216a14,14,0,0,0,14,14H72a6,6,0,0,0,6-6V206H96a6,6,0,0,0,6-6V182h18a6,6,0,0,0,4.24-1.76l10.45-10.44A77.59,77.59,0,0,0,160,174h.1A78,78,0,0,0,215.15,40.85ZM226,98.16c-1.12,35.16-30.67,63.8-65.88,63.84a65.93,65.93,0,0,1-24.51-4.67,6,6,0,0,0-6.64,1.26L117.51,170H96a6,6,0,0,0-6,6v18H72a6,6,0,0,0-6,6v18H40a2,2,0,0,1-2-2V187.31a2,2,0,0,1,.58-1.41l58.83-58.83a6,6,0,0,0,1.26-6.64A65.61,65.61,0,0,1,94,95.92C94,60.71,122.68,31.16,157.83,30A66,66,0,0,1,226,98.16ZM190,76a10,10,0,1,1-10-10A10,10,0,0,1,190,76Z" }, null, -1);
-var N29 = [
-  B29
+var z30 = { key: 3 };
+var B30 = /* @__PURE__ */ createBaseVNode("path", { d: "M215.15,40.85A78,78,0,0,0,86.2,121.31l-56.1,56.1a13.94,13.94,0,0,0-4.1,9.9V216a14,14,0,0,0,14,14H72a6,6,0,0,0,6-6V206H96a6,6,0,0,0,6-6V182h18a6,6,0,0,0,4.24-1.76l10.45-10.44A77.59,77.59,0,0,0,160,174h.1A78,78,0,0,0,215.15,40.85ZM226,98.16c-1.12,35.16-30.67,63.8-65.88,63.84a65.93,65.93,0,0,1-24.51-4.67,6,6,0,0,0-6.64,1.26L117.51,170H96a6,6,0,0,0-6,6v18H72a6,6,0,0,0-6,6v18H40a2,2,0,0,1-2-2V187.31a2,2,0,0,1,.58-1.41l58.83-58.83a6,6,0,0,0,1.26-6.64A65.61,65.61,0,0,1,94,95.92C94,60.71,122.68,31.16,157.83,30A66,66,0,0,1,226,98.16ZM190,76a10,10,0,1,1-10-10A10,10,0,0,1,190,76Z" }, null, -1);
+var N30 = [
+  B30
 ];
-var b29 = { key: 4 };
-var E29 = /* @__PURE__ */ createBaseVNode("path", { d: "M216.57,39.43A80,80,0,0,0,83.91,120.78L28.69,176A15.86,15.86,0,0,0,24,187.31V216a16,16,0,0,0,16,16H72a8,8,0,0,0,8-8V208H96a8,8,0,0,0,8-8V184h16a8,8,0,0,0,5.66-2.34l9.56-9.57A79.73,79.73,0,0,0,160,176h.1A80,80,0,0,0,216.57,39.43ZM224,98.1c-1.09,34.09-29.75,61.86-63.89,61.9H160a63.7,63.7,0,0,1-23.65-4.51,8,8,0,0,0-8.84,1.68L116.69,168H96a8,8,0,0,0-8,8v16H72a8,8,0,0,0-8,8v16H40V187.31l58.83-58.82a8,8,0,0,0,1.68-8.84A63.72,63.72,0,0,1,96,95.92c0-34.14,27.81-62.8,61.9-63.89A64,64,0,0,1,224,98.1ZM192,76a12,12,0,1,1-12-12A12,12,0,0,1,192,76Z" }, null, -1);
-var P29 = [
-  E29
+var b30 = { key: 4 };
+var E30 = /* @__PURE__ */ createBaseVNode("path", { d: "M216.57,39.43A80,80,0,0,0,83.91,120.78L28.69,176A15.86,15.86,0,0,0,24,187.31V216a16,16,0,0,0,16,16H72a8,8,0,0,0,8-8V208H96a8,8,0,0,0,8-8V184h16a8,8,0,0,0,5.66-2.34l9.56-9.57A79.73,79.73,0,0,0,160,176h.1A80,80,0,0,0,216.57,39.43ZM224,98.1c-1.09,34.09-29.75,61.86-63.89,61.9H160a63.7,63.7,0,0,1-23.65-4.51,8,8,0,0,0-8.84,1.68L116.69,168H96a8,8,0,0,0-8,8v16H72a8,8,0,0,0-8,8v16H40V187.31l58.83-58.82a8,8,0,0,0,1.68-8.84A63.72,63.72,0,0,1,96,95.92c0-34.14,27.81-62.8,61.9-63.89A64,64,0,0,1,224,98.1ZM192,76a12,12,0,1,1-12-12A12,12,0,0,1,192,76Z" }, null, -1);
+var P30 = [
+  E30
 ];
-var W29 = { key: 5 };
-var $29 = /* @__PURE__ */ createBaseVNode("path", { d: "M213.74,42.26A76,76,0,0,0,88.51,121.84l-57,57A11.93,11.93,0,0,0,28,187.31V216a12,12,0,0,0,12,12H72a4,4,0,0,0,4-4V204H96a4,4,0,0,0,4-4V180h20a4,4,0,0,0,2.83-1.17l11.33-11.34A75.72,75.72,0,0,0,160,172h.1A76,76,0,0,0,213.74,42.26Zm14.22,56c-1.15,36.22-31.6,65.72-67.87,65.77H160a67.52,67.52,0,0,1-25.21-4.83,4,4,0,0,0-4.45.83l-12,12H96a4,4,0,0,0-4,4v20H72a4,4,0,0,0-4,4v20H40a4,4,0,0,1-4-4V187.31a4.06,4.06,0,0,1,1.17-2.83L96,125.66a4,4,0,0,0,.83-4.45A67.51,67.51,0,0,1,92,95.91C92,59.64,121.55,29.19,157.77,28A68,68,0,0,1,228,98.23ZM188,76a8,8,0,1,1-8-8A8,8,0,0,1,188,76Z" }, null, -1);
-var j29 = [
-  $29
+var W30 = { key: 5 };
+var $30 = /* @__PURE__ */ createBaseVNode("path", { d: "M213.74,42.26A76,76,0,0,0,88.51,121.84l-57,57A11.93,11.93,0,0,0,28,187.31V216a12,12,0,0,0,12,12H72a4,4,0,0,0,4-4V204H96a4,4,0,0,0,4-4V180h20a4,4,0,0,0,2.83-1.17l11.33-11.34A75.72,75.72,0,0,0,160,172h.1A76,76,0,0,0,213.74,42.26Zm14.22,56c-1.15,36.22-31.6,65.72-67.87,65.77H160a67.52,67.52,0,0,1-25.21-4.83,4,4,0,0,0-4.45.83l-12,12H96a4,4,0,0,0-4,4v20H72a4,4,0,0,0-4,4v20H40a4,4,0,0,1-4-4V187.31a4.06,4.06,0,0,1,1.17-2.83L96,125.66a4,4,0,0,0,.83-4.45A67.51,67.51,0,0,1,92,95.91C92,59.64,121.55,29.19,157.77,28A68,68,0,0,1,228,98.23ZM188,76a8,8,0,1,1-8-8A8,8,0,0,1,188,76Z" }, null, -1);
+var j30 = [
+  $30
 ];
 var K = {
   name: "PhKey"
@@ -32346,52 +32475,52 @@ var F11 = /* @__PURE__ */ defineComponent({
       transform: u.value
     }, c.$attrs), [
       renderSlot(c.$slots, "default"),
-      a.value === "bold" ? (openBlock(), createElementBlock("g", M26, y18)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", f22, k29)) : a.value === "fill" ? (openBlock(), createElementBlock("g", C24, S29)) : a.value === "light" ? (openBlock(), createElementBlock("g", z29, N29)) : a.value === "regular" ? (openBlock(), createElementBlock("g", b29, P29)) : a.value === "thin" ? (openBlock(), createElementBlock("g", W29, j29)) : createCommentVNode("", true)
+      a.value === "bold" ? (openBlock(), createElementBlock("g", M27, y19)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", f23, k30)) : a.value === "fill" ? (openBlock(), createElementBlock("g", C25, S30)) : a.value === "light" ? (openBlock(), createElementBlock("g", z30, N30)) : a.value === "regular" ? (openBlock(), createElementBlock("g", b30, P30)) : a.value === "thin" ? (openBlock(), createElementBlock("g", W30, j30)) : createCommentVNode("", true)
     ], 16, m));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhLightning.vue.mjs
-var M27 = ["width", "height", "fill", "transform"];
-var f23 = { key: 0 };
+var M28 = ["width", "height", "fill", "transform"];
+var f24 = { key: 0 };
 var Z18 = /* @__PURE__ */ createBaseVNode("path", { d: "M219.71,117.38a12,12,0,0,0-7.25-8.52L161.28,88.39l10.59-70.61a12,12,0,0,0-20.64-10l-112,120a12,12,0,0,0,4.31,19.33l51.18,20.47L84.13,238.22a12,12,0,0,0,20.64,10l112-120A12,12,0,0,0,219.71,117.38ZM113.6,203.55l6.27-41.77a12,12,0,0,0-7.41-12.92L68.74,131.37,142.4,52.45l-6.27,41.77a12,12,0,0,0,7.41,12.92l43.72,17.49Z" }, null, -1);
-var w30 = [
+var w31 = [
   Z18
 ];
-var k30 = { key: 1 };
-var x30 = /* @__PURE__ */ createBaseVNode("path", {
+var k31 = { key: 1 };
+var x31 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M96,240l16-80L48,136,160,16,144,96l64,24Z",
   opacity: "0.2"
 }, null, -1);
 var A18 = /* @__PURE__ */ createBaseVNode("path", { d: "M215.79,118.17a8,8,0,0,0-5-5.66L153.18,90.9l14.66-73.33a8,8,0,0,0-13.69-7l-112,120a8,8,0,0,0,3,13l57.63,21.61L88.16,238.43a8,8,0,0,0,13.69,7l112-120A8,8,0,0,0,215.79,118.17ZM109.37,214l10.47-52.38a8,8,0,0,0-5-9.06L62,132.71l84.62-90.66L136.16,94.43a8,8,0,0,0,5,9.06l52.8,19.8Z" }, null, -1);
-var S30 = [
-  x30,
+var S31 = [
+  x31,
   A18
 ];
-var z30 = { key: 2 };
-var C25 = /* @__PURE__ */ createBaseVNode("path", { d: "M213.85,125.46l-112,120a8,8,0,0,1-13.69-7l14.66-73.33L45.19,143.49a8,8,0,0,1-3-13l112-120a8,8,0,0,1,13.69,7L153.18,90.9l57.63,21.61a8,8,0,0,1,3,12.95Z" }, null, -1);
-var B30 = [
-  C25
+var z31 = { key: 2 };
+var C26 = /* @__PURE__ */ createBaseVNode("path", { d: "M213.85,125.46l-112,120a8,8,0,0,1-13.69-7l14.66-73.33L45.19,143.49a8,8,0,0,1-3-13l112-120a8,8,0,0,1,13.69,7L153.18,90.9l57.63,21.61a8,8,0,0,1,3,12.95Z" }, null, -1);
+var B31 = [
+  C26
 ];
-var N30 = { key: 3 };
-var b30 = /* @__PURE__ */ createBaseVNode("path", { d: "M213.84,118.63a6,6,0,0,0-3.73-4.25L150.88,92.17l15-75a6,6,0,0,0-10.27-5.27l-112,120a6,6,0,0,0,2.28,9.71l59.23,22.21-15,75a6,6,0,0,0,3.14,6.52A6.07,6.07,0,0,0,96,246a6,6,0,0,0,4.39-1.91l112-120A6,6,0,0,0,213.84,118.63ZM106,220.46l11.85-59.28a6,6,0,0,0-3.77-6.8l-55.6-20.85,91.46-98L138.12,94.82a6,6,0,0,0,3.77,6.8l55.6,20.85Z" }, null, -1);
-var E30 = [
-  b30
+var N31 = { key: 3 };
+var b31 = /* @__PURE__ */ createBaseVNode("path", { d: "M213.84,118.63a6,6,0,0,0-3.73-4.25L150.88,92.17l15-75a6,6,0,0,0-10.27-5.27l-112,120a6,6,0,0,0,2.28,9.71l59.23,22.21-15,75a6,6,0,0,0,3.14,6.52A6.07,6.07,0,0,0,96,246a6,6,0,0,0,4.39-1.91l112-120A6,6,0,0,0,213.84,118.63ZM106,220.46l11.85-59.28a6,6,0,0,0-3.77-6.8l-55.6-20.85,91.46-98L138.12,94.82a6,6,0,0,0,3.77,6.8l55.6,20.85Z" }, null, -1);
+var E31 = [
+  b31
 ];
-var P30 = { key: 4 };
+var P31 = { key: 4 };
 var V19 = /* @__PURE__ */ createBaseVNode("path", { d: "M215.79,118.17a8,8,0,0,0-5-5.66L153.18,90.9l14.66-73.33a8,8,0,0,0-13.69-7l-112,120a8,8,0,0,0,3,13l57.63,21.61L88.16,238.43a8,8,0,0,0,13.69,7l112-120A8,8,0,0,0,215.79,118.17ZM109.37,214l10.47-52.38a8,8,0,0,0-5-9.06L62,132.71l84.62-90.66L136.16,94.43a8,8,0,0,0,5,9.06l52.8,19.8Z" }, null, -1);
-var W30 = [
+var W31 = [
   V19
 ];
-var $30 = { key: 5 };
-var j30 = /* @__PURE__ */ createBaseVNode("path", { d: "M211.89,119.09a4,4,0,0,0-2.49-2.84l-60.81-22.8,15.33-76.67a4,4,0,0,0-6.84-3.51l-112,120a4,4,0,0,0-1,3.64,4,4,0,0,0,2.49,2.84l60.81,22.8L92.08,239.22a4,4,0,0,0,6.84,3.51l112-120A4,4,0,0,0,211.89,119.09ZM102.68,227l13.24-66.2a4,4,0,0,0-2.52-4.53L55,134.36,153.32,29l-13.24,66.2a4,4,0,0,0,2.52,4.53L201,121.64Z" }, null, -1);
-var q20 = [
-  j30
+var $31 = { key: 5 };
+var j31 = /* @__PURE__ */ createBaseVNode("path", { d: "M211.89,119.09a4,4,0,0,0-2.49-2.84l-60.81-22.8,15.33-76.67a4,4,0,0,0-6.84-3.51l-112,120a4,4,0,0,0-1,3.64,4,4,0,0,0,2.49,2.84l60.81,22.8L92.08,239.22a4,4,0,0,0,6.84,3.51l112-120A4,4,0,0,0,211.89,119.09ZM102.68,227l13.24-66.2a4,4,0,0,0-2.52-4.53L55,134.36,153.32,29l-13.24,66.2a4,4,0,0,0,2.52,4.53L201,121.64Z" }, null, -1);
+var q21 = [
+  j31
 ];
 var D19 = {
   name: "PhLightning"
 };
-var H16 = /* @__PURE__ */ defineComponent({
+var H17 = /* @__PURE__ */ defineComponent({
   ...D19,
   props: {
     weight: {
@@ -32418,53 +32547,53 @@ var H16 = /* @__PURE__ */ defineComponent({
       transform: g.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      l.value === "bold" ? (openBlock(), createElementBlock("g", f23, w30)) : l.value === "duotone" ? (openBlock(), createElementBlock("g", k30, S30)) : l.value === "fill" ? (openBlock(), createElementBlock("g", z30, B30)) : l.value === "light" ? (openBlock(), createElementBlock("g", N30, E30)) : l.value === "regular" ? (openBlock(), createElementBlock("g", P30, W30)) : l.value === "thin" ? (openBlock(), createElementBlock("g", $30, q20)) : createCommentVNode("", true)
-    ], 16, M27));
+      l.value === "bold" ? (openBlock(), createElementBlock("g", f24, w31)) : l.value === "duotone" ? (openBlock(), createElementBlock("g", k31, S31)) : l.value === "fill" ? (openBlock(), createElementBlock("g", z31, B31)) : l.value === "light" ? (openBlock(), createElementBlock("g", N31, E31)) : l.value === "regular" ? (openBlock(), createElementBlock("g", P31, W31)) : l.value === "thin" ? (openBlock(), createElementBlock("g", $31, q21)) : createCommentVNode("", true)
+    ], 16, M28));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhLink.vue.mjs
-var y19 = ["width", "height", "fill", "transform"];
-var M28 = { key: 0 };
+var y20 = ["width", "height", "fill", "transform"];
+var M29 = { key: 0 };
 var Z19 = /* @__PURE__ */ createBaseVNode("path", { d: "M117.18,188.74a12,12,0,0,1,0,17l-5.12,5.12A58.26,58.26,0,0,1,70.6,228h0A58.62,58.62,0,0,1,29.14,127.92L63.89,93.17a58.64,58.64,0,0,1,98.56,28.11,12,12,0,1,1-23.37,5.44,34.65,34.65,0,0,0-58.22-16.58L46.11,144.89A34.62,34.62,0,0,0,70.57,204h0a34.41,34.41,0,0,0,24.49-10.14l5.11-5.12A12,12,0,0,1,117.18,188.74ZM226.83,45.17a58.65,58.65,0,0,0-82.93,0l-5.11,5.11a12,12,0,0,0,17,17l5.12-5.12a34.63,34.63,0,1,1,49,49L175.1,145.86A34.39,34.39,0,0,1,150.61,156h0a34.63,34.63,0,0,1-33.69-26.72,12,12,0,0,0-23.38,5.44A58.64,58.64,0,0,0,150.56,180h.05a58.28,58.28,0,0,0,41.47-17.17l34.75-34.75a58.62,58.62,0,0,0,0-82.91Z" }, null, -1);
-var f24 = [
+var f25 = [
   Z19
 ];
-var w31 = { key: 1 };
-var k31 = /* @__PURE__ */ createBaseVNode("path", {
+var w32 = { key: 1 };
+var k32 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M218.34,119.6,183.6,154.34a46.58,46.58,0,0,1-44.31,12.26c-.31.34-.62.67-.95,1L103.6,202.34A46.63,46.63,0,1,1,37.66,136.4L72.4,101.66A46.6,46.6,0,0,1,116.71,89.4c.31-.34.62-.67,1-1L152.4,53.66a46.63,46.63,0,0,1,65.94,65.94Z",
   opacity: "0.2"
 }, null, -1);
-var x31 = /* @__PURE__ */ createBaseVNode("path", { d: "M240,88.23a54.43,54.43,0,0,1-16,37L189.25,160a54.27,54.27,0,0,1-38.63,16h-.05A54.63,54.63,0,0,1,96,119.84a8,8,0,0,1,16,.45A38.62,38.62,0,0,0,150.58,160h0a38.39,38.39,0,0,0,27.31-11.31l34.75-34.75a38.63,38.63,0,0,0-54.63-54.63l-11,11A8,8,0,0,1,135.7,59l11-11A54.65,54.65,0,0,1,224,48,54.86,54.86,0,0,1,240,88.23ZM109,185.66l-11,11A38.41,38.41,0,0,1,70.6,208h0a38.63,38.63,0,0,1-27.29-65.94L78,107.31A38.63,38.63,0,0,1,144,135.71a8,8,0,0,0,7.78,8.22H152a8,8,0,0,0,8-7.78A54.86,54.86,0,0,0,144,96a54.65,54.65,0,0,0-77.27,0L32,130.75A54.62,54.62,0,0,0,70.56,224h0a54.28,54.28,0,0,0,38.64-16l11-11A8,8,0,0,0,109,185.66Z" }, null, -1);
-var S31 = [
-  k31,
-  x31
+var x32 = /* @__PURE__ */ createBaseVNode("path", { d: "M240,88.23a54.43,54.43,0,0,1-16,37L189.25,160a54.27,54.27,0,0,1-38.63,16h-.05A54.63,54.63,0,0,1,96,119.84a8,8,0,0,1,16,.45A38.62,38.62,0,0,0,150.58,160h0a38.39,38.39,0,0,0,27.31-11.31l34.75-34.75a38.63,38.63,0,0,0-54.63-54.63l-11,11A8,8,0,0,1,135.7,59l11-11A54.65,54.65,0,0,1,224,48,54.86,54.86,0,0,1,240,88.23ZM109,185.66l-11,11A38.41,38.41,0,0,1,70.6,208h0a38.63,38.63,0,0,1-27.29-65.94L78,107.31A38.63,38.63,0,0,1,144,135.71a8,8,0,0,0,7.78,8.22H152a8,8,0,0,0,8-7.78A54.86,54.86,0,0,0,144,96a54.65,54.65,0,0,0-77.27,0L32,130.75A54.62,54.62,0,0,0,70.56,224h0a54.28,54.28,0,0,0,38.64-16l11-11A8,8,0,0,0,109,185.66Z" }, null, -1);
+var S32 = [
+  k32,
+  x32
 ];
-var z31 = { key: 2 };
-var C26 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM115.7,192.49a43.31,43.31,0,0,1-55-66.43l25.37-25.37a43.35,43.35,0,0,1,61.25,0,42.9,42.9,0,0,1,9.95,15.43,8,8,0,1,1-15,5.6A27.33,27.33,0,0,0,97.37,112L72,137.37a27.32,27.32,0,0,0,34.68,41.91,8,8,0,1,1,9,13.21Zm79.61-62.55-25.37,25.37A43,43,0,0,1,139.32,168h0a43.35,43.35,0,0,1-40.53-28.12,8,8,0,1,1,15-5.6A27.35,27.35,0,0,0,139.28,152h0a27.14,27.14,0,0,0,19.32-8L184,118.63a27.32,27.32,0,0,0-34.68-41.91,8,8,0,1,1-9-13.21,43.32,43.32,0,0,1,55,66.43Z" }, null, -1);
-var B31 = [
-  C26
+var z32 = { key: 2 };
+var C27 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM115.7,192.49a43.31,43.31,0,0,1-55-66.43l25.37-25.37a43.35,43.35,0,0,1,61.25,0,42.9,42.9,0,0,1,9.95,15.43,8,8,0,1,1-15,5.6A27.33,27.33,0,0,0,97.37,112L72,137.37a27.32,27.32,0,0,0,34.68,41.91,8,8,0,1,1,9,13.21Zm79.61-62.55-25.37,25.37A43,43,0,0,1,139.32,168h0a43.35,43.35,0,0,1-40.53-28.12,8,8,0,1,1,15-5.6A27.35,27.35,0,0,0,139.28,152h0a27.14,27.14,0,0,0,19.32-8L184,118.63a27.32,27.32,0,0,0-34.68-41.91,8,8,0,1,1-9-13.21,43.32,43.32,0,0,1,55,66.43Z" }, null, -1);
+var B32 = [
+  C27
 ];
-var H17 = { key: 3 };
+var H18 = { key: 3 };
 var V20 = /* @__PURE__ */ createBaseVNode("path", { d: "M238,88.18a52.42,52.42,0,0,1-15.4,35.66l-34.75,34.75A52.28,52.28,0,0,1,150.62,174h-.05A52.63,52.63,0,0,1,98,119.9a6,6,0,0,1,6-5.84h.17a6,6,0,0,1,5.83,6.16A40.62,40.62,0,0,0,150.58,162h0a40.4,40.4,0,0,0,28.73-11.9l34.75-34.74A40.63,40.63,0,0,0,156.63,57.9l-11,11a6,6,0,0,1-8.49-8.49l11-11a52.62,52.62,0,0,1,74.43,0A52.83,52.83,0,0,1,238,88.18Zm-127.62,98.9-11,11A40.36,40.36,0,0,1,70.6,210h0a40.63,40.63,0,0,1-28.7-69.36L76.62,105.9A40.63,40.63,0,0,1,146,135.77a6,6,0,0,0,5.83,6.16H152a6,6,0,0,0,6-5.84A52.63,52.63,0,0,0,68.14,97.42L33.38,132.16A52.63,52.63,0,0,0,70.56,222h0a52.26,52.26,0,0,0,37.22-15.42l11-11a6,6,0,1,0-8.49-8.48Z" }, null, -1);
-var N31 = [
+var N32 = [
   V20
 ];
-var b31 = { key: 4 };
-var E31 = /* @__PURE__ */ createBaseVNode("path", { d: "M240,88.23a54.43,54.43,0,0,1-16,37L189.25,160a54.27,54.27,0,0,1-38.63,16h-.05A54.63,54.63,0,0,1,96,119.84a8,8,0,0,1,16,.45A38.62,38.62,0,0,0,150.58,160h0a38.39,38.39,0,0,0,27.31-11.31l34.75-34.75a38.63,38.63,0,0,0-54.63-54.63l-11,11A8,8,0,0,1,135.7,59l11-11A54.65,54.65,0,0,1,224,48,54.86,54.86,0,0,1,240,88.23ZM109,185.66l-11,11A38.41,38.41,0,0,1,70.6,208h0a38.63,38.63,0,0,1-27.29-65.94L78,107.31A38.63,38.63,0,0,1,144,135.71a8,8,0,0,0,16,.45A54.86,54.86,0,0,0,144,96a54.65,54.65,0,0,0-77.27,0L32,130.75A54.62,54.62,0,0,0,70.56,224h0a54.28,54.28,0,0,0,38.64-16l11-11A8,8,0,0,0,109,185.66Z" }, null, -1);
-var P31 = [
-  E31
+var b32 = { key: 4 };
+var E32 = /* @__PURE__ */ createBaseVNode("path", { d: "M240,88.23a54.43,54.43,0,0,1-16,37L189.25,160a54.27,54.27,0,0,1-38.63,16h-.05A54.63,54.63,0,0,1,96,119.84a8,8,0,0,1,16,.45A38.62,38.62,0,0,0,150.58,160h0a38.39,38.39,0,0,0,27.31-11.31l34.75-34.75a38.63,38.63,0,0,0-54.63-54.63l-11,11A8,8,0,0,1,135.7,59l11-11A54.65,54.65,0,0,1,224,48,54.86,54.86,0,0,1,240,88.23ZM109,185.66l-11,11A38.41,38.41,0,0,1,70.6,208h0a38.63,38.63,0,0,1-27.29-65.94L78,107.31A38.63,38.63,0,0,1,144,135.71a8,8,0,0,0,16,.45A54.86,54.86,0,0,0,144,96a54.65,54.65,0,0,0-77.27,0L32,130.75A54.62,54.62,0,0,0,70.56,224h0a54.28,54.28,0,0,0,38.64-16l11-11A8,8,0,0,0,109,185.66Z" }, null, -1);
+var P32 = [
+  E32
 ];
-var W31 = { key: 5 };
-var $31 = /* @__PURE__ */ createBaseVNode("path", { d: "M236,88.12a50.44,50.44,0,0,1-14.81,34.31l-34.75,34.74A50.33,50.33,0,0,1,150.62,172h-.05A50.63,50.63,0,0,1,100,120a4,4,0,0,1,4-3.89h.11a4,4,0,0,1,3.89,4.11A42.64,42.64,0,0,0,150.58,164h0a42.32,42.32,0,0,0,30.14-12.49l34.75-34.74a42.63,42.63,0,1,0-60.29-60.28l-11,11a4,4,0,0,1-5.66-5.65l11-11A50.64,50.64,0,0,1,236,88.12ZM111.78,188.49l-11,11A42.33,42.33,0,0,1,70.6,212h0a42.63,42.63,0,0,1-30.11-72.77l34.75-34.74A42.63,42.63,0,0,1,148,135.82a4,4,0,0,0,8,.23A50.64,50.64,0,0,0,69.55,98.83L34.8,133.57A50.63,50.63,0,0,0,70.56,220h0a50.33,50.33,0,0,0,35.81-14.83l11-11a4,4,0,1,0-5.65-5.66Z" }, null, -1);
-var j31 = [
-  $31
+var W32 = { key: 5 };
+var $32 = /* @__PURE__ */ createBaseVNode("path", { d: "M236,88.12a50.44,50.44,0,0,1-14.81,34.31l-34.75,34.74A50.33,50.33,0,0,1,150.62,172h-.05A50.63,50.63,0,0,1,100,120a4,4,0,0,1,4-3.89h.11a4,4,0,0,1,3.89,4.11A42.64,42.64,0,0,0,150.58,164h0a42.32,42.32,0,0,0,30.14-12.49l34.75-34.74a42.63,42.63,0,1,0-60.29-60.28l-11,11a4,4,0,0,1-5.66-5.65l11-11A50.64,50.64,0,0,1,236,88.12ZM111.78,188.49l-11,11A42.33,42.33,0,0,1,70.6,212h0a42.63,42.63,0,0,1-30.11-72.77l34.75-34.74A42.63,42.63,0,0,1,148,135.82a4,4,0,0,0,8,.23A50.64,50.64,0,0,0,69.55,98.83L34.8,133.57A50.63,50.63,0,0,0,70.56,220h0a50.33,50.33,0,0,0,35.81-14.83l11-11a4,4,0,1,0-5.65-5.66Z" }, null, -1);
+var j32 = [
+  $32
 ];
-var q21 = {
+var q22 = {
   name: "PhLink"
 };
-var G12 = /* @__PURE__ */ defineComponent({
-  ...q21,
+var G13 = /* @__PURE__ */ defineComponent({
+  ...q22,
   props: {
     weight: {
       type: String
@@ -32490,53 +32619,53 @@ var G12 = /* @__PURE__ */ defineComponent({
       transform: p.value
     }, i.$attrs), [
       renderSlot(i.$slots, "default"),
-      a.value === "bold" ? (openBlock(), createElementBlock("g", M28, f24)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", w31, S31)) : a.value === "fill" ? (openBlock(), createElementBlock("g", z31, B31)) : a.value === "light" ? (openBlock(), createElementBlock("g", H17, N31)) : a.value === "regular" ? (openBlock(), createElementBlock("g", b31, P31)) : a.value === "thin" ? (openBlock(), createElementBlock("g", W31, j31)) : createCommentVNode("", true)
-    ], 16, y19));
+      a.value === "bold" ? (openBlock(), createElementBlock("g", M29, f25)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", w32, S32)) : a.value === "fill" ? (openBlock(), createElementBlock("g", z32, B32)) : a.value === "light" ? (openBlock(), createElementBlock("g", H18, N32)) : a.value === "regular" ? (openBlock(), createElementBlock("g", b32, P32)) : a.value === "thin" ? (openBlock(), createElementBlock("g", W32, j32)) : createCommentVNode("", true)
+    ], 16, y20));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhListChecks.vue.mjs
-var v7 = ["width", "height", "fill", "transform"];
-var y20 = { key: 0 };
+var v8 = ["width", "height", "fill", "transform"];
+var y21 = { key: 0 };
 var L18 = /* @__PURE__ */ createBaseVNode("path", { d: "M228,128a12,12,0,0,1-12,12H128a12,12,0,0,1,0-24h88A12,12,0,0,1,228,128ZM128,76h88a12,12,0,0,0,0-24H128a12,12,0,0,0,0,24Zm88,104H128a12,12,0,0,0,0,24h88a12,12,0,0,0,0-24ZM79.51,39.51,56,63l-7.51-7.52a12,12,0,0,0-17,17l16,16a12,12,0,0,0,17,0l32-32a12,12,0,0,0-17-17Zm0,64L56,127l-7.51-7.52a12,12,0,1,0-17,17l16,16a12,12,0,0,0,17,0l32-32a12,12,0,0,0-17-17Zm0,64L56,191l-7.51-7.52a12,12,0,1,0-17,17l16,16a12,12,0,0,0,17,0l32-32a12,12,0,0,0-17-17Z" }, null, -1);
-var f25 = [
+var f26 = [
   L18
 ];
 var A19 = { key: 1 };
-var w32 = /* @__PURE__ */ createBaseVNode("path", {
+var w33 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M216,64V192H128V64Z",
   opacity: "0.2"
 }, null, -1);
-var k32 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,128a8,8,0,0,1-8,8H128a8,8,0,0,1,0-16h88A8,8,0,0,1,224,128ZM128,72h88a8,8,0,0,0,0-16H128a8,8,0,0,0,0,16Zm88,112H128a8,8,0,0,0,0,16h88a8,8,0,0,0,0-16ZM82.34,42.34,56,68.69,45.66,58.34A8,8,0,0,0,34.34,69.66l16,16a8,8,0,0,0,11.32,0l32-32A8,8,0,0,0,82.34,42.34Zm0,64L56,132.69,45.66,122.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Zm0,64L56,196.69,45.66,186.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Z" }, null, -1);
-var x32 = [
-  w32,
-  k32
+var k33 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,128a8,8,0,0,1-8,8H128a8,8,0,0,1,0-16h88A8,8,0,0,1,224,128ZM128,72h88a8,8,0,0,0,0-16H128a8,8,0,0,0,0,16Zm88,112H128a8,8,0,0,0,0,16h88a8,8,0,0,0,0-16ZM82.34,42.34,56,68.69,45.66,58.34A8,8,0,0,0,34.34,69.66l16,16a8,8,0,0,0,11.32,0l32-32A8,8,0,0,0,82.34,42.34Zm0,64L56,132.69,45.66,122.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Zm0,64L56,196.69,45.66,186.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Z" }, null, -1);
+var x33 = [
+  w33,
+  k33
 ];
-var C27 = { key: 2 };
-var S32 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM117.66,149.66l-32,32a8,8,0,0,1-11.32,0l-16-16a8,8,0,0,1,11.32-11.32L80,164.69l26.34-26.35a8,8,0,0,1,11.32,11.32Zm0-64-32,32a8,8,0,0,1-11.32,0l-16-16A8,8,0,0,1,69.66,90.34L80,100.69l26.34-26.35a8,8,0,0,1,11.32,11.32ZM192,168H144a8,8,0,0,1,0-16h48a8,8,0,0,1,0,16Zm0-64H144a8,8,0,0,1,0-16h48a8,8,0,0,1,0,16Z" }, null, -1);
+var C28 = { key: 2 };
+var S33 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM117.66,149.66l-32,32a8,8,0,0,1-11.32,0l-16-16a8,8,0,0,1,11.32-11.32L80,164.69l26.34-26.35a8,8,0,0,1,11.32,11.32Zm0-64-32,32a8,8,0,0,1-11.32,0l-16-16A8,8,0,0,1,69.66,90.34L80,100.69l26.34-26.35a8,8,0,0,1,11.32,11.32ZM192,168H144a8,8,0,0,1,0-16h48a8,8,0,0,1,0,16Zm0-64H144a8,8,0,0,1,0-16h48a8,8,0,0,1,0,16Z" }, null, -1);
 var V21 = [
-  S32
+  S33
 ];
-var z32 = { key: 3 };
-var B32 = /* @__PURE__ */ createBaseVNode("path", { d: "M222,128a6,6,0,0,1-6,6H128a6,6,0,0,1,0-12h88A6,6,0,0,1,222,128ZM128,70h88a6,6,0,0,0,0-12H128a6,6,0,0,0,0,12Zm88,116H128a6,6,0,0,0,0,12h88a6,6,0,0,0,0-12ZM83.76,43.76,56,71.51,44.24,59.76a6,6,0,0,0-8.48,8.48l16,16a6,6,0,0,0,8.48,0l32-32a6,6,0,0,0-8.48-8.48Zm0,64L56,135.51,44.24,123.76a6,6,0,1,0-8.48,8.48l16,16a6,6,0,0,0,8.48,0l32-32a6,6,0,0,0-8.48-8.48Zm0,64L56,199.51,44.24,187.76a6,6,0,0,0-8.48,8.48l16,16a6,6,0,0,0,8.48,0l32-32a6,6,0,0,0-8.48-8.48Z" }, null, -1);
-var N32 = [
-  B32
+var z33 = { key: 3 };
+var B33 = /* @__PURE__ */ createBaseVNode("path", { d: "M222,128a6,6,0,0,1-6,6H128a6,6,0,0,1,0-12h88A6,6,0,0,1,222,128ZM128,70h88a6,6,0,0,0,0-12H128a6,6,0,0,0,0,12Zm88,116H128a6,6,0,0,0,0,12h88a6,6,0,0,0,0-12ZM83.76,43.76,56,71.51,44.24,59.76a6,6,0,0,0-8.48,8.48l16,16a6,6,0,0,0,8.48,0l32-32a6,6,0,0,0-8.48-8.48Zm0,64L56,135.51,44.24,123.76a6,6,0,1,0-8.48,8.48l16,16a6,6,0,0,0,8.48,0l32-32a6,6,0,0,0-8.48-8.48Zm0,64L56,199.51,44.24,187.76a6,6,0,0,0-8.48,8.48l16,16a6,6,0,0,0,8.48,0l32-32a6,6,0,0,0-8.48-8.48Z" }, null, -1);
+var N33 = [
+  B33
 ];
-var b32 = { key: 4 };
-var E32 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,128a8,8,0,0,1-8,8H128a8,8,0,0,1,0-16h88A8,8,0,0,1,224,128ZM128,72h88a8,8,0,0,0,0-16H128a8,8,0,0,0,0,16Zm88,112H128a8,8,0,0,0,0,16h88a8,8,0,0,0,0-16ZM82.34,42.34,56,68.69,45.66,58.34A8,8,0,0,0,34.34,69.66l16,16a8,8,0,0,0,11.32,0l32-32A8,8,0,0,0,82.34,42.34Zm0,64L56,132.69,45.66,122.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Zm0,64L56,196.69,45.66,186.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Z" }, null, -1);
-var P32 = [
-  E32
+var b33 = { key: 4 };
+var E33 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,128a8,8,0,0,1-8,8H128a8,8,0,0,1,0-16h88A8,8,0,0,1,224,128ZM128,72h88a8,8,0,0,0,0-16H128a8,8,0,0,0,0,16Zm88,112H128a8,8,0,0,0,0,16h88a8,8,0,0,0,0-16ZM82.34,42.34,56,68.69,45.66,58.34A8,8,0,0,0,34.34,69.66l16,16a8,8,0,0,0,11.32,0l32-32A8,8,0,0,0,82.34,42.34Zm0,64L56,132.69,45.66,122.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Zm0,64L56,196.69,45.66,186.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Z" }, null, -1);
+var P33 = [
+  E33
 ];
-var W32 = { key: 5 };
-var $32 = /* @__PURE__ */ createBaseVNode("path", { d: "M220,128a4,4,0,0,1-4,4H128a4,4,0,0,1,0-8h88A4,4,0,0,1,220,128ZM128,68h88a4,4,0,0,0,0-8H128a4,4,0,0,0,0,8Zm88,120H128a4,4,0,0,0,0,8h88a4,4,0,0,0,0-8ZM85.17,45.17,56,74.34,42.83,61.17a4,4,0,0,0-5.66,5.66l16,16a4,4,0,0,0,5.66,0l32-32a4,4,0,0,0-5.66-5.66Zm0,64L56,138.34,42.83,125.17a4,4,0,1,0-5.66,5.66l16,16a4,4,0,0,0,5.66,0l32-32a4,4,0,0,0-5.66-5.66Zm0,64L56,202.34,42.83,189.17a4,4,0,0,0-5.66,5.66l16,16a4,4,0,0,0,5.66,0l32-32a4,4,0,0,0-5.66-5.66Z" }, null, -1);
-var j32 = [
-  $32
+var W33 = { key: 5 };
+var $33 = /* @__PURE__ */ createBaseVNode("path", { d: "M220,128a4,4,0,0,1-4,4H128a4,4,0,0,1,0-8h88A4,4,0,0,1,220,128ZM128,68h88a4,4,0,0,0,0-8H128a4,4,0,0,0,0,8Zm88,120H128a4,4,0,0,0,0,8h88a4,4,0,0,0,0-8ZM85.17,45.17,56,74.34,42.83,61.17a4,4,0,0,0-5.66,5.66l16,16a4,4,0,0,0,5.66,0l32-32a4,4,0,0,0-5.66-5.66Zm0,64L56,138.34,42.83,125.17a4,4,0,1,0-5.66,5.66l16,16a4,4,0,0,0,5.66,0l32-32a4,4,0,0,0-5.66-5.66Zm0,64L56,202.34,42.83,189.17a4,4,0,0,0-5.66,5.66l16,16a4,4,0,0,0,5.66,0l32-32a4,4,0,0,0-5.66-5.66Z" }, null, -1);
+var j33 = [
+  $33
 ];
-var q22 = {
+var q23 = {
   name: "PhListChecks"
 };
-var G13 = /* @__PURE__ */ defineComponent({
-  ...q22,
+var G14 = /* @__PURE__ */ defineComponent({
+  ...q23,
   props: {
     weight: {
       type: String
@@ -32562,53 +32691,53 @@ var G13 = /* @__PURE__ */ defineComponent({
       transform: u.value
     }, h.$attrs), [
       renderSlot(h.$slots, "default"),
-      o.value === "bold" ? (openBlock(), createElementBlock("g", y20, f25)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", A19, x32)) : o.value === "fill" ? (openBlock(), createElementBlock("g", C27, V21)) : o.value === "light" ? (openBlock(), createElementBlock("g", z32, N32)) : o.value === "regular" ? (openBlock(), createElementBlock("g", b32, P32)) : o.value === "thin" ? (openBlock(), createElementBlock("g", W32, j32)) : createCommentVNode("", true)
-    ], 16, v7));
+      o.value === "bold" ? (openBlock(), createElementBlock("g", y21, f26)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", A19, x33)) : o.value === "fill" ? (openBlock(), createElementBlock("g", C28, V21)) : o.value === "light" ? (openBlock(), createElementBlock("g", z33, N33)) : o.value === "regular" ? (openBlock(), createElementBlock("g", b33, P33)) : o.value === "thin" ? (openBlock(), createElementBlock("g", W33, j33)) : createCommentVNode("", true)
+    ], 16, v8));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhLockSimple.vue.mjs
 var Z20 = ["width", "height", "fill", "transform"];
-var v8 = { key: 0 };
-var y21 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,76H180V56A52,52,0,0,0,76,56V76H48A20,20,0,0,0,28,96V208a20,20,0,0,0,20,20H208a20,20,0,0,0,20-20V96A20,20,0,0,0,208,76ZM100,56a28,28,0,0,1,56,0V76H100ZM204,204H52V100H204Z" }, null, -1);
+var v9 = { key: 0 };
+var y22 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,76H180V56A52,52,0,0,0,76,56V76H48A20,20,0,0,0,28,96V208a20,20,0,0,0,20,20H208a20,20,0,0,0,20-20V96A20,20,0,0,0,208,76ZM100,56a28,28,0,0,1,56,0V76H100ZM204,204H52V100H204Z" }, null, -1);
 var A20 = [
-  y21
+  y22
 ];
-var f26 = { key: 1 };
-var w33 = /* @__PURE__ */ createBaseVNode("path", {
+var f27 = { key: 1 };
+var w34 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M216,96V208a8,8,0,0,1-8,8H48a8,8,0,0,1-8-8V96a8,8,0,0,1,8-8H208A8,8,0,0,1,216,96Z",
   opacity: "0.2"
 }, null, -1);
-var k33 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,80H176V56a48,48,0,0,0-96,0V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80ZM96,56a32,32,0,0,1,64,0V80H96ZM208,208H48V96H208V208Z" }, null, -1);
-var S33 = [
-  w33,
-  k33
+var k34 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,80H176V56a48,48,0,0,0-96,0V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80ZM96,56a32,32,0,0,1,64,0V80H96ZM208,208H48V96H208V208Z" }, null, -1);
+var S34 = [
+  w34,
+  k34
 ];
-var x33 = { key: 2 };
-var z33 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,80H176V56a48,48,0,0,0-96,0V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80ZM96,56a32,32,0,0,1,64,0V80H96Z" }, null, -1);
-var C28 = [
-  z33
+var x34 = { key: 2 };
+var z34 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,80H176V56a48,48,0,0,0-96,0V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80ZM96,56a32,32,0,0,1,64,0V80H96Z" }, null, -1);
+var C29 = [
+  z34
 ];
-var B33 = { key: 3 };
-var N33 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,82H174V56a46,46,0,0,0-92,0V82H48A14,14,0,0,0,34,96V208a14,14,0,0,0,14,14H208a14,14,0,0,0,14-14V96A14,14,0,0,0,208,82ZM94,56a34,34,0,0,1,68,0V82H94ZM210,208a2,2,0,0,1-2,2H48a2,2,0,0,1-2-2V96a2,2,0,0,1,2-2H208a2,2,0,0,1,2,2Z" }, null, -1);
-var b33 = [
-  N33
+var B34 = { key: 3 };
+var N34 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,82H174V56a46,46,0,0,0-92,0V82H48A14,14,0,0,0,34,96V208a14,14,0,0,0,14,14H208a14,14,0,0,0,14-14V96A14,14,0,0,0,208,82ZM94,56a34,34,0,0,1,68,0V82H94ZM210,208a2,2,0,0,1-2,2H48a2,2,0,0,1-2-2V96a2,2,0,0,1,2-2H208a2,2,0,0,1,2,2Z" }, null, -1);
+var b34 = [
+  N34
 ];
-var E33 = { key: 4 };
-var P33 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,80H176V56a48,48,0,0,0-96,0V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80ZM96,56a32,32,0,0,1,64,0V80H96ZM208,208H48V96H208V208Z" }, null, -1);
-var W33 = [
-  P33
+var E34 = { key: 4 };
+var P34 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,80H176V56a48,48,0,0,0-96,0V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80ZM96,56a32,32,0,0,1,64,0V80H96ZM208,208H48V96H208V208Z" }, null, -1);
+var W34 = [
+  P34
 ];
-var $33 = { key: 5 };
-var j33 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,84H172V56a44,44,0,0,0-88,0V84H48A12,12,0,0,0,36,96V208a12,12,0,0,0,12,12H208a12,12,0,0,0,12-12V96A12,12,0,0,0,208,84ZM92,56a36,36,0,0,1,72,0V84H92ZM212,208a4,4,0,0,1-4,4H48a4,4,0,0,1-4-4V96a4,4,0,0,1,4-4H208a4,4,0,0,1,4,4Z" }, null, -1);
+var $34 = { key: 5 };
+var j34 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,84H172V56a44,44,0,0,0-88,0V84H48A12,12,0,0,0,36,96V208a12,12,0,0,0,12,12H208a12,12,0,0,0,12-12V96A12,12,0,0,0,208,84ZM92,56a36,36,0,0,1,72,0V84H92ZM212,208a4,4,0,0,1-4,4H48a4,4,0,0,1-4-4V96a4,4,0,0,1,4-4H208a4,4,0,0,1,4,4Z" }, null, -1);
 var L19 = [
-  j33
+  j34
 ];
-var q23 = {
+var q24 = {
   name: "PhLockSimple"
 };
-var G14 = /* @__PURE__ */ defineComponent({
-  ...q23,
+var G15 = /* @__PURE__ */ defineComponent({
+  ...q24,
   props: {
     weight: {
       type: String
@@ -32634,47 +32763,47 @@ var G14 = /* @__PURE__ */ defineComponent({
       transform: u.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      a.value === "bold" ? (openBlock(), createElementBlock("g", v8, A20)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", f26, S33)) : a.value === "fill" ? (openBlock(), createElementBlock("g", x33, C28)) : a.value === "light" ? (openBlock(), createElementBlock("g", B33, b33)) : a.value === "regular" ? (openBlock(), createElementBlock("g", E33, W33)) : a.value === "thin" ? (openBlock(), createElementBlock("g", $33, L19)) : createCommentVNode("", true)
+      a.value === "bold" ? (openBlock(), createElementBlock("g", v9, A20)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", f27, S34)) : a.value === "fill" ? (openBlock(), createElementBlock("g", x34, C29)) : a.value === "light" ? (openBlock(), createElementBlock("g", B34, b34)) : a.value === "regular" ? (openBlock(), createElementBlock("g", E34, W34)) : a.value === "thin" ? (openBlock(), createElementBlock("g", $34, L19)) : createCommentVNode("", true)
     ], 16, Z20));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhMagnifyingGlass.vue.mjs
 var Z21 = ["width", "height", "fill", "transform"];
-var f27 = { key: 0 };
-var w34 = /* @__PURE__ */ createBaseVNode("path", { d: "M232.49,215.51,185,168a92.12,92.12,0,1,0-17,17l47.53,47.54a12,12,0,0,0,17-17ZM44,112a68,68,0,1,1,68,68A68.07,68.07,0,0,1,44,112Z" }, null, -1);
+var f28 = { key: 0 };
+var w35 = /* @__PURE__ */ createBaseVNode("path", { d: "M232.49,215.51,185,168a92.12,92.12,0,1,0-17,17l47.53,47.54a12,12,0,0,0,17-17ZM44,112a68,68,0,1,1,68,68A68.07,68.07,0,0,1,44,112Z" }, null, -1);
 var A21 = [
-  w34
+  w35
 ];
-var k34 = { key: 1 };
-var x34 = /* @__PURE__ */ createBaseVNode("path", {
+var k35 = { key: 1 };
+var x35 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M192,112a80,80,0,1,1-80-80A80,80,0,0,1,192,112Z",
   opacity: "0.2"
 }, null, -1);
-var S34 = /* @__PURE__ */ createBaseVNode("path", { d: "M229.66,218.34,179.6,168.28a88.21,88.21,0,1,0-11.32,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z" }, null, -1);
-var z34 = [
-  x34,
-  S34
+var S35 = /* @__PURE__ */ createBaseVNode("path", { d: "M229.66,218.34,179.6,168.28a88.21,88.21,0,1,0-11.32,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z" }, null, -1);
+var z35 = [
+  x35,
+  S35
 ];
-var C29 = { key: 2 };
-var B34 = /* @__PURE__ */ createBaseVNode("path", { d: "M168,112a56,56,0,1,1-56-56A56,56,0,0,1,168,112Zm61.66,117.66a8,8,0,0,1-11.32,0l-50.06-50.07a88,88,0,1,1,11.32-11.31l50.06,50.06A8,8,0,0,1,229.66,229.66ZM112,184a72,72,0,1,0-72-72A72.08,72.08,0,0,0,112,184Z" }, null, -1);
-var N34 = [
-  B34
+var C30 = { key: 2 };
+var B35 = /* @__PURE__ */ createBaseVNode("path", { d: "M168,112a56,56,0,1,1-56-56A56,56,0,0,1,168,112Zm61.66,117.66a8,8,0,0,1-11.32,0l-50.06-50.07a88,88,0,1,1,11.32-11.31l50.06,50.06A8,8,0,0,1,229.66,229.66ZM112,184a72,72,0,1,0-72-72A72.08,72.08,0,0,0,112,184Z" }, null, -1);
+var N35 = [
+  B35
 ];
-var b34 = { key: 3 };
-var E34 = /* @__PURE__ */ createBaseVNode("path", { d: "M228.24,219.76l-51.38-51.38a86.15,86.15,0,1,0-8.48,8.48l51.38,51.38a6,6,0,0,0,8.48-8.48ZM38,112a74,74,0,1,1,74,74A74.09,74.09,0,0,1,38,112Z" }, null, -1);
-var P34 = [
-  E34
+var b35 = { key: 3 };
+var E35 = /* @__PURE__ */ createBaseVNode("path", { d: "M228.24,219.76l-51.38-51.38a86.15,86.15,0,1,0-8.48,8.48l51.38,51.38a6,6,0,0,0,8.48-8.48ZM38,112a74,74,0,1,1,74,74A74.09,74.09,0,0,1,38,112Z" }, null, -1);
+var P35 = [
+  E35
 ];
 var V22 = { key: 4 };
-var W34 = /* @__PURE__ */ createBaseVNode("path", { d: "M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z" }, null, -1);
-var $34 = [
-  W34
+var W35 = /* @__PURE__ */ createBaseVNode("path", { d: "M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z" }, null, -1);
+var $35 = [
+  W35
 ];
-var j34 = { key: 5 };
-var G15 = /* @__PURE__ */ createBaseVNode("path", { d: "M226.83,221.17l-52.7-52.7a84.1,84.1,0,1,0-5.66,5.66l52.7,52.7a4,4,0,0,0,5.66-5.66ZM36,112a76,76,0,1,1,76,76A76.08,76.08,0,0,1,36,112Z" }, null, -1);
-var q24 = [
-  G15
+var j35 = { key: 5 };
+var G16 = /* @__PURE__ */ createBaseVNode("path", { d: "M226.83,221.17l-52.7-52.7a84.1,84.1,0,1,0-5.66,5.66l52.7,52.7a4,4,0,0,0,5.66-5.66ZM36,112a76,76,0,1,1,76,76A76.08,76.08,0,0,1,36,112Z" }, null, -1);
+var q25 = [
+  G16
 ];
 var D20 = {
   name: "PhMagnifyingGlass"
@@ -32706,47 +32835,47 @@ var I11 = /* @__PURE__ */ defineComponent({
       transform: g.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", f27, A21)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", k34, z34)) : s.value === "fill" ? (openBlock(), createElementBlock("g", C29, N34)) : s.value === "light" ? (openBlock(), createElementBlock("g", b34, P34)) : s.value === "regular" ? (openBlock(), createElementBlock("g", V22, $34)) : s.value === "thin" ? (openBlock(), createElementBlock("g", j34, q24)) : createCommentVNode("", true)
+      s.value === "bold" ? (openBlock(), createElementBlock("g", f28, A21)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", k35, z35)) : s.value === "fill" ? (openBlock(), createElementBlock("g", C30, N35)) : s.value === "light" ? (openBlock(), createElementBlock("g", b35, P35)) : s.value === "regular" ? (openBlock(), createElementBlock("g", V22, $35)) : s.value === "thin" ? (openBlock(), createElementBlock("g", j35, q25)) : createCommentVNode("", true)
     ], 16, Z21));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhMinus.vue.mjs
-var f28 = ["width", "height", "fill", "transform"];
-var M29 = { key: 0 };
-var w35 = /* @__PURE__ */ createBaseVNode("path", { d: "M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z" }, null, -1);
+var f29 = ["width", "height", "fill", "transform"];
+var M30 = { key: 0 };
+var w36 = /* @__PURE__ */ createBaseVNode("path", { d: "M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z" }, null, -1);
 var A22 = [
-  w35
+  w36
 ];
-var k35 = { key: 1 };
+var k36 = { key: 1 };
 var Z22 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M216,56V200a16,16,0,0,1-16,16H56a16,16,0,0,1-16-16V56A16,16,0,0,1,56,40H200A16,16,0,0,1,216,56Z",
   opacity: "0.2"
 }, null, -1);
-var x35 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,128a8,8,0,0,1-8,8H40a8,8,0,0,1,0-16H216A8,8,0,0,1,224,128Z" }, null, -1);
-var S35 = [
+var x36 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,128a8,8,0,0,1-8,8H40a8,8,0,0,1,0-16H216A8,8,0,0,1,224,128Z" }, null, -1);
+var S36 = [
   Z22,
-  x35
+  x36
 ];
 var V23 = { key: 2 };
-var z35 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM184,136H72a8,8,0,0,1,0-16H184a8,8,0,0,1,0,16Z" }, null, -1);
-var C30 = [
-  z35
+var z36 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM184,136H72a8,8,0,0,1,0-16H184a8,8,0,0,1,0,16Z" }, null, -1);
+var C31 = [
+  z36
 ];
-var B35 = { key: 3 };
-var N35 = /* @__PURE__ */ createBaseVNode("path", { d: "M222,128a6,6,0,0,1-6,6H40a6,6,0,0,1,0-12H216A6,6,0,0,1,222,128Z" }, null, -1);
-var b35 = [
-  N35
+var B36 = { key: 3 };
+var N36 = /* @__PURE__ */ createBaseVNode("path", { d: "M222,128a6,6,0,0,1-6,6H40a6,6,0,0,1,0-12H216A6,6,0,0,1,222,128Z" }, null, -1);
+var b36 = [
+  N36
 ];
-var E35 = { key: 4 };
-var P35 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,128a8,8,0,0,1-8,8H40a8,8,0,0,1,0-16H216A8,8,0,0,1,224,128Z" }, null, -1);
-var W35 = [
-  P35
+var E36 = { key: 4 };
+var P36 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,128a8,8,0,0,1-8,8H40a8,8,0,0,1,0-16H216A8,8,0,0,1,224,128Z" }, null, -1);
+var W36 = [
+  P36
 ];
-var $35 = { key: 5 };
-var j35 = /* @__PURE__ */ createBaseVNode("path", { d: "M220,128a4,4,0,0,1-4,4H40a4,4,0,0,1,0-8H216A4,4,0,0,1,220,128Z" }, null, -1);
-var q25 = [
-  j35
+var $36 = { key: 5 };
+var j36 = /* @__PURE__ */ createBaseVNode("path", { d: "M220,128a4,4,0,0,1-4,4H40a4,4,0,0,1,0-8H216A4,4,0,0,1,220,128Z" }, null, -1);
+var q26 = [
+  j36
 ];
 var D21 = {
   name: "PhMinus"
@@ -32778,52 +32907,52 @@ var I12 = /* @__PURE__ */ defineComponent({
       transform: g.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", M29, A22)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", k35, S35)) : s.value === "fill" ? (openBlock(), createElementBlock("g", V23, C30)) : s.value === "light" ? (openBlock(), createElementBlock("g", B35, b35)) : s.value === "regular" ? (openBlock(), createElementBlock("g", E35, W35)) : s.value === "thin" ? (openBlock(), createElementBlock("g", $35, q25)) : createCommentVNode("", true)
-    ], 16, f28));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", M30, A22)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", k36, S36)) : s.value === "fill" ? (openBlock(), createElementBlock("g", V23, C31)) : s.value === "light" ? (openBlock(), createElementBlock("g", B36, b36)) : s.value === "regular" ? (openBlock(), createElementBlock("g", E36, W36)) : s.value === "thin" ? (openBlock(), createElementBlock("g", $36, q26)) : createCommentVNode("", true)
+    ], 16, f29));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhMoon.vue.mjs
-var M30 = ["width", "height", "fill", "transform"];
-var f29 = { key: 0 };
+var M31 = ["width", "height", "fill", "transform"];
+var f30 = { key: 0 };
 var Z23 = /* @__PURE__ */ createBaseVNode("path", { d: "M236.37,139.4a12,12,0,0,0-12-3A84.07,84.07,0,0,1,119.6,31.59a12,12,0,0,0-15-15A108.86,108.86,0,0,0,49.69,55.07,108,108,0,0,0,136,228a107.09,107.09,0,0,0,64.93-21.69,108.86,108.86,0,0,0,38.44-54.94A12,12,0,0,0,236.37,139.4Zm-49.88,47.74A84,84,0,0,1,68.86,69.51,84.93,84.93,0,0,1,92.27,48.29Q92,52.13,92,56A108.12,108.12,0,0,0,200,164q3.87,0,7.71-.27A84.79,84.79,0,0,1,186.49,187.14Z" }, null, -1);
-var w36 = [
+var w37 = [
   Z23
 ];
-var k36 = { key: 1 };
-var x36 = /* @__PURE__ */ createBaseVNode("path", {
+var k37 = { key: 1 };
+var x37 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M227.89,147.89A96,96,0,1,1,108.11,28.11,96.09,96.09,0,0,0,227.89,147.89Z",
   opacity: "0.2"
 }, null, -1);
-var S36 = /* @__PURE__ */ createBaseVNode("path", { d: "M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.09,103.09,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z" }, null, -1);
-var z36 = [
-  x36,
-  S36
+var S37 = /* @__PURE__ */ createBaseVNode("path", { d: "M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.09,103.09,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z" }, null, -1);
+var z37 = [
+  x37,
+  S37
 ];
-var C31 = { key: 2 };
-var B36 = /* @__PURE__ */ createBaseVNode("path", { d: "M235.54,150.21a104.84,104.84,0,0,1-37,52.91A104,104,0,0,1,32,120,103.09,103.09,0,0,1,52.88,57.48a104.84,104.84,0,0,1,52.91-37,8,8,0,0,1,10,10,88.08,88.08,0,0,0,109.8,109.8,8,8,0,0,1,10,10Z" }, null, -1);
-var N36 = [
-  B36
+var C32 = { key: 2 };
+var B37 = /* @__PURE__ */ createBaseVNode("path", { d: "M235.54,150.21a104.84,104.84,0,0,1-37,52.91A104,104,0,0,1,32,120,103.09,103.09,0,0,1,52.88,57.48a104.84,104.84,0,0,1,52.91-37,8,8,0,0,1,10,10,88.08,88.08,0,0,0,109.8,109.8,8,8,0,0,1,10,10Z" }, null, -1);
+var N37 = [
+  B37
 ];
-var b36 = { key: 3 };
-var E36 = /* @__PURE__ */ createBaseVNode("path", { d: "M232.13,143.64a6,6,0,0,0-6-1.49A90.07,90.07,0,0,1,113.86,29.85a6,6,0,0,0-7.49-7.48A102.88,102.88,0,0,0,54.48,58.68,102,102,0,0,0,197.32,201.52a102.88,102.88,0,0,0,36.31-51.89A6,6,0,0,0,232.13,143.64Zm-42,48.29a90,90,0,0,1-126-126A90.9,90.9,0,0,1,99.65,37.66,102.06,102.06,0,0,0,218.34,156.35,90.9,90.9,0,0,1,190.1,191.93Z" }, null, -1);
-var P36 = [
-  E36
+var b37 = { key: 3 };
+var E37 = /* @__PURE__ */ createBaseVNode("path", { d: "M232.13,143.64a6,6,0,0,0-6-1.49A90.07,90.07,0,0,1,113.86,29.85a6,6,0,0,0-7.49-7.48A102.88,102.88,0,0,0,54.48,58.68,102,102,0,0,0,197.32,201.52a102.88,102.88,0,0,0,36.31-51.89A6,6,0,0,0,232.13,143.64Zm-42,48.29a90,90,0,0,1-126-126A90.9,90.9,0,0,1,99.65,37.66,102.06,102.06,0,0,0,218.34,156.35,90.9,90.9,0,0,1,190.1,191.93Z" }, null, -1);
+var P37 = [
+  E37
 ];
 var V24 = { key: 4 };
-var W36 = /* @__PURE__ */ createBaseVNode("path", { d: "M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.09,103.09,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z" }, null, -1);
-var $36 = [
-  W36
+var W37 = /* @__PURE__ */ createBaseVNode("path", { d: "M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.09,103.09,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z" }, null, -1);
+var $37 = [
+  W37
 ];
-var j36 = { key: 5 };
-var q26 = /* @__PURE__ */ createBaseVNode("path", { d: "M230.72,145.06a4,4,0,0,0-4-1A92.08,92.08,0,0,1,111.94,29.27a4,4,0,0,0-5-5A100.78,100.78,0,0,0,56.08,59.88a100,100,0,0,0,140,140,100.78,100.78,0,0,0,35.59-50.87A4,4,0,0,0,230.72,145.06ZM191.3,193.53A92,92,0,0,1,62.47,64.7a93,93,0,0,1,39.88-30.35,100.09,100.09,0,0,0,119.3,119.3A93,93,0,0,1,191.3,193.53Z" }, null, -1);
+var j37 = { key: 5 };
+var q27 = /* @__PURE__ */ createBaseVNode("path", { d: "M230.72,145.06a4,4,0,0,0-4-1A92.08,92.08,0,0,1,111.94,29.27a4,4,0,0,0-5-5A100.78,100.78,0,0,0,56.08,59.88a100,100,0,0,0,140,140,100.78,100.78,0,0,0,35.59-50.87A4,4,0,0,0,230.72,145.06ZM191.3,193.53A92,92,0,0,1,62.47,64.7a93,93,0,0,1,39.88-30.35,100.09,100.09,0,0,0,119.3,119.3A93,93,0,0,1,191.3,193.53Z" }, null, -1);
 var Q = [
-  q26
+  q27
 ];
 var D22 = {
   name: "PhMoon"
 };
-var H18 = /* @__PURE__ */ defineComponent({
+var H19 = /* @__PURE__ */ defineComponent({
   ...D22,
   props: {
     weight: {
@@ -32850,47 +32979,47 @@ var H18 = /* @__PURE__ */ defineComponent({
       transform: A.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", f29, w36)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", k36, z36)) : s.value === "fill" ? (openBlock(), createElementBlock("g", C31, N36)) : s.value === "light" ? (openBlock(), createElementBlock("g", b36, P36)) : s.value === "regular" ? (openBlock(), createElementBlock("g", V24, $36)) : s.value === "thin" ? (openBlock(), createElementBlock("g", j36, Q)) : createCommentVNode("", true)
-    ], 16, M30));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", f30, w37)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", k37, z37)) : s.value === "fill" ? (openBlock(), createElementBlock("g", C32, N37)) : s.value === "light" ? (openBlock(), createElementBlock("g", b37, P37)) : s.value === "regular" ? (openBlock(), createElementBlock("g", V24, $37)) : s.value === "thin" ? (openBlock(), createElementBlock("g", j37, Q)) : createCommentVNode("", true)
+    ], 16, M31));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhPalette.vue.mjs
-var v9 = ["width", "height", "fill", "transform"];
-var y22 = { key: 0 };
-var f30 = /* @__PURE__ */ createBaseVNode("path", { d: "M203.57,51A107.9,107.9,0,0,0,20,128c0,44.72,27.6,82.25,72,97.94A36,36,0,0,0,140,192a12,12,0,0,1,12-12h46.21a35.79,35.79,0,0,0,35.1-28A108.6,108.6,0,0,0,236,127.09,107.23,107.23,0,0,0,203.57,51Zm6.34,95.67a11.91,11.91,0,0,1-11.7,9.3H152a36,36,0,0,0-36,36,12,12,0,0,1-16,11.3c-16.65-5.88-30.65-15.76-40.48-28.56A76,76,0,0,1,44,128a84,84,0,0,1,83.13-84H128a84.35,84.35,0,0,1,84,83.29A84.72,84.72,0,0,1,209.91,146.71ZM144,76a16,16,0,1,1-16-16A16,16,0,0,1,144,76Zm-44,24A16,16,0,1,1,84,84,16,16,0,0,1,100,100Zm0,56a16,16,0,1,1-16-16A16,16,0,0,1,100,156Zm88-56a16,16,0,1,1-16-16A16,16,0,0,1,188,100Z" }, null, -1);
-var C32 = [
-  f30
+var v10 = ["width", "height", "fill", "transform"];
+var y23 = { key: 0 };
+var f31 = /* @__PURE__ */ createBaseVNode("path", { d: "M203.57,51A107.9,107.9,0,0,0,20,128c0,44.72,27.6,82.25,72,97.94A36,36,0,0,0,140,192a12,12,0,0,1,12-12h46.21a35.79,35.79,0,0,0,35.1-28A108.6,108.6,0,0,0,236,127.09,107.23,107.23,0,0,0,203.57,51Zm6.34,95.67a11.91,11.91,0,0,1-11.7,9.3H152a36,36,0,0,0-36,36,12,12,0,0,1-16,11.3c-16.65-5.88-30.65-15.76-40.48-28.56A76,76,0,0,1,44,128a84,84,0,0,1,83.13-84H128a84.35,84.35,0,0,1,84,83.29A84.72,84.72,0,0,1,209.91,146.71ZM144,76a16,16,0,1,1-16-16A16,16,0,0,1,144,76Zm-44,24A16,16,0,1,1,84,84,16,16,0,0,1,100,100Zm0,56a16,16,0,1,1-16-16A16,16,0,0,1,100,156Zm88-56a16,16,0,1,1-16-16A16,16,0,0,1,188,100Z" }, null, -1);
+var C33 = [
+  f31
 ];
-var w37 = { key: 1 };
-var H19 = /* @__PURE__ */ createBaseVNode("path", {
+var w38 = { key: 1 };
+var H20 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M224,127.17a96.48,96.48,0,0,1-2.39,22.18A24,24,0,0,1,198.21,168H152a24,24,0,0,0-24,24,24,24,0,0,1-32,22.61C58.73,201.44,32,169.81,32,128a96,96,0,0,1,95-96C179.84,31.47,223.55,74.35,224,127.17Z",
   opacity: "0.2"
 }, null, -1);
-var k37 = /* @__PURE__ */ createBaseVNode("path", { d: "M200.77,53.89A103.27,103.27,0,0,0,128,24h-1.07A104,104,0,0,0,24,128c0,43,26.58,79.06,69.36,94.17A32,32,0,0,0,136,192a16,16,0,0,1,16-16h46.21a31.81,31.81,0,0,0,31.2-24.88,104.43,104.43,0,0,0,2.59-24A103.28,103.28,0,0,0,200.77,53.89Zm13,93.71A15.89,15.89,0,0,1,198.21,160H152a32,32,0,0,0-32,32,16,16,0,0,1-21.31,15.07C62.49,194.3,40,164,40,128a88,88,0,0,1,87.09-88h.9a88.35,88.35,0,0,1,88,87.25A88.86,88.86,0,0,1,213.81,147.6ZM140,76a12,12,0,1,1-12-12A12,12,0,0,1,140,76ZM96,100A12,12,0,1,1,84,88,12,12,0,0,1,96,100Zm0,56a12,12,0,1,1-12-12A12,12,0,0,1,96,156Zm88-56a12,12,0,1,1-12-12A12,12,0,0,1,184,100Z" }, null, -1);
-var x37 = [
-  H19,
-  k37
+var k38 = /* @__PURE__ */ createBaseVNode("path", { d: "M200.77,53.89A103.27,103.27,0,0,0,128,24h-1.07A104,104,0,0,0,24,128c0,43,26.58,79.06,69.36,94.17A32,32,0,0,0,136,192a16,16,0,0,1,16-16h46.21a31.81,31.81,0,0,0,31.2-24.88,104.43,104.43,0,0,0,2.59-24A103.28,103.28,0,0,0,200.77,53.89Zm13,93.71A15.89,15.89,0,0,1,198.21,160H152a32,32,0,0,0-32,32,16,16,0,0,1-21.31,15.07C62.49,194.3,40,164,40,128a88,88,0,0,1,87.09-88h.9a88.35,88.35,0,0,1,88,87.25A88.86,88.86,0,0,1,213.81,147.6ZM140,76a12,12,0,1,1-12-12A12,12,0,0,1,140,76ZM96,100A12,12,0,1,1,84,88,12,12,0,0,1,96,100Zm0,56a12,12,0,1,1-12-12A12,12,0,0,1,96,156Zm88-56a12,12,0,1,1-12-12A12,12,0,0,1,184,100Z" }, null, -1);
+var x38 = [
+  H20,
+  k38
 ];
-var S37 = { key: 2 };
-var z37 = /* @__PURE__ */ createBaseVNode("path", { d: "M200.77,53.89A103.27,103.27,0,0,0,128,24h-1.07A104,104,0,0,0,24,128c0,43,26.58,79.06,69.36,94.17A32,32,0,0,0,136,192a16,16,0,0,1,16-16h46.21a31.81,31.81,0,0,0,31.2-24.88,104.43,104.43,0,0,0,2.59-24A103.28,103.28,0,0,0,200.77,53.89ZM84,168a12,12,0,1,1,12-12A12,12,0,0,1,84,168Zm0-56a12,12,0,1,1,12-12A12,12,0,0,1,84,112Zm44-24a12,12,0,1,1,12-12A12,12,0,0,1,128,88Zm44,24a12,12,0,1,1,12-12A12,12,0,0,1,172,112Z" }, null, -1);
-var B37 = [
-  z37
+var S38 = { key: 2 };
+var z38 = /* @__PURE__ */ createBaseVNode("path", { d: "M200.77,53.89A103.27,103.27,0,0,0,128,24h-1.07A104,104,0,0,0,24,128c0,43,26.58,79.06,69.36,94.17A32,32,0,0,0,136,192a16,16,0,0,1,16-16h46.21a31.81,31.81,0,0,0,31.2-24.88,104.43,104.43,0,0,0,2.59-24A103.28,103.28,0,0,0,200.77,53.89ZM84,168a12,12,0,1,1,12-12A12,12,0,0,1,84,168Zm0-56a12,12,0,1,1,12-12A12,12,0,0,1,84,112Zm44-24a12,12,0,1,1,12-12A12,12,0,0,1,128,88Zm44,24a12,12,0,1,1,12-12A12,12,0,0,1,172,112Z" }, null, -1);
+var B38 = [
+  z38
 ];
-var N37 = { key: 3 };
-var P37 = /* @__PURE__ */ createBaseVNode("path", { d: "M199.37,55.31A101.32,101.32,0,0,0,128,26h-1A102,102,0,0,0,26,128c0,42.09,26.07,77.44,68,92.26A30.21,30.21,0,0,0,104.11,222,30.06,30.06,0,0,0,134,192a18,18,0,0,1,18-18h46.21a29.82,29.82,0,0,0,29.25-23.31A102.71,102.71,0,0,0,230,127.11,101.25,101.25,0,0,0,199.37,55.31ZM215.76,148a17.89,17.89,0,0,1-17.55,14H152a30,30,0,0,0-30,30,18,18,0,0,1-24,17C61,195.86,38,164.85,38,128a90,90,0,0,1,89.07-90H128a90.34,90.34,0,0,1,90,89.22A90.46,90.46,0,0,1,215.76,148ZM138,76a10,10,0,1,1-10-10A10,10,0,0,1,138,76ZM94,100A10,10,0,1,1,84,90,10,10,0,0,1,94,100Zm0,56a10,10,0,1,1-10-10A10,10,0,0,1,94,156Zm88-56a10,10,0,1,1-10-10A10,10,0,0,1,182,100Z" }, null, -1);
-var b37 = [
-  P37
+var N38 = { key: 3 };
+var P38 = /* @__PURE__ */ createBaseVNode("path", { d: "M199.37,55.31A101.32,101.32,0,0,0,128,26h-1A102,102,0,0,0,26,128c0,42.09,26.07,77.44,68,92.26A30.21,30.21,0,0,0,104.11,222,30.06,30.06,0,0,0,134,192a18,18,0,0,1,18-18h46.21a29.82,29.82,0,0,0,29.25-23.31A102.71,102.71,0,0,0,230,127.11,101.25,101.25,0,0,0,199.37,55.31ZM215.76,148a17.89,17.89,0,0,1-17.55,14H152a30,30,0,0,0-30,30,18,18,0,0,1-24,17C61,195.86,38,164.85,38,128a90,90,0,0,1,89.07-90H128a90.34,90.34,0,0,1,90,89.22A90.46,90.46,0,0,1,215.76,148ZM138,76a10,10,0,1,1-10-10A10,10,0,0,1,138,76ZM94,100A10,10,0,1,1,84,90,10,10,0,0,1,94,100Zm0,56a10,10,0,1,1-10-10A10,10,0,0,1,94,156Zm88-56a10,10,0,1,1-10-10A10,10,0,0,1,182,100Z" }, null, -1);
+var b38 = [
+  P38
 ];
-var E37 = { key: 4 };
+var E38 = { key: 4 };
 var V25 = /* @__PURE__ */ createBaseVNode("path", { d: "M200.77,53.89A103.27,103.27,0,0,0,128,24h-1.07A104,104,0,0,0,24,128c0,43,26.58,79.06,69.36,94.17A32,32,0,0,0,136,192a16,16,0,0,1,16-16h46.21a31.81,31.81,0,0,0,31.2-24.88,104.43,104.43,0,0,0,2.59-24A103.28,103.28,0,0,0,200.77,53.89Zm13,93.71A15.89,15.89,0,0,1,198.21,160H152a32,32,0,0,0-32,32,16,16,0,0,1-21.31,15.07C62.49,194.3,40,164,40,128a88,88,0,0,1,87.09-88h.9a88.35,88.35,0,0,1,88,87.25A88.86,88.86,0,0,1,213.81,147.6ZM140,76a12,12,0,1,1-12-12A12,12,0,0,1,140,76ZM96,100A12,12,0,1,1,84,88,12,12,0,0,1,96,100Zm0,56a12,12,0,1,1-12-12A12,12,0,0,1,96,156Zm88-56a12,12,0,1,1-12-12A12,12,0,0,1,184,100Z" }, null, -1);
-var W37 = [
+var W38 = [
   V25
 ];
-var $37 = { key: 5 };
-var j37 = /* @__PURE__ */ createBaseVNode("path", { d: "M198,56.74A99.31,99.31,0,0,0,128,28h-1A100,100,0,0,0,28,128c0,41.22,25.55,75.85,66.69,90.38a28.34,28.34,0,0,0,9.42,1.63A28,28,0,0,0,132,192a20,20,0,0,1,20-20h46.21a27.84,27.84,0,0,0,27.3-21.76,100.37,100.37,0,0,0,2.49-23.1A99.26,99.26,0,0,0,198,56.74Zm19.74,91.72A19.89,19.89,0,0,1,198.21,164H152a28,28,0,0,0-28,28,20,20,0,0,1-26.64,18.83C59.51,197.46,36,165.72,36,128a92,92,0,0,1,91.05-92H128a92,92,0,0,1,89.72,112.46ZM136,76a8,8,0,1,1-8-8A8,8,0,0,1,136,76ZM92,100a8,8,0,1,1-8-8A8,8,0,0,1,92,100Zm0,56a8,8,0,1,1-8-8A8,8,0,0,1,92,156Zm88-56a8,8,0,1,1-8-8A8,8,0,0,1,180,100Z" }, null, -1);
-var q27 = [
-  j37
+var $38 = { key: 5 };
+var j38 = /* @__PURE__ */ createBaseVNode("path", { d: "M198,56.74A99.31,99.31,0,0,0,128,28h-1A100,100,0,0,0,28,128c0,41.22,25.55,75.85,66.69,90.38a28.34,28.34,0,0,0,9.42,1.63A28,28,0,0,0,132,192a20,20,0,0,1,20-20h46.21a27.84,27.84,0,0,0,27.3-21.76,100.37,100.37,0,0,0,2.49-23.1A99.26,99.26,0,0,0,198,56.74Zm19.74,91.72A19.89,19.89,0,0,1,198.21,164H152a28,28,0,0,0-28,28,20,20,0,0,1-26.64,18.83C59.51,197.46,36,165.72,36,128a92,92,0,0,1,91.05-92H128a92,92,0,0,1,89.72,112.46ZM136,76a8,8,0,1,1-8-8A8,8,0,0,1,136,76ZM92,100a8,8,0,1,1-8-8A8,8,0,0,1,92,100Zm0,56a8,8,0,1,1-8-8A8,8,0,0,1,92,156Zm88-56a8,8,0,1,1-8-8A8,8,0,0,1,180,100Z" }, null, -1);
+var q28 = [
+  j38
 ];
 var D23 = {
   name: "PhPalette"
@@ -32922,47 +33051,47 @@ var I13 = /* @__PURE__ */ defineComponent({
       transform: Z.value
     }, c.$attrs), [
       renderSlot(c.$slots, "default"),
-      a.value === "bold" ? (openBlock(), createElementBlock("g", y22, C32)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", w37, x37)) : a.value === "fill" ? (openBlock(), createElementBlock("g", S37, B37)) : a.value === "light" ? (openBlock(), createElementBlock("g", N37, b37)) : a.value === "regular" ? (openBlock(), createElementBlock("g", E37, W37)) : a.value === "thin" ? (openBlock(), createElementBlock("g", $37, q27)) : createCommentVNode("", true)
-    ], 16, v9));
+      a.value === "bold" ? (openBlock(), createElementBlock("g", y23, C33)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", w38, x38)) : a.value === "fill" ? (openBlock(), createElementBlock("g", S38, B38)) : a.value === "light" ? (openBlock(), createElementBlock("g", N38, b38)) : a.value === "regular" ? (openBlock(), createElementBlock("g", E38, W38)) : a.value === "thin" ? (openBlock(), createElementBlock("g", $38, q28)) : createCommentVNode("", true)
+    ], 16, v10));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhPath.vue.mjs
-var f31 = ["width", "height", "fill", "transform"];
+var f32 = ["width", "height", "fill", "transform"];
 var Z24 = { key: 0 };
-var w38 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,164a36.07,36.07,0,0,0-33.94,24H72a28,28,0,0,1,0-56h96a44,44,0,0,0,0-88H72a12,12,0,0,0,0,24h96a20,20,0,0,1,0,40H72a52,52,0,0,0,0,104h94.06A36,36,0,1,0,200,164Zm0,48a12,12,0,1,1,12-12A12,12,0,0,1,200,212Z" }, null, -1);
+var w39 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,164a36.07,36.07,0,0,0-33.94,24H72a28,28,0,0,1,0-56h96a44,44,0,0,0,0-88H72a12,12,0,0,0,0,24h96a20,20,0,0,1,0,40H72a52,52,0,0,0,0,104h94.06A36,36,0,1,0,200,164Zm0,48a12,12,0,1,1,12-12A12,12,0,0,1,200,212Z" }, null, -1);
 var A23 = [
-  w38
+  w39
 ];
-var M31 = { key: 1 };
-var k38 = /* @__PURE__ */ createBaseVNode("path", {
+var M32 = { key: 1 };
+var k39 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M224,200a24,24,0,1,1-24-24A24,24,0,0,1,224,200Z",
   opacity: "0.2"
 }, null, -1);
-var x38 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,168a32.06,32.06,0,0,0-31,24H72a32,32,0,0,1,0-64h96a40,40,0,0,0,0-80H72a8,8,0,0,0,0,16h96a24,24,0,0,1,0,48H72a48,48,0,0,0,0,96h97a32,32,0,1,0,31-40Zm0,48a16,16,0,1,1,16-16A16,16,0,0,1,200,216Z" }, null, -1);
-var S38 = [
-  k38,
-  x38
+var x39 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,168a32.06,32.06,0,0,0-31,24H72a32,32,0,0,1,0-64h96a40,40,0,0,0,0-80H72a8,8,0,0,0,0,16h96a24,24,0,0,1,0,48H72a48,48,0,0,0,0,96h97a32,32,0,1,0,31-40Zm0,48a16,16,0,1,1,16-16A16,16,0,0,1,200,216Z" }, null, -1);
+var S39 = [
+  k39,
+  x39
 ];
-var z38 = { key: 2 };
-var C33 = /* @__PURE__ */ createBaseVNode("path", { d: "M228,200a28,28,0,0,1-54.83,8H72a48,48,0,0,1,0-96h96a24,24,0,0,0,0-48H72a8,8,0,0,1,0-16h96a40,40,0,0,1,0,80H72a32,32,0,0,0,0,64H173.17A28,28,0,0,1,228,200Z" }, null, -1);
-var B38 = [
-  C33
+var z39 = { key: 2 };
+var C34 = /* @__PURE__ */ createBaseVNode("path", { d: "M228,200a28,28,0,0,1-54.83,8H72a48,48,0,0,1,0-96h96a24,24,0,0,0,0-48H72a8,8,0,0,1,0-16h96a40,40,0,0,1,0,80H72a32,32,0,0,0,0,64H173.17A28,28,0,0,1,228,200Z" }, null, -1);
+var B39 = [
+  C34
 ];
-var N38 = { key: 3 };
-var P38 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,170a30.05,30.05,0,0,0-29.4,24H72a34,34,0,0,1,0-68h96a38,38,0,0,0,0-76H72a6,6,0,0,0,0,12h96a26,26,0,0,1,0,52H72a46,46,0,0,0,0,92h98.6A30,30,0,1,0,200,170Zm0,48a18,18,0,1,1,18-18A18,18,0,0,1,200,218Z" }, null, -1);
-var b38 = [
-  P38
+var N39 = { key: 3 };
+var P39 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,170a30.05,30.05,0,0,0-29.4,24H72a34,34,0,0,1,0-68h96a38,38,0,0,0,0-76H72a6,6,0,0,0,0,12h96a26,26,0,0,1,0,52H72a46,46,0,0,0,0,92h98.6A30,30,0,1,0,200,170Zm0,48a18,18,0,1,1,18-18A18,18,0,0,1,200,218Z" }, null, -1);
+var b39 = [
+  P39
 ];
-var E38 = { key: 4 };
+var E39 = { key: 4 };
 var V26 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,168a32.06,32.06,0,0,0-31,24H72a32,32,0,0,1,0-64h96a40,40,0,0,0,0-80H72a8,8,0,0,0,0,16h96a24,24,0,0,1,0,48H72a48,48,0,0,0,0,96h97a32,32,0,1,0,31-40Zm0,48a16,16,0,1,1,16-16A16,16,0,0,1,200,216Z" }, null, -1);
-var W38 = [
+var W39 = [
   V26
 ];
-var $38 = { key: 5 };
-var j38 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,172a28,28,0,0,0-27.71,24H72a36,36,0,0,1,0-72h96a36,36,0,0,0,0-72H72a4,4,0,0,0,0,8h96a28,28,0,0,1,0,56H72a44,44,0,0,0,0,88H172.29A28,28,0,1,0,200,172Zm0,48a20,20,0,1,1,20-20A20,20,0,0,1,200,220Z" }, null, -1);
-var q28 = [
-  j38
+var $39 = { key: 5 };
+var j39 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,172a28,28,0,0,0-27.71,24H72a36,36,0,0,1,0-72h96a36,36,0,0,0,0-72H72a4,4,0,0,0,0,8h96a28,28,0,0,1,0,56H72a44,44,0,0,0,0,88H172.29A28,28,0,1,0,200,172Zm0,48a20,20,0,1,1,20-20A20,20,0,0,1,200,220Z" }, null, -1);
+var q29 = [
+  j39
 ];
 var D24 = {
   name: "PhPath"
@@ -32994,53 +33123,53 @@ var I14 = /* @__PURE__ */ defineComponent({
       transform: m.value
     }, l.$attrs), [
       renderSlot(l.$slots, "default"),
-      a.value === "bold" ? (openBlock(), createElementBlock("g", Z24, A23)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", M31, S38)) : a.value === "fill" ? (openBlock(), createElementBlock("g", z38, B38)) : a.value === "light" ? (openBlock(), createElementBlock("g", N38, b38)) : a.value === "regular" ? (openBlock(), createElementBlock("g", E38, W38)) : a.value === "thin" ? (openBlock(), createElementBlock("g", $38, q28)) : createCommentVNode("", true)
-    ], 16, f31));
+      a.value === "bold" ? (openBlock(), createElementBlock("g", Z24, A23)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", M32, S39)) : a.value === "fill" ? (openBlock(), createElementBlock("g", z39, B39)) : a.value === "light" ? (openBlock(), createElementBlock("g", N39, b39)) : a.value === "regular" ? (openBlock(), createElementBlock("g", E39, W39)) : a.value === "thin" ? (openBlock(), createElementBlock("g", $39, q29)) : createCommentVNode("", true)
+    ], 16, f32));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhPencilSimple.vue.mjs
-var v10 = ["width", "height", "fill", "transform"];
-var y23 = { key: 0 };
+var v11 = ["width", "height", "fill", "transform"];
+var y24 = { key: 0 };
 var V27 = /* @__PURE__ */ createBaseVNode("path", { d: "M230.14,70.54,185.46,25.85a20,20,0,0,0-28.29,0L33.86,149.17A19.85,19.85,0,0,0,28,163.31V208a20,20,0,0,0,20,20H92.69a19.86,19.86,0,0,0,14.14-5.86L230.14,98.82a20,20,0,0,0,0-28.28ZM91,204H52V165l84-84,39,39ZM192,103,153,64l18.34-18.34,39,39Z" }, null, -1);
-var f32 = [
+var f33 = [
   V27
 ];
-var H20 = { key: 1 };
-var w39 = /* @__PURE__ */ createBaseVNode("path", {
+var H21 = { key: 1 };
+var w40 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M221.66,90.34,192,120,136,64l29.66-29.66a8,8,0,0,1,11.31,0L221.66,79A8,8,0,0,1,221.66,90.34Z",
   opacity: "0.2"
 }, null, -1);
 var A24 = /* @__PURE__ */ createBaseVNode("path", { d: "M227.31,73.37,182.63,28.68a16,16,0,0,0-22.63,0L36.69,152A15.86,15.86,0,0,0,32,163.31V208a16,16,0,0,0,16,16H92.69A15.86,15.86,0,0,0,104,219.31L227.31,96a16,16,0,0,0,0-22.63ZM92.69,208H48V163.31l88-88L180.69,120ZM192,108.68,147.31,64l24-24L216,84.68Z" }, null, -1);
-var k39 = [
-  w39,
+var k40 = [
+  w40,
   A24
 ];
-var S39 = { key: 2 };
-var x39 = /* @__PURE__ */ createBaseVNode("path", { d: "M227.31,73.37,182.63,28.68a16,16,0,0,0-22.63,0L36.69,152A15.86,15.86,0,0,0,32,163.31V208a16,16,0,0,0,16,16H92.69A15.86,15.86,0,0,0,104,219.31L227.31,96a16,16,0,0,0,0-22.63ZM192,108.68,147.31,64l24-24L216,84.68Z" }, null, -1);
-var z39 = [
-  x39
+var S40 = { key: 2 };
+var x40 = /* @__PURE__ */ createBaseVNode("path", { d: "M227.31,73.37,182.63,28.68a16,16,0,0,0-22.63,0L36.69,152A15.86,15.86,0,0,0,32,163.31V208a16,16,0,0,0,16,16H92.69A15.86,15.86,0,0,0,104,219.31L227.31,96a16,16,0,0,0,0-22.63ZM192,108.68,147.31,64l24-24L216,84.68Z" }, null, -1);
+var z40 = [
+  x40
 ];
-var C34 = { key: 3 };
-var B39 = /* @__PURE__ */ createBaseVNode("path", { d: "M225.9,74.78,181.21,30.09a14,14,0,0,0-19.8,0L38.1,153.41a13.94,13.94,0,0,0-4.1,9.9V208a14,14,0,0,0,14,14H92.69a13.94,13.94,0,0,0,9.9-4.1L225.9,94.58a14,14,0,0,0,0-19.8ZM94.1,209.41a2,2,0,0,1-1.41.59H48a2,2,0,0,1-2-2V163.31a2,2,0,0,1,.59-1.41L136,72.48,183.51,120ZM217.41,86.1,192,111.51,144.49,64,169.9,38.58a2,2,0,0,1,2.83,0l44.68,44.69a2,2,0,0,1,0,2.83Z" }, null, -1);
-var N39 = [
-  B39
+var C35 = { key: 3 };
+var B40 = /* @__PURE__ */ createBaseVNode("path", { d: "M225.9,74.78,181.21,30.09a14,14,0,0,0-19.8,0L38.1,153.41a13.94,13.94,0,0,0-4.1,9.9V208a14,14,0,0,0,14,14H92.69a13.94,13.94,0,0,0,9.9-4.1L225.9,94.58a14,14,0,0,0,0-19.8ZM94.1,209.41a2,2,0,0,1-1.41.59H48a2,2,0,0,1-2-2V163.31a2,2,0,0,1,.59-1.41L136,72.48,183.51,120ZM217.41,86.1,192,111.51,144.49,64,169.9,38.58a2,2,0,0,1,2.83,0l44.68,44.69a2,2,0,0,1,0,2.83Z" }, null, -1);
+var N40 = [
+  B40
 ];
-var P39 = { key: 4 };
-var b39 = /* @__PURE__ */ createBaseVNode("path", { d: "M227.31,73.37,182.63,28.68a16,16,0,0,0-22.63,0L36.69,152A15.86,15.86,0,0,0,32,163.31V208a16,16,0,0,0,16,16H92.69A15.86,15.86,0,0,0,104,219.31L227.31,96a16,16,0,0,0,0-22.63ZM92.69,208H48V163.31l88-88L180.69,120ZM192,108.68,147.31,64l24-24L216,84.68Z" }, null, -1);
-var E39 = [
-  b39
+var P40 = { key: 4 };
+var b40 = /* @__PURE__ */ createBaseVNode("path", { d: "M227.31,73.37,182.63,28.68a16,16,0,0,0-22.63,0L36.69,152A15.86,15.86,0,0,0,32,163.31V208a16,16,0,0,0,16,16H92.69A15.86,15.86,0,0,0,104,219.31L227.31,96a16,16,0,0,0,0-22.63ZM92.69,208H48V163.31l88-88L180.69,120ZM192,108.68,147.31,64l24-24L216,84.68Z" }, null, -1);
+var E40 = [
+  b40
 ];
-var W39 = { key: 5 };
-var $39 = /* @__PURE__ */ createBaseVNode("path", { d: "M224.49,76.2,179.8,31.51a12,12,0,0,0-17,0L133.17,61.17h0L39.52,154.83A11.9,11.9,0,0,0,36,163.31V208a12,12,0,0,0,12,12H92.69a12,12,0,0,0,8.48-3.51L224.48,93.17a12,12,0,0,0,0-17Zm-129,134.63A4,4,0,0,1,92.69,212H48a4,4,0,0,1-4-4V163.31a4,4,0,0,1,1.17-2.83L136,69.65,186.34,120ZM218.83,87.51,192,114.34,141.66,64l26.82-26.83a4,4,0,0,1,5.66,0l44.69,44.68a4,4,0,0,1,0,5.66Z" }, null, -1);
-var j39 = [
-  $39
+var W40 = { key: 5 };
+var $40 = /* @__PURE__ */ createBaseVNode("path", { d: "M224.49,76.2,179.8,31.51a12,12,0,0,0-17,0L133.17,61.17h0L39.52,154.83A11.9,11.9,0,0,0,36,163.31V208a12,12,0,0,0,12,12H92.69a12,12,0,0,0,8.48-3.51L224.48,93.17a12,12,0,0,0,0-17Zm-129,134.63A4,4,0,0,1,92.69,212H48a4,4,0,0,1-4-4V163.31a4,4,0,0,1,1.17-2.83L136,69.65,186.34,120ZM218.83,87.51,192,114.34,141.66,64l26.82-26.83a4,4,0,0,1,5.66,0l44.69,44.68a4,4,0,0,1,0,5.66Z" }, null, -1);
+var j40 = [
+  $40
 ];
-var q29 = {
+var q30 = {
   name: "PhPencilSimple"
 };
-var G16 = /* @__PURE__ */ defineComponent({
-  ...q29,
+var G17 = /* @__PURE__ */ defineComponent({
+  ...q30,
   props: {
     weight: {
       type: String
@@ -33066,47 +33195,47 @@ var G16 = /* @__PURE__ */ defineComponent({
       transform: g.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", y23, f32)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", H20, k39)) : s.value === "fill" ? (openBlock(), createElementBlock("g", S39, z39)) : s.value === "light" ? (openBlock(), createElementBlock("g", C34, N39)) : s.value === "regular" ? (openBlock(), createElementBlock("g", P39, E39)) : s.value === "thin" ? (openBlock(), createElementBlock("g", W39, j39)) : createCommentVNode("", true)
-    ], 16, v10));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", y24, f33)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", H21, k40)) : s.value === "fill" ? (openBlock(), createElementBlock("g", S40, z40)) : s.value === "light" ? (openBlock(), createElementBlock("g", C35, N40)) : s.value === "regular" ? (openBlock(), createElementBlock("g", P40, E40)) : s.value === "thin" ? (openBlock(), createElementBlock("g", W40, j40)) : createCommentVNode("", true)
+    ], 16, v11));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhPlus.vue.mjs
-var y24 = ["width", "height", "fill", "transform"];
-var f33 = { key: 0 };
-var w40 = /* @__PURE__ */ createBaseVNode("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }, null, -1);
-var M32 = [
-  w40
+var y25 = ["width", "height", "fill", "transform"];
+var f34 = { key: 0 };
+var w41 = /* @__PURE__ */ createBaseVNode("path", { d: "M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z" }, null, -1);
+var M33 = [
+  w41
 ];
 var A25 = { key: 1 };
-var k40 = /* @__PURE__ */ createBaseVNode("path", {
+var k41 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M216,56V200a16,16,0,0,1-16,16H56a16,16,0,0,1-16-16V56A16,16,0,0,1,56,40H200A16,16,0,0,1,216,56Z",
   opacity: "0.2"
 }, null, -1);
 var Z25 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,128a8,8,0,0,1-8,8H136v80a8,8,0,0,1-16,0V136H40a8,8,0,0,1,0-16h80V40a8,8,0,0,1,16,0v80h80A8,8,0,0,1,224,128Z" }, null, -1);
-var x40 = [
-  k40,
+var x41 = [
+  k41,
   Z25
 ];
-var S40 = { key: 2 };
-var z40 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM184,136H136v48a8,8,0,0,1-16,0V136H72a8,8,0,0,1,0-16h48V72a8,8,0,0,1,16,0v48h48a8,8,0,0,1,0,16Z" }, null, -1);
-var C35 = [
-  z40
+var S41 = { key: 2 };
+var z41 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM184,136H136v48a8,8,0,0,1-16,0V136H72a8,8,0,0,1,0-16h48V72a8,8,0,0,1,16,0v48h48a8,8,0,0,1,0,16Z" }, null, -1);
+var C36 = [
+  z41
 ];
-var B40 = { key: 3 };
-var N40 = /* @__PURE__ */ createBaseVNode("path", { d: "M222,128a6,6,0,0,1-6,6H134v82a6,6,0,0,1-12,0V134H40a6,6,0,0,1,0-12h82V40a6,6,0,0,1,12,0v82h82A6,6,0,0,1,222,128Z" }, null, -1);
-var P40 = [
-  N40
+var B41 = { key: 3 };
+var N41 = /* @__PURE__ */ createBaseVNode("path", { d: "M222,128a6,6,0,0,1-6,6H134v82a6,6,0,0,1-12,0V134H40a6,6,0,0,1,0-12h82V40a6,6,0,0,1,12,0v82h82A6,6,0,0,1,222,128Z" }, null, -1);
+var P41 = [
+  N41
 ];
-var b40 = { key: 4 };
-var E40 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,128a8,8,0,0,1-8,8H136v80a8,8,0,0,1-16,0V136H40a8,8,0,0,1,0-16h80V40a8,8,0,0,1,16,0v80h80A8,8,0,0,1,224,128Z" }, null, -1);
-var W40 = [
-  E40
+var b41 = { key: 4 };
+var E41 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,128a8,8,0,0,1-8,8H136v80a8,8,0,0,1-16,0V136H40a8,8,0,0,1,0-16h80V40a8,8,0,0,1,16,0v80h80A8,8,0,0,1,224,128Z" }, null, -1);
+var W41 = [
+  E41
 ];
-var $40 = { key: 5 };
-var j40 = /* @__PURE__ */ createBaseVNode("path", { d: "M220,128a4,4,0,0,1-4,4H132v84a4,4,0,0,1-8,0V132H40a4,4,0,0,1,0-8h84V40a4,4,0,0,1,8,0v84h84A4,4,0,0,1,220,128Z" }, null, -1);
-var q30 = [
-  j40
+var $41 = { key: 5 };
+var j41 = /* @__PURE__ */ createBaseVNode("path", { d: "M220,128a4,4,0,0,1-4,4H132v84a4,4,0,0,1-8,0V132H40a4,4,0,0,1,0-8h84V40a4,4,0,0,1,8,0v84h84A4,4,0,0,1,220,128Z" }, null, -1);
+var q31 = [
+  j41
 ];
 var D25 = {
   name: "PhPlus"
@@ -33138,52 +33267,52 @@ var I15 = /* @__PURE__ */ defineComponent({
       transform: v.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", f33, M32)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", A25, x40)) : s.value === "fill" ? (openBlock(), createElementBlock("g", S40, C35)) : s.value === "light" ? (openBlock(), createElementBlock("g", B40, P40)) : s.value === "regular" ? (openBlock(), createElementBlock("g", b40, W40)) : s.value === "thin" ? (openBlock(), createElementBlock("g", $40, q30)) : createCommentVNode("", true)
-    ], 16, y24));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", f34, M33)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", A25, x41)) : s.value === "fill" ? (openBlock(), createElementBlock("g", S41, C36)) : s.value === "light" ? (openBlock(), createElementBlock("g", B41, P41)) : s.value === "regular" ? (openBlock(), createElementBlock("g", b41, W41)) : s.value === "thin" ? (openBlock(), createElementBlock("g", $41, q31)) : createCommentVNode("", true)
+    ], 16, y25));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhProhibit.vue.mjs
-var y25 = ["width", "height", "fill", "transform"];
-var M33 = { key: 0 };
-var f34 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,20A108,108,0,1,0,236,128,108.12,108.12,0,0,0,128,20Zm84,108a83.6,83.6,0,0,1-16.75,50.28L77.72,60.75A84,84,0,0,1,212,128ZM44,128A83.6,83.6,0,0,1,60.75,77.72L178.28,195.25A84,84,0,0,1,44,128Z" }, null, -1);
+var y26 = ["width", "height", "fill", "transform"];
+var M34 = { key: 0 };
+var f35 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,20A108,108,0,1,0,236,128,108.12,108.12,0,0,0,128,20Zm84,108a83.6,83.6,0,0,1-16.75,50.28L77.72,60.75A84,84,0,0,1,212,128ZM44,128A83.6,83.6,0,0,1,60.75,77.72L178.28,195.25A84,84,0,0,1,44,128Z" }, null, -1);
 var L20 = [
-  f34
+  f35
 ];
-var w41 = { key: 1 };
-var k41 = /* @__PURE__ */ createBaseVNode("path", {
+var w42 = { key: 1 };
+var k42 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M224,128a96,96,0,1,1-96-96A96,96,0,0,1,224,128Z",
   opacity: "0.2"
 }, null, -1);
-var x41 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm88,104a87.56,87.56,0,0,1-20.41,56.28L71.72,60.4A88,88,0,0,1,216,128ZM40,128A87.56,87.56,0,0,1,60.41,71.72L184.28,195.6A88,88,0,0,1,40,128Z" }, null, -1);
-var S41 = [
-  k41,
-  x41
+var x42 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm88,104a87.56,87.56,0,0,1-20.41,56.28L71.72,60.4A88,88,0,0,1,216,128ZM40,128A87.56,87.56,0,0,1,60.41,71.72L184.28,195.6A88,88,0,0,1,40,128Z" }, null, -1);
+var S42 = [
+  k42,
+  x42
 ];
-var z41 = { key: 2 };
-var C36 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,128a71.69,71.69,0,0,1-15.78,44.91L83.09,71.78A71.95,71.95,0,0,1,200,128ZM56,128a71.95,71.95,0,0,0,116.91,56.22L71.78,83.09A71.69,71.69,0,0,0,56,128Zm180,0A108,108,0,1,1,128,20,108.12,108.12,0,0,1,236,128Zm-20,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z" }, null, -1);
-var B41 = [
-  C36
+var z42 = { key: 2 };
+var C37 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,128a71.69,71.69,0,0,1-15.78,44.91L83.09,71.78A71.95,71.95,0,0,1,200,128ZM56,128a71.95,71.95,0,0,0,116.91,56.22L71.78,83.09A71.69,71.69,0,0,0,56,128Zm180,0A108,108,0,1,1,128,20,108.12,108.12,0,0,1,236,128Zm-20,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z" }, null, -1);
+var B42 = [
+  C37
 ];
-var b41 = { key: 3 };
-var N41 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,26A102,102,0,1,0,230,128,102.12,102.12,0,0,0,128,26Zm90,102a89.6,89.6,0,0,1-22.29,59.22L68.78,60.29A89.95,89.95,0,0,1,218,128ZM38,128A89.6,89.6,0,0,1,60.29,68.78L187.22,195.71A89.95,89.95,0,0,1,38,128Z" }, null, -1);
-var P41 = [
-  N41
+var b42 = { key: 3 };
+var N42 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,26A102,102,0,1,0,230,128,102.12,102.12,0,0,0,128,26Zm90,102a89.6,89.6,0,0,1-22.29,59.22L68.78,60.29A89.95,89.95,0,0,1,218,128ZM38,128A89.6,89.6,0,0,1,60.29,68.78L187.22,195.71A89.95,89.95,0,0,1,38,128Z" }, null, -1);
+var P42 = [
+  N42
 ];
-var E41 = { key: 4 };
+var E42 = { key: 4 };
 var V28 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm88,104a87.56,87.56,0,0,1-20.41,56.28L71.72,60.4A88,88,0,0,1,216,128ZM40,128A87.56,87.56,0,0,1,60.41,71.72L184.28,195.6A88,88,0,0,1,40,128Z" }, null, -1);
-var W41 = [
+var W42 = [
   V28
 ];
-var $41 = { key: 5 };
-var j41 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,28A100,100,0,1,0,228,128,100.11,100.11,0,0,0,128,28Zm92,100a91.67,91.67,0,0,1-24.21,62.13L65.87,60.21A92,92,0,0,1,220,128ZM36,128A91.67,91.67,0,0,1,60.21,65.87L190.13,195.79A92,92,0,0,1,36,128Z" }, null, -1);
-var q31 = [
-  j41
+var $42 = { key: 5 };
+var j42 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,28A100,100,0,1,0,228,128,100.11,100.11,0,0,0,128,28Zm92,100a91.67,91.67,0,0,1-24.21,62.13L65.87,60.21A92,92,0,0,1,220,128ZM36,128A91.67,91.67,0,0,1,60.21,65.87L190.13,195.79A92,92,0,0,1,36,128Z" }, null, -1);
+var q32 = [
+  j42
 ];
 var D26 = {
   name: "PhProhibit"
 };
-var H21 = /* @__PURE__ */ defineComponent({
+var H22 = /* @__PURE__ */ defineComponent({
   ...D26,
   props: {
     weight: {
@@ -33210,53 +33339,53 @@ var H21 = /* @__PURE__ */ defineComponent({
       transform: m.value
     }, d.$attrs), [
       renderSlot(d.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", M33, L20)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", w41, S41)) : s.value === "fill" ? (openBlock(), createElementBlock("g", z41, B41)) : s.value === "light" ? (openBlock(), createElementBlock("g", b41, P41)) : s.value === "regular" ? (openBlock(), createElementBlock("g", E41, W41)) : s.value === "thin" ? (openBlock(), createElementBlock("g", $41, q31)) : createCommentVNode("", true)
-    ], 16, y25));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", M34, L20)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", w42, S42)) : s.value === "fill" ? (openBlock(), createElementBlock("g", z42, B42)) : s.value === "light" ? (openBlock(), createElementBlock("g", b42, P42)) : s.value === "regular" ? (openBlock(), createElementBlock("g", E42, W42)) : s.value === "thin" ? (openBlock(), createElementBlock("g", $42, q32)) : createCommentVNode("", true)
+    ], 16, y26));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhRows.vue.mjs
-var g4 = ["width", "height", "fill", "transform"];
+var g5 = ["width", "height", "fill", "transform"];
 var A26 = { key: 0 };
-var y26 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,136H48a20,20,0,0,0-20,20v36a20,20,0,0,0,20,20H208a20,20,0,0,0,20-20V156A20,20,0,0,0,208,136Zm-4,52H52V160H204Zm4-144H48A20,20,0,0,0,28,64v36a20,20,0,0,0,20,20H208a20,20,0,0,0,20-20V64A20,20,0,0,0,208,44Zm-4,52H52V68H204Z" }, null, -1);
-var f35 = [
-  y26
+var y27 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,136H48a20,20,0,0,0-20,20v36a20,20,0,0,0,20,20H208a20,20,0,0,0,20-20V156A20,20,0,0,0,208,136Zm-4,52H52V160H204Zm4-144H48A20,20,0,0,0,28,64v36a20,20,0,0,0,20,20H208a20,20,0,0,0,20-20V64A20,20,0,0,0,208,44Zm-4,52H52V68H204Z" }, null, -1);
+var f36 = [
+  y27
 ];
-var M34 = { key: 1 };
-var w42 = /* @__PURE__ */ createBaseVNode("path", {
+var M35 = { key: 1 };
+var w43 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M216,152v40a8,8,0,0,1-8,8H48a8,8,0,0,1-8-8V152a8,8,0,0,1,8-8H208A8,8,0,0,1,216,152Zm-8-96H48a8,8,0,0,0-8,8v40a8,8,0,0,0,8,8H208a8,8,0,0,0,8-8V64A8,8,0,0,0,208,56Z",
   opacity: "0.2"
 }, null, -1);
-var k42 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,136H48a16,16,0,0,0-16,16v40a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V152A16,16,0,0,0,208,136Zm0,56H48V152H208v40Zm0-144H48A16,16,0,0,0,32,64v40a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V64A16,16,0,0,0,208,48Zm0,56H48V64H208v40Z" }, null, -1);
-var x42 = [
-  w42,
-  k42
+var k43 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,136H48a16,16,0,0,0-16,16v40a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V152A16,16,0,0,0,208,136Zm0,56H48V152H208v40Zm0-144H48A16,16,0,0,0,32,64v40a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V64A16,16,0,0,0,208,48Zm0,56H48V64H208v40Z" }, null, -1);
+var x43 = [
+  w43,
+  k43
 ];
-var S42 = { key: 2 };
-var z42 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,152v40a16,16,0,0,1-16,16H48a16,16,0,0,1-16-16V152a16,16,0,0,1,16-16H208A16,16,0,0,1,224,152ZM208,48H48A16,16,0,0,0,32,64v40a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V64A16,16,0,0,0,208,48Z" }, null, -1);
-var C37 = [
-  z42
+var S43 = { key: 2 };
+var z43 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,152v40a16,16,0,0,1-16,16H48a16,16,0,0,1-16-16V152a16,16,0,0,1,16-16H208A16,16,0,0,1,224,152ZM208,48H48A16,16,0,0,0,32,64v40a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V64A16,16,0,0,0,208,48Z" }, null, -1);
+var C38 = [
+  z43
 ];
-var B42 = { key: 3 };
-var N42 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,138H48a14,14,0,0,0-14,14v40a14,14,0,0,0,14,14H208a14,14,0,0,0,14-14V152A14,14,0,0,0,208,138Zm2,54a2,2,0,0,1-2,2H48a2,2,0,0,1-2-2V152a2,2,0,0,1,2-2H208a2,2,0,0,1,2,2ZM208,50H48A14,14,0,0,0,34,64v40a14,14,0,0,0,14,14H208a14,14,0,0,0,14-14V64A14,14,0,0,0,208,50Zm2,54a2,2,0,0,1-2,2H48a2,2,0,0,1-2-2V64a2,2,0,0,1,2-2H208a2,2,0,0,1,2,2Z" }, null, -1);
-var b42 = [
-  N42
+var B43 = { key: 3 };
+var N43 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,138H48a14,14,0,0,0-14,14v40a14,14,0,0,0,14,14H208a14,14,0,0,0,14-14V152A14,14,0,0,0,208,138Zm2,54a2,2,0,0,1-2,2H48a2,2,0,0,1-2-2V152a2,2,0,0,1,2-2H208a2,2,0,0,1,2,2ZM208,50H48A14,14,0,0,0,34,64v40a14,14,0,0,0,14,14H208a14,14,0,0,0,14-14V64A14,14,0,0,0,208,50Zm2,54a2,2,0,0,1-2,2H48a2,2,0,0,1-2-2V64a2,2,0,0,1,2-2H208a2,2,0,0,1,2,2Z" }, null, -1);
+var b43 = [
+  N43
 ];
-var E42 = { key: 4 };
-var P42 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,136H48a16,16,0,0,0-16,16v40a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V152A16,16,0,0,0,208,136Zm0,56H48V152H208v40Zm0-144H48A16,16,0,0,0,32,64v40a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V64A16,16,0,0,0,208,48Zm0,56H48V64H208v40Z" }, null, -1);
-var W42 = [
-  P42
+var E43 = { key: 4 };
+var P43 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,136H48a16,16,0,0,0-16,16v40a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V152A16,16,0,0,0,208,136Zm0,56H48V152H208v40Zm0-144H48A16,16,0,0,0,32,64v40a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V64A16,16,0,0,0,208,48Zm0,56H48V64H208v40Z" }, null, -1);
+var W43 = [
+  P43
 ];
-var $42 = { key: 5 };
-var j42 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,140H48a12,12,0,0,0-12,12v40a12,12,0,0,0,12,12H208a12,12,0,0,0,12-12V152A12,12,0,0,0,208,140Zm4,52a4,4,0,0,1-4,4H48a4,4,0,0,1-4-4V152a4,4,0,0,1,4-4H208a4,4,0,0,1,4,4ZM208,52H48A12,12,0,0,0,36,64v40a12,12,0,0,0,12,12H208a12,12,0,0,0,12-12V64A12,12,0,0,0,208,52Zm4,52a4,4,0,0,1-4,4H48a4,4,0,0,1-4-4V64a4,4,0,0,1,4-4H208a4,4,0,0,1,4,4Z" }, null, -1);
+var $43 = { key: 5 };
+var j43 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,140H48a12,12,0,0,0-12,12v40a12,12,0,0,0,12,12H208a12,12,0,0,0,12-12V152A12,12,0,0,0,208,140Zm4,52a4,4,0,0,1-4,4H48a4,4,0,0,1-4-4V152a4,4,0,0,1,4-4H208a4,4,0,0,1,4,4ZM208,52H48A12,12,0,0,0,36,64v40a12,12,0,0,0,12,12H208a12,12,0,0,0,12-12V64A12,12,0,0,0,208,52Zm4,52a4,4,0,0,1-4,4H48a4,4,0,0,1-4-4V64a4,4,0,0,1,4-4H208a4,4,0,0,1,4,4Z" }, null, -1);
 var R4 = [
-  j42
+  j43
 ];
-var q32 = {
+var q33 = {
   name: "PhRows"
 };
-var G17 = /* @__PURE__ */ defineComponent({
-  ...q32,
+var G18 = /* @__PURE__ */ defineComponent({
+  ...q33,
   props: {
     weight: {
       type: String
@@ -33282,53 +33411,53 @@ var G17 = /* @__PURE__ */ defineComponent({
       transform: v.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      a.value === "bold" ? (openBlock(), createElementBlock("g", A26, f35)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", M34, x42)) : a.value === "fill" ? (openBlock(), createElementBlock("g", S42, C37)) : a.value === "light" ? (openBlock(), createElementBlock("g", B42, b42)) : a.value === "regular" ? (openBlock(), createElementBlock("g", E42, W42)) : a.value === "thin" ? (openBlock(), createElementBlock("g", $42, R4)) : createCommentVNode("", true)
-    ], 16, g4));
+      a.value === "bold" ? (openBlock(), createElementBlock("g", A26, f36)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", M35, x43)) : a.value === "fill" ? (openBlock(), createElementBlock("g", S43, C38)) : a.value === "light" ? (openBlock(), createElementBlock("g", B43, b43)) : a.value === "regular" ? (openBlock(), createElementBlock("g", E43, W43)) : a.value === "thin" ? (openBlock(), createElementBlock("g", $43, R4)) : createCommentVNode("", true)
+    ], 16, g5));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhShieldCheck.vue.mjs
-var y27 = ["width", "height", "fill", "transform"];
-var C38 = { key: 0 };
-var M35 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,36H48A20,20,0,0,0,28,56v56c0,54.29,26.32,87.22,48.4,105.29,23.71,19.39,47.44,26,48.44,26.29a12.1,12.1,0,0,0,6.32,0c1-.28,24.73-6.9,48.44-26.29,22.08-18.07,48.4-51,48.4-105.29V56A20,20,0,0,0,208,36Zm-4,76c0,35.71-13.09,64.69-38.91,86.15A126.28,126.28,0,0,1,128,219.38a126.14,126.14,0,0,1-37.09-21.23C65.09,176.69,52,147.71,52,112V60H204ZM79.51,144.49a12,12,0,1,1,17-17L112,143l47.51-47.52a12,12,0,0,1,17,17l-56,56a12,12,0,0,1-17,0Z" }, null, -1);
-var f36 = [
-  M35
+var y28 = ["width", "height", "fill", "transform"];
+var C39 = { key: 0 };
+var M36 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,36H48A20,20,0,0,0,28,56v56c0,54.29,26.32,87.22,48.4,105.29,23.71,19.39,47.44,26,48.44,26.29a12.1,12.1,0,0,0,6.32,0c1-.28,24.73-6.9,48.44-26.29,22.08-18.07,48.4-51,48.4-105.29V56A20,20,0,0,0,208,36Zm-4,76c0,35.71-13.09,64.69-38.91,86.15A126.28,126.28,0,0,1,128,219.38a126.14,126.14,0,0,1-37.09-21.23C65.09,176.69,52,147.71,52,112V60H204ZM79.51,144.49a12,12,0,1,1,17-17L112,143l47.51-47.52a12,12,0,0,1,17,17l-56,56a12,12,0,0,1-17,0Z" }, null, -1);
+var f37 = [
+  M36
 ];
 var V29 = { key: 1 };
-var w43 = /* @__PURE__ */ createBaseVNode("path", {
+var w44 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M216,56v56c0,96-88,120-88,120S40,208,40,112V56a8,8,0,0,1,8-8H208A8,8,0,0,1,216,56Z",
   opacity: "0.2"
 }, null, -1);
-var H22 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,40H48A16,16,0,0,0,32,56v56c0,52.72,25.52,84.67,46.93,102.19,23.06,18.86,46,25.26,47,25.53a8,8,0,0,0,4.2,0c1-.27,23.91-6.67,47-25.53C198.48,196.67,224,164.72,224,112V56A16,16,0,0,0,208,40Zm0,72c0,37.07-13.66,67.16-40.6,89.42A129.3,129.3,0,0,1,128,223.62a128.25,128.25,0,0,1-38.92-21.81C61.82,179.51,48,149.3,48,112l0-56,160,0ZM82.34,141.66a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35a8,8,0,0,1,11.32,11.32l-56,56a8,8,0,0,1-11.32,0Z" }, null, -1);
-var k43 = [
-  w43,
-  H22
+var H23 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,40H48A16,16,0,0,0,32,56v56c0,52.72,25.52,84.67,46.93,102.19,23.06,18.86,46,25.26,47,25.53a8,8,0,0,0,4.2,0c1-.27,23.91-6.67,47-25.53C198.48,196.67,224,164.72,224,112V56A16,16,0,0,0,208,40Zm0,72c0,37.07-13.66,67.16-40.6,89.42A129.3,129.3,0,0,1,128,223.62a128.25,128.25,0,0,1-38.92-21.81C61.82,179.51,48,149.3,48,112l0-56,160,0ZM82.34,141.66a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35a8,8,0,0,1,11.32,11.32l-56,56a8,8,0,0,1-11.32,0Z" }, null, -1);
+var k44 = [
+  w44,
+  H23
 ];
-var S43 = { key: 2 };
-var x43 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,40H48A16,16,0,0,0,32,56v56c0,52.72,25.52,84.67,46.93,102.19,23.06,18.86,46,25.26,47,25.53a8,8,0,0,0,4.2,0c1-.27,23.91-6.67,47-25.53C198.48,196.67,224,164.72,224,112V56A16,16,0,0,0,208,40Zm-34.32,69.66-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35a8,8,0,0,1,11.32,11.32Z" }, null, -1);
+var S44 = { key: 2 };
+var x44 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,40H48A16,16,0,0,0,32,56v56c0,52.72,25.52,84.67,46.93,102.19,23.06,18.86,46,25.26,47,25.53a8,8,0,0,0,4.2,0c1-.27,23.91-6.67,47-25.53C198.48,196.67,224,164.72,224,112V56A16,16,0,0,0,208,40Zm-34.32,69.66-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35a8,8,0,0,1,11.32,11.32Z" }, null, -1);
 var L21 = [
-  x43
+  x44
 ];
-var z43 = { key: 3 };
-var B43 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,42H48A14,14,0,0,0,34,56v56c0,51.94,25.12,83.4,46.2,100.64,22.73,18.6,45.27,24.89,46.22,25.15a6,6,0,0,0,3.16,0c.95-.26,23.49-6.55,46.22-25.15C196.88,195.4,222,163.94,222,112V56A14,14,0,0,0,208,42Zm2,70c0,37.76-13.94,68.39-41.44,91.06A131.17,131.17,0,0,1,128,225.72a130.94,130.94,0,0,1-40.56-22.66C59.94,180.39,46,149.76,46,112V56a2,2,0,0,1,2-2H208a2,2,0,0,1,2,2ZM172.24,99.76a6,6,0,0,1,0,8.48l-56,56a6,6,0,0,1-8.48,0l-24-24a6,6,0,0,1,8.48-8.48L112,151.51l51.76-51.75A6,6,0,0,1,172.24,99.76Z" }, null, -1);
-var N43 = [
-  B43
+var z44 = { key: 3 };
+var B44 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,42H48A14,14,0,0,0,34,56v56c0,51.94,25.12,83.4,46.2,100.64,22.73,18.6,45.27,24.89,46.22,25.15a6,6,0,0,0,3.16,0c.95-.26,23.49-6.55,46.22-25.15C196.88,195.4,222,163.94,222,112V56A14,14,0,0,0,208,42Zm2,70c0,37.76-13.94,68.39-41.44,91.06A131.17,131.17,0,0,1,128,225.72a130.94,130.94,0,0,1-40.56-22.66C59.94,180.39,46,149.76,46,112V56a2,2,0,0,1,2-2H208a2,2,0,0,1,2,2ZM172.24,99.76a6,6,0,0,1,0,8.48l-56,56a6,6,0,0,1-8.48,0l-24-24a6,6,0,0,1,8.48-8.48L112,151.51l51.76-51.75A6,6,0,0,1,172.24,99.76Z" }, null, -1);
+var N44 = [
+  B44
 ];
-var b43 = { key: 4 };
-var E43 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,40H48A16,16,0,0,0,32,56v56c0,52.72,25.52,84.67,46.93,102.19,23.06,18.86,46,25.26,47,25.53a8,8,0,0,0,4.2,0c1-.27,23.91-6.67,47-25.53C198.48,196.67,224,164.72,224,112V56A16,16,0,0,0,208,40Zm0,72c0,37.07-13.66,67.16-40.6,89.42A129.3,129.3,0,0,1,128,223.62a128.25,128.25,0,0,1-38.92-21.81C61.82,179.51,48,149.3,48,112l0-56,160,0ZM82.34,141.66a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35a8,8,0,0,1,11.32,11.32l-56,56a8,8,0,0,1-11.32,0Z" }, null, -1);
-var P43 = [
-  E43
+var b44 = { key: 4 };
+var E44 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,40H48A16,16,0,0,0,32,56v56c0,52.72,25.52,84.67,46.93,102.19,23.06,18.86,46,25.26,47,25.53a8,8,0,0,0,4.2,0c1-.27,23.91-6.67,47-25.53C198.48,196.67,224,164.72,224,112V56A16,16,0,0,0,208,40Zm0,72c0,37.07-13.66,67.16-40.6,89.42A129.3,129.3,0,0,1,128,223.62a128.25,128.25,0,0,1-38.92-21.81C61.82,179.51,48,149.3,48,112l0-56,160,0ZM82.34,141.66a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35a8,8,0,0,1,11.32,11.32l-56,56a8,8,0,0,1-11.32,0Z" }, null, -1);
+var P44 = [
+  E44
 ];
-var W43 = { key: 5 };
-var $43 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,44H48A12,12,0,0,0,36,56v56c0,51.16,24.73,82.12,45.47,99.1,22.4,18.32,44.55,24.5,45.48,24.76a4,4,0,0,0,2.1,0c.93-.26,23.08-6.44,45.48-24.76,20.74-17,45.47-47.94,45.47-99.1V56A12,12,0,0,0,208,44Zm4,68c0,38.44-14.23,69.63-42.29,92.71A132.45,132.45,0,0,1,128,227.82a132.23,132.23,0,0,1-41.71-23.11C58.23,181.63,44,150.44,44,112V56a4,4,0,0,1,4-4H208a4,4,0,0,1,4,4Zm-41.17-10.83a4,4,0,0,1,0,5.66l-56,56a4,4,0,0,1-5.66,0l-24-24a4,4,0,0,1,5.66-5.66L112,154.34l53.17-53.17A4,4,0,0,1,170.83,101.17Z" }, null, -1);
-var j43 = [
-  $43
+var W44 = { key: 5 };
+var $44 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,44H48A12,12,0,0,0,36,56v56c0,51.16,24.73,82.12,45.47,99.1,22.4,18.32,44.55,24.5,45.48,24.76a4,4,0,0,0,2.1,0c.93-.26,23.08-6.44,45.48-24.76,20.74-17,45.47-47.94,45.47-99.1V56A12,12,0,0,0,208,44Zm4,68c0,38.44-14.23,69.63-42.29,92.71A132.45,132.45,0,0,1,128,227.82a132.23,132.23,0,0,1-41.71-23.11C58.23,181.63,44,150.44,44,112V56a4,4,0,0,1,4-4H208a4,4,0,0,1,4,4Zm-41.17-10.83a4,4,0,0,1,0,5.66l-56,56a4,4,0,0,1-5.66,0l-24-24a4,4,0,0,1,5.66-5.66L112,154.34l53.17-53.17A4,4,0,0,1,170.83,101.17Z" }, null, -1);
+var j44 = [
+  $44
 ];
-var q33 = {
+var q34 = {
   name: "PhShieldCheck"
 };
-var G18 = /* @__PURE__ */ defineComponent({
-  ...q33,
+var G19 = /* @__PURE__ */ defineComponent({
+  ...q34,
   props: {
     weight: {
       type: String
@@ -33354,47 +33483,47 @@ var G18 = /* @__PURE__ */ defineComponent({
       transform: m.value
     }, i.$attrs), [
       renderSlot(i.$slots, "default"),
-      a.value === "bold" ? (openBlock(), createElementBlock("g", C38, f36)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", V29, k43)) : a.value === "fill" ? (openBlock(), createElementBlock("g", S43, L21)) : a.value === "light" ? (openBlock(), createElementBlock("g", z43, N43)) : a.value === "regular" ? (openBlock(), createElementBlock("g", b43, P43)) : a.value === "thin" ? (openBlock(), createElementBlock("g", W43, j43)) : createCommentVNode("", true)
-    ], 16, y27));
+      a.value === "bold" ? (openBlock(), createElementBlock("g", C39, f37)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", V29, k44)) : a.value === "fill" ? (openBlock(), createElementBlock("g", S44, L21)) : a.value === "light" ? (openBlock(), createElementBlock("g", z44, N44)) : a.value === "regular" ? (openBlock(), createElementBlock("g", b44, P44)) : a.value === "thin" ? (openBlock(), createElementBlock("g", W44, j44)) : createCommentVNode("", true)
+    ], 16, y28));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhSlidersHorizontal.vue.mjs
-var y28 = ["width", "height", "fill", "transform"];
+var y29 = ["width", "height", "fill", "transform"];
 var A27 = { key: 0 };
-var M36 = /* @__PURE__ */ createBaseVNode("path", { d: "M40,92H70.06a36,36,0,0,0,67.88,0H216a12,12,0,0,0,0-24H137.94a36,36,0,0,0-67.88,0H40a12,12,0,0,0,0,24Zm64-24A12,12,0,1,1,92,80,12,12,0,0,1,104,68Zm112,96H201.94a36,36,0,0,0-67.88,0H40a12,12,0,0,0,0,24h94.06a36,36,0,0,0,67.88,0H216a12,12,0,0,0,0-24Zm-48,24a12,12,0,1,1,12-12A12,12,0,0,1,168,188Z" }, null, -1);
-var f37 = [
-  M36
+var M37 = /* @__PURE__ */ createBaseVNode("path", { d: "M40,92H70.06a36,36,0,0,0,67.88,0H216a12,12,0,0,0,0-24H137.94a36,36,0,0,0-67.88,0H40a12,12,0,0,0,0,24Zm64-24A12,12,0,1,1,92,80,12,12,0,0,1,104,68Zm112,96H201.94a36,36,0,0,0-67.88,0H40a12,12,0,0,0,0,24h94.06a36,36,0,0,0,67.88,0H216a12,12,0,0,0,0-24Zm-48,24a12,12,0,1,1,12-12A12,12,0,0,1,168,188Z" }, null, -1);
+var f38 = [
+  M37
 ];
-var w44 = { key: 1 };
-var k44 = /* @__PURE__ */ createBaseVNode("path", {
+var w45 = { key: 1 };
+var k45 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M128,80a24,24,0,1,1-24-24A24,24,0,0,1,128,80Zm40,72a24,24,0,1,0,24,24A24,24,0,0,0,168,152Z",
   opacity: "0.2"
 }, null, -1);
-var S44 = /* @__PURE__ */ createBaseVNode("path", { d: "M40,88H73a32,32,0,0,0,62,0h81a8,8,0,0,0,0-16H135a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16Zm64-24A16,16,0,1,1,88,80,16,16,0,0,1,104,64ZM216,168H199a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16h97a32,32,0,0,0,62,0h17a8,8,0,0,0,0-16Zm-48,24a16,16,0,1,1,16-16A16,16,0,0,1,168,192Z" }, null, -1);
-var x44 = [
-  k44,
-  S44
+var S45 = /* @__PURE__ */ createBaseVNode("path", { d: "M40,88H73a32,32,0,0,0,62,0h81a8,8,0,0,0,0-16H135a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16Zm64-24A16,16,0,1,1,88,80,16,16,0,0,1,104,64ZM216,168H199a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16h97a32,32,0,0,0,62,0h17a8,8,0,0,0,0-16Zm-48,24a16,16,0,1,1,16-16A16,16,0,0,1,168,192Z" }, null, -1);
+var x45 = [
+  k45,
+  S45
 ];
-var z44 = { key: 2 };
-var C39 = /* @__PURE__ */ createBaseVNode("path", { d: "M32,80a8,8,0,0,1,8-8H77.17a28,28,0,0,1,53.66,0H216a8,8,0,0,1,0,16H130.83a28,28,0,0,1-53.66,0H40A8,8,0,0,1,32,80Zm184,88H194.83a28,28,0,0,0-53.66,0H40a8,8,0,0,0,0,16H141.17a28,28,0,0,0,53.66,0H216a8,8,0,0,0,0-16Z" }, null, -1);
-var B44 = [
-  C39
+var z45 = { key: 2 };
+var C40 = /* @__PURE__ */ createBaseVNode("path", { d: "M32,80a8,8,0,0,1,8-8H77.17a28,28,0,0,1,53.66,0H216a8,8,0,0,1,0,16H130.83a28,28,0,0,1-53.66,0H40A8,8,0,0,1,32,80Zm184,88H194.83a28,28,0,0,0-53.66,0H40a8,8,0,0,0,0,16H141.17a28,28,0,0,0,53.66,0H216a8,8,0,0,0,0-16Z" }, null, -1);
+var B45 = [
+  C40
 ];
-var N44 = { key: 3 };
-var b44 = /* @__PURE__ */ createBaseVNode("path", { d: "M40,86H74.6a30,30,0,0,0,58.8,0H216a6,6,0,0,0,0-12H133.4a30,30,0,0,0-58.8,0H40a6,6,0,0,0,0,12Zm64-24A18,18,0,1,1,86,80,18,18,0,0,1,104,62ZM216,170H197.4a30,30,0,0,0-58.8,0H40a6,6,0,0,0,0,12h98.6a30,30,0,0,0,58.8,0H216a6,6,0,0,0,0-12Zm-48,24a18,18,0,1,1,18-18A18,18,0,0,1,168,194Z" }, null, -1);
-var E44 = [
-  b44
+var N45 = { key: 3 };
+var b45 = /* @__PURE__ */ createBaseVNode("path", { d: "M40,86H74.6a30,30,0,0,0,58.8,0H216a6,6,0,0,0,0-12H133.4a30,30,0,0,0-58.8,0H40a6,6,0,0,0,0,12Zm64-24A18,18,0,1,1,86,80,18,18,0,0,1,104,62ZM216,170H197.4a30,30,0,0,0-58.8,0H40a6,6,0,0,0,0,12h98.6a30,30,0,0,0,58.8,0H216a6,6,0,0,0,0-12Zm-48,24a18,18,0,1,1,18-18A18,18,0,0,1,168,194Z" }, null, -1);
+var E45 = [
+  b45
 ];
-var P44 = { key: 4 };
+var P45 = { key: 4 };
 var V30 = /* @__PURE__ */ createBaseVNode("path", { d: "M40,88H73a32,32,0,0,0,62,0h81a8,8,0,0,0,0-16H135a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16Zm64-24A16,16,0,1,1,88,80,16,16,0,0,1,104,64ZM216,168H199a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16h97a32,32,0,0,0,62,0h17a8,8,0,0,0,0-16Zm-48,24a16,16,0,1,1,16-16A16,16,0,0,1,168,192Z" }, null, -1);
-var W44 = [
+var W45 = [
   V30
 ];
-var $44 = { key: 5 };
-var j44 = /* @__PURE__ */ createBaseVNode("path", { d: "M40,84H76.29a28,28,0,0,0,55.42,0H216a4,4,0,0,0,0-8H131.71a28,28,0,0,0-55.42,0H40a4,4,0,0,0,0,8Zm64-24A20,20,0,1,1,84,80,20,20,0,0,1,104,60ZM216,172H195.71a28,28,0,0,0-55.42,0H40a4,4,0,0,0,0,8H140.29a28,28,0,0,0,55.42,0H216a4,4,0,0,0,0-8Zm-48,24a20,20,0,1,1,20-20A20,20,0,0,1,168,196Z" }, null, -1);
-var q34 = [
-  j44
+var $45 = { key: 5 };
+var j45 = /* @__PURE__ */ createBaseVNode("path", { d: "M40,84H76.29a28,28,0,0,0,55.42,0H216a4,4,0,0,0,0-8H131.71a28,28,0,0,0-55.42,0H40a4,4,0,0,0,0,8Zm64-24A20,20,0,1,1,84,80,20,20,0,0,1,104,60ZM216,172H195.71a28,28,0,0,0-55.42,0H40a4,4,0,0,0,0,8H140.29a28,28,0,0,0,55.42,0H216a4,4,0,0,0,0-8Zm-48,24a20,20,0,1,1,20-20A20,20,0,0,1,168,196Z" }, null, -1);
+var q35 = [
+  j45
 ];
 var D27 = {
   name: "PhSlidersHorizontal"
@@ -33426,53 +33555,53 @@ var I16 = /* @__PURE__ */ defineComponent({
       transform: u.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      a.value === "bold" ? (openBlock(), createElementBlock("g", A27, f37)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", w44, x44)) : a.value === "fill" ? (openBlock(), createElementBlock("g", z44, B44)) : a.value === "light" ? (openBlock(), createElementBlock("g", N44, E44)) : a.value === "regular" ? (openBlock(), createElementBlock("g", P44, W44)) : a.value === "thin" ? (openBlock(), createElementBlock("g", $44, q34)) : createCommentVNode("", true)
-    ], 16, y28));
+      a.value === "bold" ? (openBlock(), createElementBlock("g", A27, f38)) : a.value === "duotone" ? (openBlock(), createElementBlock("g", w45, x45)) : a.value === "fill" ? (openBlock(), createElementBlock("g", z45, B45)) : a.value === "light" ? (openBlock(), createElementBlock("g", N45, E45)) : a.value === "regular" ? (openBlock(), createElementBlock("g", P45, W45)) : a.value === "thin" ? (openBlock(), createElementBlock("g", $45, q35)) : createCommentVNode("", true)
+    ], 16, y29));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhSparkle.vue.mjs
-var g5 = ["width", "height", "fill", "transform"];
-var M37 = { key: 0 };
+var g6 = ["width", "height", "fill", "transform"];
+var M38 = { key: 0 };
 var A28 = /* @__PURE__ */ createBaseVNode("path", { d: "M199,125.31l-49.88-18.39L130.69,57a19.92,19.92,0,0,0-37.38,0L74.92,106.92,25,125.31a19.92,19.92,0,0,0,0,37.38l49.88,18.39L93.31,231a19.92,19.92,0,0,0,37.38,0l18.39-49.88L199,162.69a19.92,19.92,0,0,0,0-37.38Zm-63.38,35.16a12,12,0,0,0-7.11,7.11L112,212.28l-16.47-44.7a12,12,0,0,0-7.11-7.11L43.72,144l44.7-16.47a12,12,0,0,0,7.11-7.11L112,75.72l16.47,44.7a12,12,0,0,0,7.11,7.11L180.28,144ZM140,40a12,12,0,0,1,12-12h12V16a12,12,0,0,1,24,0V28h12a12,12,0,0,1,0,24H188V64a12,12,0,0,1-24,0V52H152A12,12,0,0,1,140,40ZM252,88a12,12,0,0,1-12,12h-4v4a12,12,0,0,1-24,0v-4h-4a12,12,0,0,1,0-24h4V72a12,12,0,0,1,24,0v4h4A12,12,0,0,1,252,88Z" }, null, -1);
-var H23 = [
+var H24 = [
   A28
 ];
-var y29 = { key: 1 };
-var f38 = /* @__PURE__ */ createBaseVNode("path", {
+var y30 = { key: 1 };
+var f39 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M194.82,151.43l-55.09,20.3-20.3,55.09a7.92,7.92,0,0,1-14.86,0l-20.3-55.09-55.09-20.3a7.92,7.92,0,0,1,0-14.86l55.09-20.3,20.3-55.09a7.92,7.92,0,0,1,14.86,0l20.3,55.09,55.09,20.3A7.92,7.92,0,0,1,194.82,151.43Z",
   opacity: "0.2"
 }, null, -1);
-var w45 = /* @__PURE__ */ createBaseVNode("path", { d: "M197.58,129.06,146,110l-19-51.62a15.92,15.92,0,0,0-29.88,0L78,110l-51.62,19a15.92,15.92,0,0,0,0,29.88L78,178l19,51.62a15.92,15.92,0,0,0,29.88,0L146,178l51.62-19a15.92,15.92,0,0,0,0-29.88ZM137,164.22a8,8,0,0,0-4.74,4.74L112,223.85,91.78,169A8,8,0,0,0,87,164.22L32.15,144,87,123.78A8,8,0,0,0,91.78,119L112,64.15,132.22,119a8,8,0,0,0,4.74,4.74L191.85,144ZM144,40a8,8,0,0,1,8-8h16V16a8,8,0,0,1,16,0V32h16a8,8,0,0,1,0,16H184V64a8,8,0,0,1-16,0V48H152A8,8,0,0,1,144,40ZM248,88a8,8,0,0,1-8,8h-8v8a8,8,0,0,1-16,0V96h-8a8,8,0,0,1,0-16h8V72a8,8,0,0,1,16,0v8h8A8,8,0,0,1,248,88Z" }, null, -1);
-var k45 = [
-  f38,
-  w45
+var w46 = /* @__PURE__ */ createBaseVNode("path", { d: "M197.58,129.06,146,110l-19-51.62a15.92,15.92,0,0,0-29.88,0L78,110l-51.62,19a15.92,15.92,0,0,0,0,29.88L78,178l19,51.62a15.92,15.92,0,0,0,29.88,0L146,178l51.62-19a15.92,15.92,0,0,0,0-29.88ZM137,164.22a8,8,0,0,0-4.74,4.74L112,223.85,91.78,169A8,8,0,0,0,87,164.22L32.15,144,87,123.78A8,8,0,0,0,91.78,119L112,64.15,132.22,119a8,8,0,0,0,4.74,4.74L191.85,144ZM144,40a8,8,0,0,1,8-8h16V16a8,8,0,0,1,16,0V32h16a8,8,0,0,1,0,16H184V64a8,8,0,0,1-16,0V48H152A8,8,0,0,1,144,40ZM248,88a8,8,0,0,1-8,8h-8v8a8,8,0,0,1-16,0V96h-8a8,8,0,0,1,0-16h8V72a8,8,0,0,1,16,0v8h8A8,8,0,0,1,248,88Z" }, null, -1);
+var k46 = [
+  f39,
+  w46
 ];
-var S45 = { key: 2 };
-var x45 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,144a15.78,15.78,0,0,1-10.42,14.94L146,178l-19,51.62a15.92,15.92,0,0,1-29.88,0L78,178l-51.62-19a15.92,15.92,0,0,1,0-29.88L78,110l19-51.62a15.92,15.92,0,0,1,29.88,0L146,110l51.62,19A15.78,15.78,0,0,1,208,144ZM152,48h16V64a8,8,0,0,0,16,0V48h16a8,8,0,0,0,0-16H184V16a8,8,0,0,0-16,0V32H152a8,8,0,0,0,0,16Zm88,32h-8V72a8,8,0,0,0-16,0v8h-8a8,8,0,0,0,0,16h8v8a8,8,0,0,0,16,0V96h8a8,8,0,0,0,0-16Z" }, null, -1);
-var z45 = [
-  x45
+var S46 = { key: 2 };
+var x46 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,144a15.78,15.78,0,0,1-10.42,14.94L146,178l-19,51.62a15.92,15.92,0,0,1-29.88,0L78,178l-51.62-19a15.92,15.92,0,0,1,0-29.88L78,110l19-51.62a15.92,15.92,0,0,1,29.88,0L146,110l51.62,19A15.78,15.78,0,0,1,208,144ZM152,48h16V64a8,8,0,0,0,16,0V48h16a8,8,0,0,0,0-16H184V16a8,8,0,0,0-16,0V32H152a8,8,0,0,0,0,16Zm88,32h-8V72a8,8,0,0,0-16,0v8h-8a8,8,0,0,0,0,16h8v8a8,8,0,0,0,16,0V96h8a8,8,0,0,0,0-16Z" }, null, -1);
+var z46 = [
+  x46
 ];
-var C40 = { key: 3 };
-var B45 = /* @__PURE__ */ createBaseVNode("path", { d: "M196.89,130.94,144.4,111.6,125.06,59.11a13.92,13.92,0,0,0-26.12,0L79.6,111.6,27.11,130.94a13.92,13.92,0,0,0,0,26.12L79.6,176.4l19.34,52.49a13.92,13.92,0,0,0,26.12,0L144.4,176.4l52.49-19.34a13.92,13.92,0,0,0,0-26.12Zm-4.15,14.86-55.08,20.3a6,6,0,0,0-3.56,3.56l-20.3,55.08a1.92,1.92,0,0,1-3.6,0L89.9,169.66a6,6,0,0,0-3.56-3.56L31.26,145.8a1.92,1.92,0,0,1,0-3.6l55.08-20.3a6,6,0,0,0,3.56-3.56l20.3-55.08a1.92,1.92,0,0,1,3.6,0l20.3,55.08a6,6,0,0,0,3.56,3.56l55.08,20.3a1.92,1.92,0,0,1,0,3.6ZM146,40a6,6,0,0,1,6-6h18V16a6,6,0,0,1,12,0V34h18a6,6,0,0,1,0,12H182V64a6,6,0,0,1-12,0V46H152A6,6,0,0,1,146,40ZM246,88a6,6,0,0,1-6,6H230v10a6,6,0,0,1-12,0V94H208a6,6,0,0,1,0-12h10V72a6,6,0,0,1,12,0V82h10A6,6,0,0,1,246,88Z" }, null, -1);
-var N45 = [
-  B45
+var C41 = { key: 3 };
+var B46 = /* @__PURE__ */ createBaseVNode("path", { d: "M196.89,130.94,144.4,111.6,125.06,59.11a13.92,13.92,0,0,0-26.12,0L79.6,111.6,27.11,130.94a13.92,13.92,0,0,0,0,26.12L79.6,176.4l19.34,52.49a13.92,13.92,0,0,0,26.12,0L144.4,176.4l52.49-19.34a13.92,13.92,0,0,0,0-26.12Zm-4.15,14.86-55.08,20.3a6,6,0,0,0-3.56,3.56l-20.3,55.08a1.92,1.92,0,0,1-3.6,0L89.9,169.66a6,6,0,0,0-3.56-3.56L31.26,145.8a1.92,1.92,0,0,1,0-3.6l55.08-20.3a6,6,0,0,0,3.56-3.56l20.3-55.08a1.92,1.92,0,0,1,3.6,0l20.3,55.08a6,6,0,0,0,3.56,3.56l55.08,20.3a1.92,1.92,0,0,1,0,3.6ZM146,40a6,6,0,0,1,6-6h18V16a6,6,0,0,1,12,0V34h18a6,6,0,0,1,0,12H182V64a6,6,0,0,1-12,0V46H152A6,6,0,0,1,146,40ZM246,88a6,6,0,0,1-6,6H230v10a6,6,0,0,1-12,0V94H208a6,6,0,0,1,0-12h10V72a6,6,0,0,1,12,0V82h10A6,6,0,0,1,246,88Z" }, null, -1);
+var N46 = [
+  B46
 ];
-var b45 = { key: 4 };
-var E45 = /* @__PURE__ */ createBaseVNode("path", { d: "M197.58,129.06,146,110l-19-51.62a15.92,15.92,0,0,0-29.88,0L78,110l-51.62,19a15.92,15.92,0,0,0,0,29.88L78,178l19,51.62a15.92,15.92,0,0,0,29.88,0L146,178l51.62-19a15.92,15.92,0,0,0,0-29.88ZM137,164.22a8,8,0,0,0-4.74,4.74L112,223.85,91.78,169A8,8,0,0,0,87,164.22L32.15,144,87,123.78A8,8,0,0,0,91.78,119L112,64.15,132.22,119a8,8,0,0,0,4.74,4.74L191.85,144ZM144,40a8,8,0,0,1,8-8h16V16a8,8,0,0,1,16,0V32h16a8,8,0,0,1,0,16H184V64a8,8,0,0,1-16,0V48H152A8,8,0,0,1,144,40ZM248,88a8,8,0,0,1-8,8h-8v8a8,8,0,0,1-16,0V96h-8a8,8,0,0,1,0-16h8V72a8,8,0,0,1,16,0v8h8A8,8,0,0,1,248,88Z" }, null, -1);
-var P45 = [
-  E45
+var b46 = { key: 4 };
+var E46 = /* @__PURE__ */ createBaseVNode("path", { d: "M197.58,129.06,146,110l-19-51.62a15.92,15.92,0,0,0-29.88,0L78,110l-51.62,19a15.92,15.92,0,0,0,0,29.88L78,178l19,51.62a15.92,15.92,0,0,0,29.88,0L146,178l51.62-19a15.92,15.92,0,0,0,0-29.88ZM137,164.22a8,8,0,0,0-4.74,4.74L112,223.85,91.78,169A8,8,0,0,0,87,164.22L32.15,144,87,123.78A8,8,0,0,0,91.78,119L112,64.15,132.22,119a8,8,0,0,0,4.74,4.74L191.85,144ZM144,40a8,8,0,0,1,8-8h16V16a8,8,0,0,1,16,0V32h16a8,8,0,0,1,0,16H184V64a8,8,0,0,1-16,0V48H152A8,8,0,0,1,144,40ZM248,88a8,8,0,0,1-8,8h-8v8a8,8,0,0,1-16,0V96h-8a8,8,0,0,1,0-16h8V72a8,8,0,0,1,16,0v8h8A8,8,0,0,1,248,88Z" }, null, -1);
+var P46 = [
+  E46
 ];
-var W45 = { key: 5 };
-var $45 = /* @__PURE__ */ createBaseVNode("path", { d: "M196.2,132.81l-53.36-19.65L123.19,59.8a11.93,11.93,0,0,0-22.38,0L81.16,113.16,27.8,132.81a11.93,11.93,0,0,0,0,22.38l53.36,19.65,19.65,53.36a11.93,11.93,0,0,0,22.38,0l19.65-53.36,53.36-19.65a11.93,11.93,0,0,0,0-22.38Zm-2.77,14.87L138.35,168a4,4,0,0,0-2.37,2.37l-20.3,55.08a3.92,3.92,0,0,1-7.36,0L88,170.35A4,4,0,0,0,85.65,168l-55.08-20.3a3.92,3.92,0,0,1,0-7.36L85.65,120A4,4,0,0,0,88,117.65l20.3-55.08a3.92,3.92,0,0,1,7.36,0L136,117.65a4,4,0,0,0,2.37,2.37l55.08,20.3a3.92,3.92,0,0,1,0,7.36ZM148,40a4,4,0,0,1,4-4h20V16a4,4,0,0,1,8,0V36h20a4,4,0,0,1,0,8H180V64a4,4,0,0,1-8,0V44H152A4,4,0,0,1,148,40Zm96,48a4,4,0,0,1-4,4H228v12a4,4,0,0,1-8,0V92H208a4,4,0,0,1,0-8h12V72a4,4,0,0,1,8,0V84h12A4,4,0,0,1,244,88Z" }, null, -1);
-var j45 = [
-  $45
+var W46 = { key: 5 };
+var $46 = /* @__PURE__ */ createBaseVNode("path", { d: "M196.2,132.81l-53.36-19.65L123.19,59.8a11.93,11.93,0,0,0-22.38,0L81.16,113.16,27.8,132.81a11.93,11.93,0,0,0,0,22.38l53.36,19.65,19.65,53.36a11.93,11.93,0,0,0,22.38,0l19.65-53.36,53.36-19.65a11.93,11.93,0,0,0,0-22.38Zm-2.77,14.87L138.35,168a4,4,0,0,0-2.37,2.37l-20.3,55.08a3.92,3.92,0,0,1-7.36,0L88,170.35A4,4,0,0,0,85.65,168l-55.08-20.3a3.92,3.92,0,0,1,0-7.36L85.65,120A4,4,0,0,0,88,117.65l20.3-55.08a3.92,3.92,0,0,1,7.36,0L136,117.65a4,4,0,0,0,2.37,2.37l55.08,20.3a3.92,3.92,0,0,1,0,7.36ZM148,40a4,4,0,0,1,4-4h20V16a4,4,0,0,1,8,0V36h20a4,4,0,0,1,0,8H180V64a4,4,0,0,1-8,0V44H152A4,4,0,0,1,148,40Zm96,48a4,4,0,0,1-4,4H228v12a4,4,0,0,1-8,0V92H208a4,4,0,0,1,0-8h12V72a4,4,0,0,1,8,0V84h12A4,4,0,0,1,244,88Z" }, null, -1);
+var j46 = [
+  $46
 ];
-var q35 = {
+var q36 = {
   name: "PhSparkle"
 };
-var G19 = /* @__PURE__ */ defineComponent({
-  ...q35,
+var G20 = /* @__PURE__ */ defineComponent({
+  ...q36,
   props: {
     weight: {
       type: String
@@ -33498,57 +33627,57 @@ var G19 = /* @__PURE__ */ defineComponent({
       transform: u.value
     }, i.$attrs), [
       renderSlot(i.$slots, "default"),
-      o.value === "bold" ? (openBlock(), createElementBlock("g", M37, H23)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", y29, k45)) : o.value === "fill" ? (openBlock(), createElementBlock("g", S45, z45)) : o.value === "light" ? (openBlock(), createElementBlock("g", C40, N45)) : o.value === "regular" ? (openBlock(), createElementBlock("g", b45, P45)) : o.value === "thin" ? (openBlock(), createElementBlock("g", W45, j45)) : createCommentVNode("", true)
-    ], 16, g5));
+      o.value === "bold" ? (openBlock(), createElementBlock("g", M38, H24)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", y30, k46)) : o.value === "fill" ? (openBlock(), createElementBlock("g", S46, z46)) : o.value === "light" ? (openBlock(), createElementBlock("g", C41, N46)) : o.value === "regular" ? (openBlock(), createElementBlock("g", b46, P46)) : o.value === "thin" ? (openBlock(), createElementBlock("g", W46, j46)) : createCommentVNode("", true)
+    ], 16, g6));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhStack.vue.mjs
-var v11 = ["width", "height", "fill", "transform"];
-var y30 = { key: 0 };
+var v12 = ["width", "height", "fill", "transform"];
+var y31 = { key: 0 };
 var L22 = /* @__PURE__ */ createBaseVNode("path", { d: "M234.36,170A12,12,0,0,1,230,186.37l-96,56a12,12,0,0,1-12.1,0l-96-56a12,12,0,0,1,12.09-20.74l90,52.48L218,165.63A12,12,0,0,1,234.36,170ZM218,117.63,128,170.11,38.05,117.63A12,12,0,0,0,26,138.37l96,56a12,12,0,0,0,12.1,0l96-56A12,12,0,0,0,218,117.63ZM20,80a12,12,0,0,1,6-10.37l96-56a12.06,12.06,0,0,1,12.1,0l96,56a12,12,0,0,1,0,20.74l-96,56a12,12,0,0,1-12.1,0l-96-56A12,12,0,0,1,20,80Zm35.82,0L128,122.11,200.18,80,128,37.89Z" }, null, -1);
-var f39 = [
+var f40 = [
   L22
 ];
-var w46 = { key: 1 };
-var k46 = /* @__PURE__ */ createBaseVNode("path", {
+var w47 = { key: 1 };
+var k47 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M224,80l-96,56L32,80l96-56Z",
   opacity: "0.2"
 }, null, -1);
-var S46 = /* @__PURE__ */ createBaseVNode("path", { d: "M230.91,172A8,8,0,0,1,228,182.91l-96,56a8,8,0,0,1-8.06,0l-96-56A8,8,0,0,1,36,169.09l92,53.65,92-53.65A8,8,0,0,1,230.91,172ZM220,121.09l-92,53.65L36,121.09A8,8,0,0,0,28,134.91l96,56a8,8,0,0,0,8.06,0l96-56A8,8,0,1,0,220,121.09ZM24,80a8,8,0,0,1,4-6.91l96-56a8,8,0,0,1,8.06,0l96,56a8,8,0,0,1,0,13.82l-96,56a8,8,0,0,1-8.06,0l-96-56A8,8,0,0,1,24,80Zm23.88,0L128,126.74,208.12,80,128,33.26Z" }, null, -1);
-var x46 = [
-  k46,
-  S46
+var S47 = /* @__PURE__ */ createBaseVNode("path", { d: "M230.91,172A8,8,0,0,1,228,182.91l-96,56a8,8,0,0,1-8.06,0l-96-56A8,8,0,0,1,36,169.09l92,53.65,92-53.65A8,8,0,0,1,230.91,172ZM220,121.09l-92,53.65L36,121.09A8,8,0,0,0,28,134.91l96,56a8,8,0,0,0,8.06,0l96-56A8,8,0,1,0,220,121.09ZM24,80a8,8,0,0,1,4-6.91l96-56a8,8,0,0,1,8.06,0l96,56a8,8,0,0,1,0,13.82l-96,56a8,8,0,0,1-8.06,0l-96-56A8,8,0,0,1,24,80Zm23.88,0L128,126.74,208.12,80,128,33.26Z" }, null, -1);
+var x47 = [
+  k47,
+  S47
 ];
-var z46 = { key: 2 };
-var C41 = /* @__PURE__ */ createBaseVNode("path", { d: "M220,169.09l-92,53.65L36,169.09A8,8,0,0,0,28,182.91l96,56a8,8,0,0,0,8.06,0l96-56A8,8,0,1,0,220,169.09Z" }, null, -1);
-var B46 = /* @__PURE__ */ createBaseVNode("path", { d: "M220,121.09l-92,53.65L36,121.09A8,8,0,0,0,28,134.91l96,56a8,8,0,0,0,8.06,0l96-56A8,8,0,1,0,220,121.09Z" }, null, -1);
-var N46 = /* @__PURE__ */ createBaseVNode("path", { d: "M28,86.91l96,56a8,8,0,0,0,8.06,0l96-56a8,8,0,0,0,0-13.82l-96-56a8,8,0,0,0-8.06,0l-96,56a8,8,0,0,0,0,13.82Z" }, null, -1);
-var b46 = [
-  C41,
-  B46,
-  N46
+var z47 = { key: 2 };
+var C42 = /* @__PURE__ */ createBaseVNode("path", { d: "M220,169.09l-92,53.65L36,169.09A8,8,0,0,0,28,182.91l96,56a8,8,0,0,0,8.06,0l96-56A8,8,0,1,0,220,169.09Z" }, null, -1);
+var B47 = /* @__PURE__ */ createBaseVNode("path", { d: "M220,121.09l-92,53.65L36,121.09A8,8,0,0,0,28,134.91l96,56a8,8,0,0,0,8.06,0l96-56A8,8,0,1,0,220,121.09Z" }, null, -1);
+var N47 = /* @__PURE__ */ createBaseVNode("path", { d: "M28,86.91l96,56a8,8,0,0,0,8.06,0l96-56a8,8,0,0,0,0-13.82l-96-56a8,8,0,0,0-8.06,0l-96,56a8,8,0,0,0,0,13.82Z" }, null, -1);
+var b47 = [
+  C42,
+  B47,
+  N47
 ];
-var E46 = { key: 3 };
-var P46 = /* @__PURE__ */ createBaseVNode("path", { d: "M229.18,173a6,6,0,0,1-2.16,8.2l-96,56a6,6,0,0,1-6,0l-96-56a6,6,0,0,1,6-10.36l93,54.23,93-54.23A6,6,0,0,1,229.18,173ZM221,122.82l-93,54.23L35,122.82a6,6,0,0,0-6,10.36l96,56a6,6,0,0,0,6,0l96-56a6,6,0,0,0-6-10.36ZM26,80a6,6,0,0,1,3-5.18l96-56a6,6,0,0,1,6,0l96,56a6,6,0,0,1,0,10.36l-96,56a6,6,0,0,1-6,0l-96-56A6,6,0,0,1,26,80Zm17.91,0L128,129.05,212.09,80,128,31Z" }, null, -1);
+var E47 = { key: 3 };
+var P47 = /* @__PURE__ */ createBaseVNode("path", { d: "M229.18,173a6,6,0,0,1-2.16,8.2l-96,56a6,6,0,0,1-6,0l-96-56a6,6,0,0,1,6-10.36l93,54.23,93-54.23A6,6,0,0,1,229.18,173ZM221,122.82l-93,54.23L35,122.82a6,6,0,0,0-6,10.36l96,56a6,6,0,0,0,6,0l96-56a6,6,0,0,0-6-10.36ZM26,80a6,6,0,0,1,3-5.18l96-56a6,6,0,0,1,6,0l96,56a6,6,0,0,1,0,10.36l-96,56a6,6,0,0,1-6,0l-96-56A6,6,0,0,1,26,80Zm17.91,0L128,129.05,212.09,80,128,31Z" }, null, -1);
 var V31 = [
-  P46
+  P47
 ];
-var W46 = { key: 4 };
-var $46 = /* @__PURE__ */ createBaseVNode("path", { d: "M230.91,172A8,8,0,0,1,228,182.91l-96,56a8,8,0,0,1-8.06,0l-96-56A8,8,0,0,1,36,169.09l92,53.65,92-53.65A8,8,0,0,1,230.91,172ZM220,121.09l-92,53.65L36,121.09A8,8,0,0,0,28,134.91l96,56a8,8,0,0,0,8.06,0l96-56A8,8,0,1,0,220,121.09ZM24,80a8,8,0,0,1,4-6.91l96-56a8,8,0,0,1,8.06,0l96,56a8,8,0,0,1,0,13.82l-96,56a8,8,0,0,1-8.06,0l-96-56A8,8,0,0,1,24,80Zm23.88,0L128,126.74,208.12,80,128,33.26Z" }, null, -1);
-var j46 = [
-  $46
+var W47 = { key: 4 };
+var $47 = /* @__PURE__ */ createBaseVNode("path", { d: "M230.91,172A8,8,0,0,1,228,182.91l-96,56a8,8,0,0,1-8.06,0l-96-56A8,8,0,0,1,36,169.09l92,53.65,92-53.65A8,8,0,0,1,230.91,172ZM220,121.09l-92,53.65L36,121.09A8,8,0,0,0,28,134.91l96,56a8,8,0,0,0,8.06,0l96-56A8,8,0,1,0,220,121.09ZM24,80a8,8,0,0,1,4-6.91l96-56a8,8,0,0,1,8.06,0l96,56a8,8,0,0,1,0,13.82l-96,56a8,8,0,0,1-8.06,0l-96-56A8,8,0,0,1,24,80Zm23.88,0L128,126.74,208.12,80,128,33.26Z" }, null, -1);
+var j47 = [
+  $47
 ];
-var q36 = { key: 5 };
+var q37 = { key: 5 };
 var D28 = /* @__PURE__ */ createBaseVNode("path", { d: "M227.45,174a4,4,0,0,1-1.44,5.48l-96,56a4,4,0,0,1-4,0l-96-56a4,4,0,0,1,4-6.92l94,54.83,94-54.83A4,4,0,0,1,227.45,174ZM222,124.54l-94,54.83L34,124.54a4,4,0,0,0-4,6.92l96,56a4,4,0,0,0,4,0l96-56a4,4,0,0,0-4-6.92ZM28,80a4,4,0,0,1,2-3.46l96-56a4,4,0,0,1,4,0l96,56a4,4,0,0,1,0,6.92l-96,56a4,4,0,0,1-4,0l-96-56A4,4,0,0,1,28,80Zm11.94,0L128,131.37,216.06,80,128,28.63Z" }, null, -1);
 var F12 = [
   D28
 ];
-var G20 = {
+var G21 = {
   name: "PhStack"
 };
 var J = /* @__PURE__ */ defineComponent({
-  ...G20,
+  ...G21,
   props: {
     weight: {
       type: String
@@ -33574,47 +33703,47 @@ var J = /* @__PURE__ */ defineComponent({
       transform: m.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      o.value === "bold" ? (openBlock(), createElementBlock("g", y30, f39)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", w46, x46)) : o.value === "fill" ? (openBlock(), createElementBlock("g", z46, b46)) : o.value === "light" ? (openBlock(), createElementBlock("g", E46, V31)) : o.value === "regular" ? (openBlock(), createElementBlock("g", W46, j46)) : o.value === "thin" ? (openBlock(), createElementBlock("g", q36, F12)) : createCommentVNode("", true)
-    ], 16, v11));
+      o.value === "bold" ? (openBlock(), createElementBlock("g", y31, f40)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", w47, x47)) : o.value === "fill" ? (openBlock(), createElementBlock("g", z47, b47)) : o.value === "light" ? (openBlock(), createElementBlock("g", E47, V31)) : o.value === "regular" ? (openBlock(), createElementBlock("g", W47, j47)) : o.value === "thin" ? (openBlock(), createElementBlock("g", q37, F12)) : createCommentVNode("", true)
+    ], 16, v12));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhStop.vue.mjs
-var y31 = ["width", "height", "fill", "transform"];
+var y32 = ["width", "height", "fill", "transform"];
 var A29 = { key: 0 };
-var f40 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,36H56A20,20,0,0,0,36,56V200a20,20,0,0,0,20,20H200a20,20,0,0,0,20-20V56A20,20,0,0,0,200,36Zm-4,160H60V60H196Z" }, null, -1);
+var f41 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,36H56A20,20,0,0,0,36,56V200a20,20,0,0,0,20,20H200a20,20,0,0,0,20-20V56A20,20,0,0,0,200,36Zm-4,160H60V60H196Z" }, null, -1);
 var Z26 = [
-  f40
+  f41
 ];
-var w47 = { key: 1 };
-var M38 = /* @__PURE__ */ createBaseVNode("path", {
+var w48 = { key: 1 };
+var M39 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M208,56V200a8,8,0,0,1-8,8H56a8,8,0,0,1-8-8V56a8,8,0,0,1,8-8H200A8,8,0,0,1,208,56Z",
   opacity: "0.2"
 }, null, -1);
-var k47 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,40H56A16,16,0,0,0,40,56V200a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V56A16,16,0,0,0,200,40Zm0,160H56V56H200V200Z" }, null, -1);
-var S47 = [
-  M38,
-  k47
+var k48 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,40H56A16,16,0,0,0,40,56V200a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V56A16,16,0,0,0,200,40Zm0,160H56V56H200V200Z" }, null, -1);
+var S48 = [
+  M39,
+  k48
 ];
-var x47 = { key: 2 };
-var z47 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,56V200a16,16,0,0,1-16,16H56a16,16,0,0,1-16-16V56A16,16,0,0,1,56,40H200A16,16,0,0,1,216,56Z" }, null, -1);
-var C42 = [
-  z47
+var x48 = { key: 2 };
+var z48 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,56V200a16,16,0,0,1-16,16H56a16,16,0,0,1-16-16V56A16,16,0,0,1,56,40H200A16,16,0,0,1,216,56Z" }, null, -1);
+var C43 = [
+  z48
 ];
-var B47 = { key: 3 };
-var N47 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,42H56A14,14,0,0,0,42,56V200a14,14,0,0,0,14,14H200a14,14,0,0,0,14-14V56A14,14,0,0,0,200,42Zm2,158a2,2,0,0,1-2,2H56a2,2,0,0,1-2-2V56a2,2,0,0,1,2-2H200a2,2,0,0,1,2,2Z" }, null, -1);
-var b47 = [
-  N47
+var B48 = { key: 3 };
+var N48 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,42H56A14,14,0,0,0,42,56V200a14,14,0,0,0,14,14H200a14,14,0,0,0,14-14V56A14,14,0,0,0,200,42Zm2,158a2,2,0,0,1-2,2H56a2,2,0,0,1-2-2V56a2,2,0,0,1,2-2H200a2,2,0,0,1,2,2Z" }, null, -1);
+var b48 = [
+  N48
 ];
-var E47 = { key: 4 };
-var P47 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,40H56A16,16,0,0,0,40,56V200a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V56A16,16,0,0,0,200,40Zm0,160H56V56H200V200Z" }, null, -1);
-var W47 = [
-  P47
+var E48 = { key: 4 };
+var P48 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,40H56A16,16,0,0,0,40,56V200a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V56A16,16,0,0,0,200,40Zm0,160H56V56H200V200Z" }, null, -1);
+var W48 = [
+  P48
 ];
-var $47 = { key: 5 };
-var j47 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,44H56A12,12,0,0,0,44,56V200a12,12,0,0,0,12,12H200a12,12,0,0,0,12-12V56A12,12,0,0,0,200,44Zm4,156a4,4,0,0,1-4,4H56a4,4,0,0,1-4-4V56a4,4,0,0,1,4-4H200a4,4,0,0,1,4,4Z" }, null, -1);
-var q37 = [
-  j47
+var $48 = { key: 5 };
+var j48 = /* @__PURE__ */ createBaseVNode("path", { d: "M200,44H56A12,12,0,0,0,44,56V200a12,12,0,0,0,12,12H200a12,12,0,0,0,12-12V56A12,12,0,0,0,200,44Zm4,156a4,4,0,0,1-4,4H56a4,4,0,0,1-4-4V56a4,4,0,0,1,4-4H200a4,4,0,0,1,4,4Z" }, null, -1);
+var q38 = [
+  j48
 ];
 var D29 = {
   name: "PhStop"
@@ -33646,47 +33775,47 @@ var I17 = /* @__PURE__ */ defineComponent({
       transform: m.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", A29, Z26)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", w47, S47)) : s.value === "fill" ? (openBlock(), createElementBlock("g", x47, C42)) : s.value === "light" ? (openBlock(), createElementBlock("g", B47, b47)) : s.value === "regular" ? (openBlock(), createElementBlock("g", E47, W47)) : s.value === "thin" ? (openBlock(), createElementBlock("g", $47, q37)) : createCommentVNode("", true)
-    ], 16, y31));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", A29, Z26)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", w48, S48)) : s.value === "fill" ? (openBlock(), createElementBlock("g", x48, C43)) : s.value === "light" ? (openBlock(), createElementBlock("g", B48, b48)) : s.value === "regular" ? (openBlock(), createElementBlock("g", E48, W48)) : s.value === "thin" ? (openBlock(), createElementBlock("g", $48, q38)) : createCommentVNode("", true)
+    ], 16, y32));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhSun.vue.mjs
-var v12 = ["width", "height", "fill", "transform"];
+var v13 = ["width", "height", "fill", "transform"];
 var V32 = { key: 0 };
-var H24 = /* @__PURE__ */ createBaseVNode("path", { d: "M116,36V20a12,12,0,0,1,24,0V36a12,12,0,0,1-24,0Zm80,92a68,68,0,1,1-68-68A68.07,68.07,0,0,1,196,128Zm-24,0a44,44,0,1,0-44,44A44.05,44.05,0,0,0,172,128ZM51.51,68.49a12,12,0,1,0,17-17l-12-12a12,12,0,0,0-17,17Zm0,119-12,12a12,12,0,0,0,17,17l12-12a12,12,0,1,0-17-17ZM196,72a12,12,0,0,0,8.49-3.51l12-12a12,12,0,0,0-17-17l-12,12A12,12,0,0,0,196,72Zm8.49,115.51a12,12,0,0,0-17,17l12,12a12,12,0,0,0,17-17ZM48,128a12,12,0,0,0-12-12H20a12,12,0,0,0,0,24H36A12,12,0,0,0,48,128Zm80,80a12,12,0,0,0-12,12v16a12,12,0,0,0,24,0V220A12,12,0,0,0,128,208Zm108-92H220a12,12,0,0,0,0,24h16a12,12,0,0,0,0-24Z" }, null, -1);
-var y32 = [
-  H24
+var H25 = /* @__PURE__ */ createBaseVNode("path", { d: "M116,36V20a12,12,0,0,1,24,0V36a12,12,0,0,1-24,0Zm80,92a68,68,0,1,1-68-68A68.07,68.07,0,0,1,196,128Zm-24,0a44,44,0,1,0-44,44A44.05,44.05,0,0,0,172,128ZM51.51,68.49a12,12,0,1,0,17-17l-12-12a12,12,0,0,0-17,17Zm0,119-12,12a12,12,0,0,0,17,17l12-12a12,12,0,1,0-17-17ZM196,72a12,12,0,0,0,8.49-3.51l12-12a12,12,0,0,0-17-17l-12,12A12,12,0,0,0,196,72Zm8.49,115.51a12,12,0,0,0-17,17l12,12a12,12,0,0,0,17-17ZM48,128a12,12,0,0,0-12-12H20a12,12,0,0,0,0,24H36A12,12,0,0,0,48,128Zm80,80a12,12,0,0,0-12,12v16a12,12,0,0,0,24,0V220A12,12,0,0,0,128,208Zm108-92H220a12,12,0,0,0,0,24h16a12,12,0,0,0,0-24Z" }, null, -1);
+var y33 = [
+  H25
 ];
-var f41 = { key: 1 };
-var w48 = /* @__PURE__ */ createBaseVNode("path", {
+var f42 = { key: 1 };
+var w49 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M184,128a56,56,0,1,1-56-56A56,56,0,0,1,184,128Z",
   opacity: "0.2"
 }, null, -1);
-var k48 = /* @__PURE__ */ createBaseVNode("path", { d: "M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z" }, null, -1);
-var S48 = [
-  w48,
-  k48
+var k49 = /* @__PURE__ */ createBaseVNode("path", { d: "M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z" }, null, -1);
+var S49 = [
+  w49,
+  k49
 ];
-var x48 = { key: 2 };
-var z48 = /* @__PURE__ */ createBaseVNode("path", { d: "M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm8,24a64,64,0,1,0,64,64A64.07,64.07,0,0,0,128,64ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z" }, null, -1);
-var C43 = [
-  z48
+var x49 = { key: 2 };
+var z49 = /* @__PURE__ */ createBaseVNode("path", { d: "M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm8,24a64,64,0,1,0,64,64A64.07,64.07,0,0,0,128,64ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z" }, null, -1);
+var C44 = [
+  z49
 ];
-var B48 = { key: 3 };
-var N48 = /* @__PURE__ */ createBaseVNode("path", { d: "M122,40V16a6,6,0,0,1,12,0V40a6,6,0,0,1-12,0Zm68,88a62,62,0,1,1-62-62A62.07,62.07,0,0,1,190,128Zm-12,0a50,50,0,1,0-50,50A50.06,50.06,0,0,0,178,128ZM59.76,68.24a6,6,0,1,0,8.48-8.48l-16-16a6,6,0,0,0-8.48,8.48Zm0,119.52-16,16a6,6,0,1,0,8.48,8.48l16-16a6,6,0,1,0-8.48-8.48ZM192,70a6,6,0,0,0,4.24-1.76l16-16a6,6,0,0,0-8.48-8.48l-16,16A6,6,0,0,0,192,70Zm4.24,117.76a6,6,0,0,0-8.48,8.48l16,16a6,6,0,0,0,8.48-8.48ZM46,128a6,6,0,0,0-6-6H16a6,6,0,0,0,0,12H40A6,6,0,0,0,46,128Zm82,82a6,6,0,0,0-6,6v24a6,6,0,0,0,12,0V216A6,6,0,0,0,128,210Zm112-88H216a6,6,0,0,0,0,12h24a6,6,0,0,0,0-12Z" }, null, -1);
-var b48 = [
-  N48
+var B49 = { key: 3 };
+var N49 = /* @__PURE__ */ createBaseVNode("path", { d: "M122,40V16a6,6,0,0,1,12,0V40a6,6,0,0,1-12,0Zm68,88a62,62,0,1,1-62-62A62.07,62.07,0,0,1,190,128Zm-12,0a50,50,0,1,0-50,50A50.06,50.06,0,0,0,178,128ZM59.76,68.24a6,6,0,1,0,8.48-8.48l-16-16a6,6,0,0,0-8.48,8.48Zm0,119.52-16,16a6,6,0,1,0,8.48,8.48l16-16a6,6,0,1,0-8.48-8.48ZM192,70a6,6,0,0,0,4.24-1.76l16-16a6,6,0,0,0-8.48-8.48l-16,16A6,6,0,0,0,192,70Zm4.24,117.76a6,6,0,0,0-8.48,8.48l16,16a6,6,0,0,0,8.48-8.48ZM46,128a6,6,0,0,0-6-6H16a6,6,0,0,0,0,12H40A6,6,0,0,0,46,128Zm82,82a6,6,0,0,0-6,6v24a6,6,0,0,0,12,0V216A6,6,0,0,0,128,210Zm112-88H216a6,6,0,0,0,0,12h24a6,6,0,0,0,0-12Z" }, null, -1);
+var b49 = [
+  N49
 ];
-var E48 = { key: 4 };
-var P48 = /* @__PURE__ */ createBaseVNode("path", { d: "M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z" }, null, -1);
-var W48 = [
-  P48
+var E49 = { key: 4 };
+var P49 = /* @__PURE__ */ createBaseVNode("path", { d: "M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z" }, null, -1);
+var W49 = [
+  P49
 ];
-var $48 = { key: 5 };
-var j48 = /* @__PURE__ */ createBaseVNode("path", { d: "M124,40V16a4,4,0,0,1,8,0V40a4,4,0,0,1-8,0Zm64,88a60,60,0,1,1-60-60A60.07,60.07,0,0,1,188,128Zm-8,0a52,52,0,1,0-52,52A52.06,52.06,0,0,0,180,128ZM61.17,66.83a4,4,0,0,0,5.66-5.66l-16-16a4,4,0,0,0-5.66,5.66Zm0,122.34-16,16a4,4,0,0,0,5.66,5.66l16-16a4,4,0,0,0-5.66-5.66ZM192,68a4,4,0,0,0,2.83-1.17l16-16a4,4,0,1,0-5.66-5.66l-16,16A4,4,0,0,0,192,68Zm2.83,121.17a4,4,0,0,0-5.66,5.66l16,16a4,4,0,0,0,5.66-5.66ZM40,124H16a4,4,0,0,0,0,8H40a4,4,0,0,0,0-8Zm88,88a4,4,0,0,0-4,4v24a4,4,0,0,0,8,0V216A4,4,0,0,0,128,212Zm112-88H216a4,4,0,0,0,0,8h24a4,4,0,0,0,0-8Z" }, null, -1);
-var q38 = [
-  j48
+var $49 = { key: 5 };
+var j49 = /* @__PURE__ */ createBaseVNode("path", { d: "M124,40V16a4,4,0,0,1,8,0V40a4,4,0,0,1-8,0Zm64,88a60,60,0,1,1-60-60A60.07,60.07,0,0,1,188,128Zm-8,0a52,52,0,1,0-52,52A52.06,52.06,0,0,0,180,128ZM61.17,66.83a4,4,0,0,0,5.66-5.66l-16-16a4,4,0,0,0-5.66,5.66Zm0,122.34-16,16a4,4,0,0,0,5.66,5.66l16-16a4,4,0,0,0-5.66-5.66ZM192,68a4,4,0,0,0,2.83-1.17l16-16a4,4,0,1,0-5.66-5.66l-16,16A4,4,0,0,0,192,68Zm2.83,121.17a4,4,0,0,0-5.66,5.66l16,16a4,4,0,0,0,5.66-5.66ZM40,124H16a4,4,0,0,0,0,8H40a4,4,0,0,0,0-8Zm88,88a4,4,0,0,0-4,4v24a4,4,0,0,0,8,0V216A4,4,0,0,0,128,212Zm112-88H216a4,4,0,0,0,0,8h24a4,4,0,0,0,0-8Z" }, null, -1);
+var q39 = [
+  j49
 ];
 var D30 = {
   name: "PhSun"
@@ -33718,53 +33847,53 @@ var I18 = /* @__PURE__ */ defineComponent({
       transform: A.value
     }, Z.$attrs), [
       renderSlot(Z.$slots, "default"),
-      o.value === "bold" ? (openBlock(), createElementBlock("g", V32, y32)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", f41, S48)) : o.value === "fill" ? (openBlock(), createElementBlock("g", x48, C43)) : o.value === "light" ? (openBlock(), createElementBlock("g", B48, b48)) : o.value === "regular" ? (openBlock(), createElementBlock("g", E48, W48)) : o.value === "thin" ? (openBlock(), createElementBlock("g", $48, q38)) : createCommentVNode("", true)
-    ], 16, v12));
+      o.value === "bold" ? (openBlock(), createElementBlock("g", V32, y33)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", f42, S49)) : o.value === "fill" ? (openBlock(), createElementBlock("g", x49, C44)) : o.value === "light" ? (openBlock(), createElementBlock("g", B49, b49)) : o.value === "regular" ? (openBlock(), createElementBlock("g", E49, W49)) : o.value === "thin" ? (openBlock(), createElementBlock("g", $49, q39)) : createCommentVNode("", true)
+    ], 16, v13));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhTable.vue.mjs
-var M39 = ["width", "height", "fill", "transform"];
-var g6 = { key: 0 };
-var y33 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,44H32A12,12,0,0,0,20,56V192a20,20,0,0,0,20,20H216a20,20,0,0,0,20-20V56A12,12,0,0,0,224,44ZM44,116H76v24H44Zm56,0H212v24H100ZM212,68V92H44V68ZM44,164H76v24H44Zm56,24V164H212v24Z" }, null, -1);
-var f42 = [
-  y33
+var M40 = ["width", "height", "fill", "transform"];
+var g7 = { key: 0 };
+var y34 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,44H32A12,12,0,0,0,20,56V192a20,20,0,0,0,20,20H216a20,20,0,0,0,20-20V56A12,12,0,0,0,224,44ZM44,116H76v24H44Zm56,0H212v24H100ZM212,68V92H44V68ZM44,164H76v24H44Zm56,24V164H212v24Z" }, null, -1);
+var f43 = [
+  y34
 ];
 var A30 = { key: 1 };
-var w49 = /* @__PURE__ */ createBaseVNode("path", {
+var w50 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M88,104v96H32V104Z",
   opacity: "0.2"
 }, null, -1);
-var k49 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,48H32a8,8,0,0,0-8,8V192a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A8,8,0,0,0,224,48ZM40,112H80v32H40Zm56,0H216v32H96ZM216,64V96H40V64ZM40,160H80v32H40Zm176,32H96V160H216v32Z" }, null, -1);
-var x49 = [
-  w49,
-  k49
+var k50 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,48H32a8,8,0,0,0-8,8V192a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A8,8,0,0,0,224,48ZM40,112H80v32H40Zm56,0H216v32H96ZM216,64V96H40V64ZM40,160H80v32H40Zm176,32H96V160H216v32Z" }, null, -1);
+var x50 = [
+  w50,
+  k50
 ];
-var S49 = { key: 2 };
-var z49 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,48H32a8,8,0,0,0-8,8V192a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A8,8,0,0,0,224,48ZM40,112H80v32H40Zm56,0H216v32H96ZM40,160H80v32H40Zm176,32H96V160H216v32Z" }, null, -1);
-var C44 = [
-  z49
+var S50 = { key: 2 };
+var z50 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,48H32a8,8,0,0,0-8,8V192a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A8,8,0,0,0,224,48ZM40,112H80v32H40Zm56,0H216v32H96ZM40,160H80v32H40Zm176,32H96V160H216v32Z" }, null, -1);
+var C45 = [
+  z50
 ];
-var B49 = { key: 3 };
-var b49 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,50H32a6,6,0,0,0-6,6V192a14,14,0,0,0,14,14H216a14,14,0,0,0,14-14V56A6,6,0,0,0,224,50ZM38,110H82v36H38Zm56,0H218v36H94ZM218,62V98H38V62ZM38,192V158H82v36H40A2,2,0,0,1,38,192Zm178,2H94V158H218v34A2,2,0,0,1,216,194Z" }, null, -1);
-var N49 = [
-  b49
+var B50 = { key: 3 };
+var b50 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,50H32a6,6,0,0,0-6,6V192a14,14,0,0,0,14,14H216a14,14,0,0,0,14-14V56A6,6,0,0,0,224,50ZM38,110H82v36H38Zm56,0H218v36H94ZM218,62V98H38V62ZM38,192V158H82v36H40A2,2,0,0,1,38,192Zm178,2H94V158H218v34A2,2,0,0,1,216,194Z" }, null, -1);
+var N50 = [
+  b50
 ];
-var E49 = { key: 4 };
-var P49 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,48H32a8,8,0,0,0-8,8V192a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A8,8,0,0,0,224,48ZM40,112H80v32H40Zm56,0H216v32H96ZM216,64V96H40V64ZM40,160H80v32H40Zm176,32H96V160H216v32Z" }, null, -1);
-var W49 = [
-  P49
+var E50 = { key: 4 };
+var P50 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,48H32a8,8,0,0,0-8,8V192a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A8,8,0,0,0,224,48ZM40,112H80v32H40Zm56,0H216v32H96ZM216,64V96H40V64ZM40,160H80v32H40Zm176,32H96V160H216v32Z" }, null, -1);
+var W50 = [
+  P50
 ];
-var $49 = { key: 5 };
-var j49 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,52H32a4,4,0,0,0-4,4V192a12,12,0,0,0,12,12H216a12,12,0,0,0,12-12V56A4,4,0,0,0,224,52ZM36,108H84v40H36Zm56,0H220v40H92ZM220,60v40H36V60ZM36,192V156H84v40H40A4,4,0,0,1,36,192Zm180,4H92V156H220v36A4,4,0,0,1,216,196Z" }, null, -1);
+var $50 = { key: 5 };
+var j50 = /* @__PURE__ */ createBaseVNode("path", { d: "M224,52H32a4,4,0,0,0-4,4V192a12,12,0,0,0,12,12H216a12,12,0,0,0,12-12V56A4,4,0,0,0,224,52ZM36,108H84v40H36Zm56,0H220v40H92ZM220,60v40H36V60ZM36,192V156H84v40H40A4,4,0,0,1,36,192Zm180,4H92V156H220v36A4,4,0,0,1,216,196Z" }, null, -1);
 var T = [
-  j49
+  j50
 ];
-var q39 = {
+var q40 = {
   name: "PhTable"
 };
-var G21 = /* @__PURE__ */ defineComponent({
-  ...q39,
+var G22 = /* @__PURE__ */ defineComponent({
+  ...q40,
   props: {
     weight: {
       type: String
@@ -33790,53 +33919,53 @@ var G21 = /* @__PURE__ */ defineComponent({
       transform: Z.value
     }, l.$attrs), [
       renderSlot(l.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", g6, f42)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", A30, x49)) : s.value === "fill" ? (openBlock(), createElementBlock("g", S49, C44)) : s.value === "light" ? (openBlock(), createElementBlock("g", B49, N49)) : s.value === "regular" ? (openBlock(), createElementBlock("g", E49, W49)) : s.value === "thin" ? (openBlock(), createElementBlock("g", $49, T)) : createCommentVNode("", true)
-    ], 16, M39));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", g7, f43)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", A30, x50)) : s.value === "fill" ? (openBlock(), createElementBlock("g", S50, C45)) : s.value === "light" ? (openBlock(), createElementBlock("g", B50, N50)) : s.value === "regular" ? (openBlock(), createElementBlock("g", E50, W50)) : s.value === "thin" ? (openBlock(), createElementBlock("g", $50, T)) : createCommentVNode("", true)
+    ], 16, M40));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhTrash.vue.mjs
-var g7 = ["width", "height", "fill", "transform"];
-var M40 = { key: 0 };
-var y34 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,48H180V36A28,28,0,0,0,152,8H104A28,28,0,0,0,76,36V48H40a12,12,0,0,0,0,24h4V208a20,20,0,0,0,20,20H192a20,20,0,0,0,20-20V72h4a12,12,0,0,0,0-24ZM100,36a4,4,0,0,1,4-4h48a4,4,0,0,1,4,4V48H100Zm88,168H68V72H188ZM116,104v64a12,12,0,0,1-24,0V104a12,12,0,0,1,24,0Zm48,0v64a12,12,0,0,1-24,0V104a12,12,0,0,1,24,0Z" }, null, -1);
-var f43 = [
-  y34
+var g8 = ["width", "height", "fill", "transform"];
+var M41 = { key: 0 };
+var y35 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,48H180V36A28,28,0,0,0,152,8H104A28,28,0,0,0,76,36V48H40a12,12,0,0,0,0,24h4V208a20,20,0,0,0,20,20H192a20,20,0,0,0,20-20V72h4a12,12,0,0,0,0-24ZM100,36a4,4,0,0,1,4-4h48a4,4,0,0,1,4,4V48H100Zm88,168H68V72H188ZM116,104v64a12,12,0,0,1-24,0V104a12,12,0,0,1,24,0Zm48,0v64a12,12,0,0,1-24,0V104a12,12,0,0,1,24,0Z" }, null, -1);
+var f44 = [
+  y35
 ];
-var w50 = { key: 1 };
-var k50 = /* @__PURE__ */ createBaseVNode("path", {
+var w51 = { key: 1 };
+var k51 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M200,56V208a8,8,0,0,1-8,8H64a8,8,0,0,1-8-8V56Z",
   opacity: "0.2"
 }, null, -1);
 var A31 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,48H176V40a24,24,0,0,0-24-24H104A24,24,0,0,0,80,40v8H40a8,8,0,0,0,0,16h8V208a16,16,0,0,0,16,16H192a16,16,0,0,0,16-16V64h8a8,8,0,0,0,0-16ZM96,40a8,8,0,0,1,8-8h48a8,8,0,0,1,8,8v8H96Zm96,168H64V64H192ZM112,104v64a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Zm48,0v64a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Z" }, null, -1);
-var x50 = [
-  k50,
+var x51 = [
+  k51,
   A31
 ];
-var S50 = { key: 2 };
-var z50 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,48H176V40a24,24,0,0,0-24-24H104A24,24,0,0,0,80,40v8H40a8,8,0,0,0,0,16h8V208a16,16,0,0,0,16,16H192a16,16,0,0,0,16-16V64h8a8,8,0,0,0,0-16ZM112,168a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Zm48,0a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Zm0-120H96V40a8,8,0,0,1,8-8h48a8,8,0,0,1,8,8Z" }, null, -1);
-var C45 = [
-  z50
+var S51 = { key: 2 };
+var z51 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,48H176V40a24,24,0,0,0-24-24H104A24,24,0,0,0,80,40v8H40a8,8,0,0,0,0,16h8V208a16,16,0,0,0,16,16H192a16,16,0,0,0,16-16V64h8a8,8,0,0,0,0-16ZM112,168a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Zm48,0a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Zm0-120H96V40a8,8,0,0,1,8-8h48a8,8,0,0,1,8,8Z" }, null, -1);
+var C46 = [
+  z51
 ];
-var B50 = { key: 3 };
-var N50 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,50H174V40a22,22,0,0,0-22-22H104A22,22,0,0,0,82,40V50H40a6,6,0,0,0,0,12H50V208a14,14,0,0,0,14,14H192a14,14,0,0,0,14-14V62h10a6,6,0,0,0,0-12ZM94,40a10,10,0,0,1,10-10h48a10,10,0,0,1,10,10V50H94ZM194,208a2,2,0,0,1-2,2H64a2,2,0,0,1-2-2V62H194ZM110,104v64a6,6,0,0,1-12,0V104a6,6,0,0,1,12,0Zm48,0v64a6,6,0,0,1-12,0V104a6,6,0,0,1,12,0Z" }, null, -1);
-var b50 = [
-  N50
+var B51 = { key: 3 };
+var N51 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,50H174V40a22,22,0,0,0-22-22H104A22,22,0,0,0,82,40V50H40a6,6,0,0,0,0,12H50V208a14,14,0,0,0,14,14H192a14,14,0,0,0,14-14V62h10a6,6,0,0,0,0-12ZM94,40a10,10,0,0,1,10-10h48a10,10,0,0,1,10,10V50H94ZM194,208a2,2,0,0,1-2,2H64a2,2,0,0,1-2-2V62H194ZM110,104v64a6,6,0,0,1-12,0V104a6,6,0,0,1,12,0Zm48,0v64a6,6,0,0,1-12,0V104a6,6,0,0,1,12,0Z" }, null, -1);
+var b51 = [
+  N51
 ];
-var E50 = { key: 4 };
-var P50 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,48H176V40a24,24,0,0,0-24-24H104A24,24,0,0,0,80,40v8H40a8,8,0,0,0,0,16h8V208a16,16,0,0,0,16,16H192a16,16,0,0,0,16-16V64h8a8,8,0,0,0,0-16ZM96,40a8,8,0,0,1,8-8h48a8,8,0,0,1,8,8v8H96Zm96,168H64V64H192ZM112,104v64a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Zm48,0v64a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Z" }, null, -1);
-var W50 = [
-  P50
+var E51 = { key: 4 };
+var P51 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,48H176V40a24,24,0,0,0-24-24H104A24,24,0,0,0,80,40v8H40a8,8,0,0,0,0,16h8V208a16,16,0,0,0,16,16H192a16,16,0,0,0,16-16V64h8a8,8,0,0,0,0-16ZM96,40a8,8,0,0,1,8-8h48a8,8,0,0,1,8,8v8H96Zm96,168H64V64H192ZM112,104v64a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Zm48,0v64a8,8,0,0,1-16,0V104a8,8,0,0,1,16,0Z" }, null, -1);
+var W51 = [
+  P51
 ];
-var $50 = { key: 5 };
-var j50 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,52H172V40a20,20,0,0,0-20-20H104A20,20,0,0,0,84,40V52H40a4,4,0,0,0,0,8H52V208a12,12,0,0,0,12,12H192a12,12,0,0,0,12-12V60h12a4,4,0,0,0,0-8ZM92,40a12,12,0,0,1,12-12h48a12,12,0,0,1,12,12V52H92ZM196,208a4,4,0,0,1-4,4H64a4,4,0,0,1-4-4V60H196ZM108,104v64a4,4,0,0,1-8,0V104a4,4,0,0,1,8,0Zm48,0v64a4,4,0,0,1-8,0V104a4,4,0,0,1,8,0Z" }, null, -1);
+var $51 = { key: 5 };
+var j51 = /* @__PURE__ */ createBaseVNode("path", { d: "M216,52H172V40a20,20,0,0,0-20-20H104A20,20,0,0,0,84,40V52H40a4,4,0,0,0,0,8H52V208a12,12,0,0,0,12,12H192a12,12,0,0,0,12-12V60h12a4,4,0,0,0,0-8ZM92,40a12,12,0,0,1,12-12h48a12,12,0,0,1,12,12V52H92ZM196,208a4,4,0,0,1-4,4H64a4,4,0,0,1-4-4V60H196ZM108,104v64a4,4,0,0,1-8,0V104a4,4,0,0,1,8,0Zm48,0v64a4,4,0,0,1-8,0V104a4,4,0,0,1,8,0Z" }, null, -1);
 var T2 = [
-  j50
+  j51
 ];
-var q40 = {
+var q41 = {
   name: "PhTrash"
 };
-var G22 = /* @__PURE__ */ defineComponent({
-  ...q40,
+var G23 = /* @__PURE__ */ defineComponent({
+  ...q41,
   props: {
     weight: {
       type: String
@@ -33862,47 +33991,47 @@ var G22 = /* @__PURE__ */ defineComponent({
       transform: v.value
     }, l.$attrs), [
       renderSlot(l.$slots, "default"),
-      o.value === "bold" ? (openBlock(), createElementBlock("g", M40, f43)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", w50, x50)) : o.value === "fill" ? (openBlock(), createElementBlock("g", S50, C45)) : o.value === "light" ? (openBlock(), createElementBlock("g", B50, b50)) : o.value === "regular" ? (openBlock(), createElementBlock("g", E50, W50)) : o.value === "thin" ? (openBlock(), createElementBlock("g", $50, T2)) : createCommentVNode("", true)
-    ], 16, g7));
+      o.value === "bold" ? (openBlock(), createElementBlock("g", M41, f44)) : o.value === "duotone" ? (openBlock(), createElementBlock("g", w51, x51)) : o.value === "fill" ? (openBlock(), createElementBlock("g", S51, C46)) : o.value === "light" ? (openBlock(), createElementBlock("g", B51, b51)) : o.value === "regular" ? (openBlock(), createElementBlock("g", E51, W51)) : o.value === "thin" ? (openBlock(), createElementBlock("g", $51, T2)) : createCommentVNode("", true)
+    ], 16, g8));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhTrendDown.vue.mjs
-var f44 = ["width", "height", "fill", "transform"];
-var w51 = { key: 0 };
-var M41 = /* @__PURE__ */ createBaseVNode("path", { d: "M244,128v64a12,12,0,0,1-12,12H168a12,12,0,0,1,0-24h35l-67-67-31.51,31.52a12,12,0,0,1-17,0l-72-72a12,12,0,0,1,17-17L96,119l31.51-31.52a12,12,0,0,1,17,0L220,163V128a12,12,0,0,1,24,0Z" }, null, -1);
-var k51 = [
-  M41
+var f45 = ["width", "height", "fill", "transform"];
+var w52 = { key: 0 };
+var M42 = /* @__PURE__ */ createBaseVNode("path", { d: "M244,128v64a12,12,0,0,1-12,12H168a12,12,0,0,1,0-24h35l-67-67-31.51,31.52a12,12,0,0,1-17,0l-72-72a12,12,0,0,1,17-17L96,119l31.51-31.52a12,12,0,0,1,17,0L220,163V128a12,12,0,0,1,24,0Z" }, null, -1);
+var k52 = [
+  M42
 ];
 var Z27 = { key: 1 };
-var H25 = /* @__PURE__ */ createBaseVNode("path", {
+var H26 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M232,128v64H168Z",
   opacity: "0.2"
 }, null, -1);
 var V33 = /* @__PURE__ */ createBaseVNode("path", { d: "M235.06,120.61a8,8,0,0,0-8.72,1.73L200,148.69,141.66,90.34a8,8,0,0,0-11.32,0L96,124.69,29.66,58.34A8,8,0,0,0,18.34,69.66l72,72a8,8,0,0,0,11.32,0L136,107.31,188.69,160l-26.35,26.34A8,8,0,0,0,168,200h64a8,8,0,0,0,8-8V128A8,8,0,0,0,235.06,120.61ZM224,184H187.31L224,147.31Z" }, null, -1);
-var x51 = [
-  H25,
+var x52 = [
+  H26,
   V33
 ];
 var A32 = { key: 2 };
-var S51 = /* @__PURE__ */ createBaseVNode("path", { d: "M240,128v64a8,8,0,0,1-8,8H168a8,8,0,0,1-5.66-13.66L188.69,160,136,107.31l-34.34,34.35a8,8,0,0,1-11.32,0l-72-72A8,8,0,0,1,29.66,58.34L96,124.69l34.34-34.35a8,8,0,0,1,11.32,0L200,148.69l26.34-26.35A8,8,0,0,1,240,128Z" }, null, -1);
-var z51 = [
-  S51
+var S52 = /* @__PURE__ */ createBaseVNode("path", { d: "M240,128v64a8,8,0,0,1-8,8H168a8,8,0,0,1-5.66-13.66L188.69,160,136,107.31l-34.34,34.35a8,8,0,0,1-11.32,0l-72-72A8,8,0,0,1,29.66,58.34L96,124.69l34.34-34.35a8,8,0,0,1,11.32,0L200,148.69l26.34-26.35A8,8,0,0,1,240,128Z" }, null, -1);
+var z52 = [
+  S52
 ];
-var C46 = { key: 3 };
-var B51 = /* @__PURE__ */ createBaseVNode("path", { d: "M238,128v64a6,6,0,0,1-6,6H168a6,6,0,0,1,0-12h49.52L136,104.49l-35.76,35.75a6,6,0,0,1-8.48,0l-72-72a6,6,0,0,1,8.48-8.48L96,127.51l35.76-35.75a6,6,0,0,1,8.48,0L226,177.52V128a6,6,0,0,1,12,0Z" }, null, -1);
-var N51 = [
-  B51
+var C47 = { key: 3 };
+var B52 = /* @__PURE__ */ createBaseVNode("path", { d: "M238,128v64a6,6,0,0,1-6,6H168a6,6,0,0,1,0-12h49.52L136,104.49l-35.76,35.75a6,6,0,0,1-8.48,0l-72-72a6,6,0,0,1,8.48-8.48L96,127.51l35.76-35.75a6,6,0,0,1,8.48,0L226,177.52V128a6,6,0,0,1,12,0Z" }, null, -1);
+var N52 = [
+  B52
 ];
-var b51 = { key: 4 };
-var E51 = /* @__PURE__ */ createBaseVNode("path", { d: "M240,128v64a8,8,0,0,1-8,8H168a8,8,0,0,1,0-16h44.69L136,107.31l-34.34,34.35a8,8,0,0,1-11.32,0l-72-72A8,8,0,0,1,29.66,58.34L96,124.69l34.34-34.35a8,8,0,0,1,11.32,0L224,172.69V128a8,8,0,0,1,16,0Z" }, null, -1);
-var P51 = [
-  E51
+var b52 = { key: 4 };
+var E52 = /* @__PURE__ */ createBaseVNode("path", { d: "M240,128v64a8,8,0,0,1-8,8H168a8,8,0,0,1,0-16h44.69L136,107.31l-34.34,34.35a8,8,0,0,1-11.32,0l-72-72A8,8,0,0,1,29.66,58.34L96,124.69l34.34-34.35a8,8,0,0,1,11.32,0L224,172.69V128a8,8,0,0,1,16,0Z" }, null, -1);
+var P52 = [
+  E52
 ];
-var W51 = { key: 5 };
-var $51 = /* @__PURE__ */ createBaseVNode("path", { d: "M236,128v64a4,4,0,0,1-4,4H168a4,4,0,0,1,0-8h54.34L136,101.66,98.83,138.83a4,4,0,0,1-5.66,0l-72-72a4,4,0,0,1,5.66-5.66L96,130.34l37.17-37.17a4,4,0,0,1,5.66,0L228,182.34V128a4,4,0,0,1,8,0Z" }, null, -1);
-var j51 = [
-  $51
+var W52 = { key: 5 };
+var $52 = /* @__PURE__ */ createBaseVNode("path", { d: "M236,128v64a4,4,0,0,1-4,4H168a4,4,0,0,1,0-8h54.34L136,101.66,98.83,138.83a4,4,0,0,1-5.66,0l-72-72a4,4,0,0,1,5.66-5.66L96,130.34l37.17-37.17a4,4,0,0,1,5.66,0L228,182.34V128a4,4,0,0,1,8,0Z" }, null, -1);
+var j52 = [
+  $52
 ];
 var D31 = {
   name: "PhTrendDown"
@@ -33934,17 +34063,17 @@ var F13 = /* @__PURE__ */ defineComponent({
       transform: g.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      l.value === "bold" ? (openBlock(), createElementBlock("g", w51, k51)) : l.value === "duotone" ? (openBlock(), createElementBlock("g", Z27, x51)) : l.value === "fill" ? (openBlock(), createElementBlock("g", A32, z51)) : l.value === "light" ? (openBlock(), createElementBlock("g", C46, N51)) : l.value === "regular" ? (openBlock(), createElementBlock("g", b51, P51)) : l.value === "thin" ? (openBlock(), createElementBlock("g", W51, j51)) : createCommentVNode("", true)
-    ], 16, f44));
+      l.value === "bold" ? (openBlock(), createElementBlock("g", w52, k52)) : l.value === "duotone" ? (openBlock(), createElementBlock("g", Z27, x52)) : l.value === "fill" ? (openBlock(), createElementBlock("g", A32, z52)) : l.value === "light" ? (openBlock(), createElementBlock("g", C47, N52)) : l.value === "regular" ? (openBlock(), createElementBlock("g", b52, P52)) : l.value === "thin" ? (openBlock(), createElementBlock("g", W52, j52)) : createCommentVNode("", true)
+    ], 16, f45));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhTrendUp.vue.mjs
-var f45 = ["width", "height", "fill", "transform"];
-var w52 = { key: 0 };
-var M42 = /* @__PURE__ */ createBaseVNode("path", { d: "M244,56v64a12,12,0,0,1-24,0V85l-75.51,75.52a12,12,0,0,1-17,0L96,129,32.49,192.49a12,12,0,0,1-17-17l72-72a12,12,0,0,1,17,0L136,135l67-67H168a12,12,0,0,1,0-24h64A12,12,0,0,1,244,56Z" }, null, -1);
-var k52 = [
-  M42
+var f46 = ["width", "height", "fill", "transform"];
+var w53 = { key: 0 };
+var M43 = /* @__PURE__ */ createBaseVNode("path", { d: "M244,56v64a12,12,0,0,1-24,0V85l-75.51,75.52a12,12,0,0,1-17,0L96,129,32.49,192.49a12,12,0,0,1-17-17l72-72a12,12,0,0,1,17,0L136,135l67-67H168a12,12,0,0,1,0-24h64A12,12,0,0,1,244,56Z" }, null, -1);
+var k53 = [
+  M43
 ];
 var A33 = { key: 1 };
 var Z28 = /* @__PURE__ */ createBaseVNode("path", {
@@ -33952,29 +34081,29 @@ var Z28 = /* @__PURE__ */ createBaseVNode("path", {
   opacity: "0.2"
 }, null, -1);
 var V34 = /* @__PURE__ */ createBaseVNode("path", { d: "M232,48H168a8,8,0,0,0-5.66,13.66L188.69,88,136,140.69l-34.34-34.35a8,8,0,0,0-11.32,0l-72,72a8,8,0,0,0,11.32,11.32L96,123.31l34.34,34.35a8,8,0,0,0,11.32,0L200,99.31l26.34,26.35A8,8,0,0,0,240,120V56A8,8,0,0,0,232,48Zm-8,52.69L187.31,64H224Z" }, null, -1);
-var x52 = [
+var x53 = [
   Z28,
   V34
 ];
-var H26 = { key: 2 };
-var S52 = /* @__PURE__ */ createBaseVNode("path", { d: "M240,56v64a8,8,0,0,1-13.66,5.66L200,99.31l-58.34,58.35a8,8,0,0,1-11.32,0L96,123.31,29.66,189.66a8,8,0,0,1-11.32-11.32l72-72a8,8,0,0,1,11.32,0L136,140.69,188.69,88,162.34,61.66A8,8,0,0,1,168,48h64A8,8,0,0,1,240,56Z" }, null, -1);
-var z52 = [
-  S52
+var H27 = { key: 2 };
+var S53 = /* @__PURE__ */ createBaseVNode("path", { d: "M240,56v64a8,8,0,0,1-13.66,5.66L200,99.31l-58.34,58.35a8,8,0,0,1-11.32,0L96,123.31,29.66,189.66a8,8,0,0,1-11.32-11.32l72-72a8,8,0,0,1,11.32,0L136,140.69,188.69,88,162.34,61.66A8,8,0,0,1,168,48h64A8,8,0,0,1,240,56Z" }, null, -1);
+var z53 = [
+  S53
 ];
-var C47 = { key: 3 };
-var B52 = /* @__PURE__ */ createBaseVNode("path", { d: "M238,56v64a6,6,0,0,1-12,0V70.48l-85.76,85.76a6,6,0,0,1-8.48,0L96,120.49,28.24,188.24a6,6,0,0,1-8.48-8.48l72-72a6,6,0,0,1,8.48,0L136,143.51,217.52,62H168a6,6,0,0,1,0-12h64A6,6,0,0,1,238,56Z" }, null, -1);
-var N52 = [
-  B52
+var C48 = { key: 3 };
+var B53 = /* @__PURE__ */ createBaseVNode("path", { d: "M238,56v64a6,6,0,0,1-12,0V70.48l-85.76,85.76a6,6,0,0,1-8.48,0L96,120.49,28.24,188.24a6,6,0,0,1-8.48-8.48l72-72a6,6,0,0,1,8.48,0L136,143.51,217.52,62H168a6,6,0,0,1,0-12h64A6,6,0,0,1,238,56Z" }, null, -1);
+var N53 = [
+  B53
 ];
-var b52 = { key: 4 };
-var E52 = /* @__PURE__ */ createBaseVNode("path", { d: "M240,56v64a8,8,0,0,1-16,0V75.31l-82.34,82.35a8,8,0,0,1-11.32,0L96,123.31,29.66,189.66a8,8,0,0,1-11.32-11.32l72-72a8,8,0,0,1,11.32,0L136,140.69,212.69,64H168a8,8,0,0,1,0-16h64A8,8,0,0,1,240,56Z" }, null, -1);
-var P52 = [
-  E52
+var b53 = { key: 4 };
+var E53 = /* @__PURE__ */ createBaseVNode("path", { d: "M240,56v64a8,8,0,0,1-16,0V75.31l-82.34,82.35a8,8,0,0,1-11.32,0L96,123.31,29.66,189.66a8,8,0,0,1-11.32-11.32l72-72a8,8,0,0,1,11.32,0L136,140.69,212.69,64H168a8,8,0,0,1,0-16h64A8,8,0,0,1,240,56Z" }, null, -1);
+var P53 = [
+  E53
 ];
-var W52 = { key: 5 };
-var $52 = /* @__PURE__ */ createBaseVNode("path", { d: "M236,56v64a4,4,0,0,1-8,0V65.66l-89.17,89.17a4,4,0,0,1-5.66,0L96,117.66,26.83,186.83a4,4,0,0,1-5.66-5.66l72-72a4,4,0,0,1,5.66,0L136,146.34,222.34,60H168a4,4,0,0,1,0-8h64A4,4,0,0,1,236,56Z" }, null, -1);
-var j52 = [
-  $52
+var W53 = { key: 5 };
+var $53 = /* @__PURE__ */ createBaseVNode("path", { d: "M236,56v64a4,4,0,0,1-8,0V65.66l-89.17,89.17a4,4,0,0,1-5.66,0L96,117.66,26.83,186.83a4,4,0,0,1-5.66-5.66l72-72a4,4,0,0,1,5.66,0L136,146.34,222.34,60H168a4,4,0,0,1,0-8h64A4,4,0,0,1,236,56Z" }, null, -1);
+var j53 = [
+  $53
 ];
 var T3 = {
   name: "PhTrendUp"
@@ -34006,47 +34135,47 @@ var D32 = /* @__PURE__ */ defineComponent({
       transform: g.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", w52, k52)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", A33, x52)) : s.value === "fill" ? (openBlock(), createElementBlock("g", H26, z52)) : s.value === "light" ? (openBlock(), createElementBlock("g", C47, N52)) : s.value === "regular" ? (openBlock(), createElementBlock("g", b52, P52)) : s.value === "thin" ? (openBlock(), createElementBlock("g", W52, j52)) : createCommentVNode("", true)
-    ], 16, f45));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", w53, k53)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", A33, x53)) : s.value === "fill" ? (openBlock(), createElementBlock("g", H27, z53)) : s.value === "light" ? (openBlock(), createElementBlock("g", C48, N53)) : s.value === "regular" ? (openBlock(), createElementBlock("g", b53, P53)) : s.value === "thin" ? (openBlock(), createElementBlock("g", W53, j53)) : createCommentVNode("", true)
+    ], 16, f46));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhWarningCircle.vue.mjs
-var y35 = ["width", "height", "fill", "transform"];
-var f46 = { key: 0 };
-var w53 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,20A108,108,0,1,0,236,128,108.12,108.12,0,0,0,128,20Zm0,192a84,84,0,1,1,84-84A84.09,84.09,0,0,1,128,212Zm-12-80V80a12,12,0,0,1,24,0v52a12,12,0,0,1-24,0Zm28,40a16,16,0,1,1-16-16A16,16,0,0,1,144,172Z" }, null, -1);
-var M43 = [
-  w53
+var y36 = ["width", "height", "fill", "transform"];
+var f47 = { key: 0 };
+var w54 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,20A108,108,0,1,0,236,128,108.12,108.12,0,0,0,128,20Zm0,192a84,84,0,1,1,84-84A84.09,84.09,0,0,1,128,212Zm-12-80V80a12,12,0,0,1,24,0v52a12,12,0,0,1-24,0Zm28,40a16,16,0,1,1-16-16A16,16,0,0,1,144,172Z" }, null, -1);
+var M44 = [
+  w54
 ];
-var k53 = { key: 1 };
+var k54 = { key: 1 };
 var V35 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M224,128a96,96,0,1,1-96-96A96,96,0,0,1,224,128Z",
   opacity: "0.2"
 }, null, -1);
-var x53 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm-8-80V80a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm20,36a12,12,0,1,1-12-12A12,12,0,0,1,140,172Z" }, null, -1);
-var C48 = [
+var x54 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm-8-80V80a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm20,36a12,12,0,1,1-12-12A12,12,0,0,1,140,172Z" }, null, -1);
+var C49 = [
   V35,
-  x53
+  x54
 ];
-var S53 = { key: 2 };
-var z53 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-8,56a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm8,104a12,12,0,1,1,12-12A12,12,0,0,1,128,184Z" }, null, -1);
-var B53 = [
-  z53
+var S54 = { key: 2 };
+var z54 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-8,56a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm8,104a12,12,0,1,1,12-12A12,12,0,0,1,128,184Z" }, null, -1);
+var B54 = [
+  z54
 ];
-var N53 = { key: 3 };
-var W53 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,26A102,102,0,1,0,230,128,102.12,102.12,0,0,0,128,26Zm0,192a90,90,0,1,1,90-90A90.1,90.1,0,0,1,128,218Zm-6-82V80a6,6,0,0,1,12,0v56a6,6,0,0,1-12,0Zm16,36a10,10,0,1,1-10-10A10,10,0,0,1,138,172Z" }, null, -1);
-var b53 = [
-  W53
+var N54 = { key: 3 };
+var W54 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,26A102,102,0,1,0,230,128,102.12,102.12,0,0,0,128,26Zm0,192a90,90,0,1,1,90-90A90.1,90.1,0,0,1,128,218Zm-6-82V80a6,6,0,0,1,12,0v56a6,6,0,0,1-12,0Zm16,36a10,10,0,1,1-10-10A10,10,0,0,1,138,172Z" }, null, -1);
+var b54 = [
+  W54
 ];
-var E53 = { key: 4 };
-var P53 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm-8-80V80a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm20,36a12,12,0,1,1-12-12A12,12,0,0,1,140,172Z" }, null, -1);
-var $53 = [
-  P53
+var E54 = { key: 4 };
+var P54 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm-8-80V80a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm20,36a12,12,0,1,1-12-12A12,12,0,0,1,140,172Z" }, null, -1);
+var $54 = [
+  P54
 ];
-var j53 = { key: 5 };
-var q41 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,28A100,100,0,1,0,228,128,100.11,100.11,0,0,0,128,28Zm0,192a92,92,0,1,1,92-92A92.1,92.1,0,0,1,128,220Zm-4-84V80a4,4,0,0,1,8,0v56a4,4,0,0,1-8,0Zm12,36a8,8,0,1,1-8-8A8,8,0,0,1,136,172Z" }, null, -1);
+var j54 = { key: 5 };
+var q42 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,28A100,100,0,1,0,228,128,100.11,100.11,0,0,0,128,28Zm0,192a92,92,0,1,1,92-92A92.1,92.1,0,0,1,128,220Zm-4-84V80a4,4,0,0,1,8,0v56a4,4,0,0,1-8,0Zm12,36a8,8,0,1,1-8-8A8,8,0,0,1,136,172Z" }, null, -1);
 var D33 = [
-  q41
+  q42
 ];
 var F14 = {
   name: "PhWarningCircle"
@@ -34078,47 +34207,47 @@ var I19 = /* @__PURE__ */ defineComponent({
       transform: p.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", f46, M43)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", k53, C48)) : s.value === "fill" ? (openBlock(), createElementBlock("g", S53, B53)) : s.value === "light" ? (openBlock(), createElementBlock("g", N53, b53)) : s.value === "regular" ? (openBlock(), createElementBlock("g", E53, $53)) : s.value === "thin" ? (openBlock(), createElementBlock("g", j53, D33)) : createCommentVNode("", true)
-    ], 16, y35));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", f47, M44)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", k54, C49)) : s.value === "fill" ? (openBlock(), createElementBlock("g", S54, B54)) : s.value === "light" ? (openBlock(), createElementBlock("g", N54, b54)) : s.value === "regular" ? (openBlock(), createElementBlock("g", E54, $54)) : s.value === "thin" ? (openBlock(), createElementBlock("g", j54, D33)) : createCommentVNode("", true)
+    ], 16, y36));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhX.vue.mjs
-var f47 = ["width", "height", "fill", "transform"];
-var w54 = { key: 0 };
-var M44 = /* @__PURE__ */ createBaseVNode("path", { d: "M208.49,191.51a12,12,0,0,1-17,17L128,145,64.49,208.49a12,12,0,0,1-17-17L111,128,47.51,64.49a12,12,0,0,1,17-17L128,111l63.51-63.52a12,12,0,0,1,17,17L145,128Z" }, null, -1);
-var k54 = [
-  M44
+var f48 = ["width", "height", "fill", "transform"];
+var w55 = { key: 0 };
+var M45 = /* @__PURE__ */ createBaseVNode("path", { d: "M208.49,191.51a12,12,0,0,1-17,17L128,145,64.49,208.49a12,12,0,0,1-17-17L111,128,47.51,64.49a12,12,0,0,1,17-17L128,111l63.51-63.52a12,12,0,0,1,17,17L145,128Z" }, null, -1);
+var k55 = [
+  M45
 ];
 var Z29 = { key: 1 };
 var A34 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M216,56V200a16,16,0,0,1-16,16H56a16,16,0,0,1-16-16V56A16,16,0,0,1,56,40H200A16,16,0,0,1,216,56Z",
   opacity: "0.2"
 }, null, -1);
-var x54 = /* @__PURE__ */ createBaseVNode("path", { d: "M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z" }, null, -1);
-var S54 = [
+var x55 = /* @__PURE__ */ createBaseVNode("path", { d: "M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z" }, null, -1);
+var S55 = [
   A34,
-  x54
+  x55
 ];
 var V36 = { key: 2 };
-var z54 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM181.66,170.34a8,8,0,0,1-11.32,11.32L128,139.31,85.66,181.66a8,8,0,0,1-11.32-11.32L116.69,128,74.34,85.66A8,8,0,0,1,85.66,74.34L128,116.69l42.34-42.35a8,8,0,0,1,11.32,11.32L139.31,128Z" }, null, -1);
-var C49 = [
-  z54
+var z55 = /* @__PURE__ */ createBaseVNode("path", { d: "M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM181.66,170.34a8,8,0,0,1-11.32,11.32L128,139.31,85.66,181.66a8,8,0,0,1-11.32-11.32L116.69,128,74.34,85.66A8,8,0,0,1,85.66,74.34L128,116.69l42.34-42.35a8,8,0,0,1,11.32,11.32L139.31,128Z" }, null, -1);
+var C50 = [
+  z55
 ];
-var B54 = { key: 3 };
-var H27 = /* @__PURE__ */ createBaseVNode("path", { d: "M204.24,195.76a6,6,0,1,1-8.48,8.48L128,136.49,60.24,204.24a6,6,0,0,1-8.48-8.48L119.51,128,51.76,60.24a6,6,0,0,1,8.48-8.48L128,119.51l67.76-67.75a6,6,0,0,1,8.48,8.48L136.49,128Z" }, null, -1);
-var N54 = [
-  H27
+var B55 = { key: 3 };
+var H28 = /* @__PURE__ */ createBaseVNode("path", { d: "M204.24,195.76a6,6,0,1,1-8.48,8.48L128,136.49,60.24,204.24a6,6,0,0,1-8.48-8.48L119.51,128,51.76,60.24a6,6,0,0,1,8.48-8.48L128,119.51l67.76-67.75a6,6,0,0,1,8.48,8.48L136.49,128Z" }, null, -1);
+var N55 = [
+  H28
 ];
-var b54 = { key: 4 };
-var E54 = /* @__PURE__ */ createBaseVNode("path", { d: "M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z" }, null, -1);
-var P54 = [
-  E54
+var b55 = { key: 4 };
+var E55 = /* @__PURE__ */ createBaseVNode("path", { d: "M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z" }, null, -1);
+var P55 = [
+  E55
 ];
-var W54 = { key: 5 };
-var $54 = /* @__PURE__ */ createBaseVNode("path", { d: "M202.83,197.17a4,4,0,0,1-5.66,5.66L128,133.66,58.83,202.83a4,4,0,0,1-5.66-5.66L122.34,128,53.17,58.83a4,4,0,0,1,5.66-5.66L128,122.34l69.17-69.17a4,4,0,1,1,5.66,5.66L133.66,128Z" }, null, -1);
-var j54 = [
-  $54
+var W55 = { key: 5 };
+var $55 = /* @__PURE__ */ createBaseVNode("path", { d: "M202.83,197.17a4,4,0,0,1-5.66,5.66L128,133.66,58.83,202.83a4,4,0,0,1-5.66-5.66L122.34,128,53.17,58.83a4,4,0,0,1,5.66-5.66L128,122.34l69.17-69.17a4,4,0,1,1,5.66,5.66L133.66,128Z" }, null, -1);
+var j55 = [
+  $55
 ];
 var X = {
   name: "PhX"
@@ -34150,53 +34279,53 @@ var F15 = /* @__PURE__ */ defineComponent({
       transform: L.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      s.value === "bold" ? (openBlock(), createElementBlock("g", w54, k54)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", Z29, S54)) : s.value === "fill" ? (openBlock(), createElementBlock("g", V36, C49)) : s.value === "light" ? (openBlock(), createElementBlock("g", B54, N54)) : s.value === "regular" ? (openBlock(), createElementBlock("g", b54, P54)) : s.value === "thin" ? (openBlock(), createElementBlock("g", W54, j54)) : createCommentVNode("", true)
-    ], 16, f47));
+      s.value === "bold" ? (openBlock(), createElementBlock("g", w55, k55)) : s.value === "duotone" ? (openBlock(), createElementBlock("g", Z29, S55)) : s.value === "fill" ? (openBlock(), createElementBlock("g", V36, C50)) : s.value === "light" ? (openBlock(), createElementBlock("g", B55, N55)) : s.value === "regular" ? (openBlock(), createElementBlock("g", b55, P55)) : s.value === "thin" ? (openBlock(), createElementBlock("g", W55, j55)) : createCommentVNode("", true)
+    ], 16, f48));
   }
 });
 
 // node_modules/@phosphor-icons/vue/dist/icons/PhXCircle.vue.mjs
-var y36 = ["width", "height", "fill", "transform"];
-var M45 = { key: 0 };
-var f48 = /* @__PURE__ */ createBaseVNode("path", { d: "M168.49,104.49,145,128l23.52,23.51a12,12,0,0,1-17,17L128,145l-23.51,23.52a12,12,0,0,1-17-17L111,128,87.51,104.49a12,12,0,0,1,17-17L128,111l23.51-23.52a12,12,0,0,1,17,17ZM236,128A108,108,0,1,1,128,20,108.12,108.12,0,0,1,236,128Zm-24,0a84,84,0,1,0-84,84A84.09,84.09,0,0,0,212,128Z" }, null, -1);
+var y37 = ["width", "height", "fill", "transform"];
+var M46 = { key: 0 };
+var f49 = /* @__PURE__ */ createBaseVNode("path", { d: "M168.49,104.49,145,128l23.52,23.51a12,12,0,0,1-17,17L128,145l-23.51,23.52a12,12,0,0,1-17-17L111,128,87.51,104.49a12,12,0,0,1,17-17L128,111l23.51-23.52a12,12,0,0,1,17,17ZM236,128A108,108,0,1,1,128,20,108.12,108.12,0,0,1,236,128Zm-24,0a84,84,0,1,0-84,84A84.09,84.09,0,0,0,212,128Z" }, null, -1);
 var A35 = [
-  f48
+  f49
 ];
-var w55 = { key: 1 };
-var k55 = /* @__PURE__ */ createBaseVNode("path", {
+var w56 = { key: 1 };
+var k56 = /* @__PURE__ */ createBaseVNode("path", {
   d: "M224,128a96,96,0,1,1-96-96A96,96,0,0,1,224,128Z",
   opacity: "0.2"
 }, null, -1);
-var x55 = /* @__PURE__ */ createBaseVNode("path", { d: "M165.66,101.66,139.31,128l26.35,26.34a8,8,0,0,1-11.32,11.32L128,139.31l-26.34,26.35a8,8,0,0,1-11.32-11.32L116.69,128,90.34,101.66a8,8,0,0,1,11.32-11.32L128,116.69l26.34-26.35a8,8,0,0,1,11.32,11.32ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z" }, null, -1);
-var C50 = [
-  k55,
-  x55
+var x56 = /* @__PURE__ */ createBaseVNode("path", { d: "M165.66,101.66,139.31,128l26.35,26.34a8,8,0,0,1-11.32,11.32L128,139.31l-26.34,26.35a8,8,0,0,1-11.32-11.32L116.69,128,90.34,101.66a8,8,0,0,1,11.32-11.32L128,116.69l26.34-26.35a8,8,0,0,1,11.32,11.32ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z" }, null, -1);
+var C51 = [
+  k56,
+  x56
 ];
-var S55 = { key: 2 };
-var z55 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm37.66,130.34a8,8,0,0,1-11.32,11.32L128,139.31l-26.34,26.35a8,8,0,0,1-11.32-11.32L116.69,128,90.34,101.66a8,8,0,0,1,11.32-11.32L128,116.69l26.34-26.35a8,8,0,0,1,11.32,11.32L139.31,128Z" }, null, -1);
-var B55 = [
-  z55
+var S56 = { key: 2 };
+var z56 = /* @__PURE__ */ createBaseVNode("path", { d: "M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm37.66,130.34a8,8,0,0,1-11.32,11.32L128,139.31l-26.34,26.35a8,8,0,0,1-11.32-11.32L116.69,128,90.34,101.66a8,8,0,0,1,11.32-11.32L128,116.69l26.34-26.35a8,8,0,0,1,11.32,11.32L139.31,128Z" }, null, -1);
+var B56 = [
+  z56
 ];
-var N55 = { key: 3 };
-var b55 = /* @__PURE__ */ createBaseVNode("path", { d: "M164.24,100.24,136.48,128l27.76,27.76a6,6,0,1,1-8.48,8.48L128,136.48l-27.76,27.76a6,6,0,0,1-8.48-8.48L119.52,128,91.76,100.24a6,6,0,0,1,8.48-8.48L128,119.52l27.76-27.76a6,6,0,0,1,8.48,8.48ZM230,128A102,102,0,1,1,128,26,102.12,102.12,0,0,1,230,128Zm-12,0a90,90,0,1,0-90,90A90.1,90.1,0,0,0,218,128Z" }, null, -1);
-var E55 = [
-  b55
+var N56 = { key: 3 };
+var b56 = /* @__PURE__ */ createBaseVNode("path", { d: "M164.24,100.24,136.48,128l27.76,27.76a6,6,0,1,1-8.48,8.48L128,136.48l-27.76,27.76a6,6,0,0,1-8.48-8.48L119.52,128,91.76,100.24a6,6,0,0,1,8.48-8.48L128,119.52l27.76-27.76a6,6,0,0,1,8.48,8.48ZM230,128A102,102,0,1,1,128,26,102.12,102.12,0,0,1,230,128Zm-12,0a90,90,0,1,0-90,90A90.1,90.1,0,0,0,218,128Z" }, null, -1);
+var E56 = [
+  b56
 ];
-var P55 = { key: 4 };
+var P56 = { key: 4 };
 var V37 = /* @__PURE__ */ createBaseVNode("path", { d: "M165.66,101.66,139.31,128l26.35,26.34a8,8,0,0,1-11.32,11.32L128,139.31l-26.34,26.35a8,8,0,0,1-11.32-11.32L116.69,128,90.34,101.66a8,8,0,0,1,11.32-11.32L128,116.69l26.34-26.35a8,8,0,0,1,11.32,11.32ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z" }, null, -1);
-var W55 = [
+var W56 = [
   V37
 ];
-var $55 = { key: 5 };
-var j55 = /* @__PURE__ */ createBaseVNode("path", { d: "M162.83,98.83,133.66,128l29.17,29.17a4,4,0,0,1-5.66,5.66L128,133.66,98.83,162.83a4,4,0,0,1-5.66-5.66L122.34,128,93.17,98.83a4,4,0,0,1,5.66-5.66L128,122.34l29.17-29.17a4,4,0,1,1,5.66,5.66ZM228,128A100,100,0,1,1,128,28,100.11,100.11,0,0,1,228,128Zm-8,0a92,92,0,1,0-92,92A92.1,92.1,0,0,0,220,128Z" }, null, -1);
+var $56 = { key: 5 };
+var j56 = /* @__PURE__ */ createBaseVNode("path", { d: "M162.83,98.83,133.66,128l29.17,29.17a4,4,0,0,1-5.66,5.66L128,133.66,98.83,162.83a4,4,0,0,1-5.66-5.66L122.34,128,93.17,98.83a4,4,0,0,1,5.66-5.66L128,122.34l29.17-29.17a4,4,0,1,1,5.66,5.66ZM228,128A100,100,0,1,1,128,28,100.11,100.11,0,0,1,228,128Zm-8,0a92,92,0,1,0-92,92A92.1,92.1,0,0,0,220,128Z" }, null, -1);
 var X2 = [
-  j55
+  j56
 ];
-var q42 = {
+var q43 = {
   name: "PhXCircle"
 };
-var G23 = /* @__PURE__ */ defineComponent({
-  ...q42,
+var G24 = /* @__PURE__ */ defineComponent({
+  ...q43,
   props: {
     weight: {
       type: String
@@ -34222,8 +34351,8 @@ var G23 = /* @__PURE__ */ defineComponent({
       transform: m.value
     }, r.$attrs), [
       renderSlot(r.$slots, "default"),
-      l.value === "bold" ? (openBlock(), createElementBlock("g", M45, A35)) : l.value === "duotone" ? (openBlock(), createElementBlock("g", w55, C50)) : l.value === "fill" ? (openBlock(), createElementBlock("g", S55, B55)) : l.value === "light" ? (openBlock(), createElementBlock("g", N55, E55)) : l.value === "regular" ? (openBlock(), createElementBlock("g", P55, W55)) : l.value === "thin" ? (openBlock(), createElementBlock("g", $55, X2)) : createCommentVNode("", true)
-    ], 16, y36));
+      l.value === "bold" ? (openBlock(), createElementBlock("g", M46, A35)) : l.value === "duotone" ? (openBlock(), createElementBlock("g", w56, C51)) : l.value === "fill" ? (openBlock(), createElementBlock("g", S56, B56)) : l.value === "light" ? (openBlock(), createElementBlock("g", N56, E56)) : l.value === "regular" ? (openBlock(), createElementBlock("g", P56, W56)) : l.value === "thin" ? (openBlock(), createElementBlock("g", $56, X2)) : createCommentVNode("", true)
+    ], 16, y37));
   }
 });
 
@@ -34390,7 +34519,7 @@ var __component2 = /* @__PURE__ */ defineComponent({
     __expose();
     const props = __props;
     const look = inject(configLookKey);
-    const icon = computed2(() => ({ info: H15, success: H9, error: I19, busy: I3 })[props.kind]);
+    const icon = computed2(() => ({ info: H16, success: H10, error: I19, busy: I3 })[props.kind]);
     const __returned__ = { props, look, icon };
     Object.defineProperty(__returned__, "__isScriptSetup", { enumerable: false, value: true });
     return __returned__;
@@ -35212,7 +35341,7 @@ ${settingsErrorDetails(state.syncError)}` : ""
       actions.setBusinessDebug(value === "on");
     }
     const __returned__ = { props, look, actions, view, local, capabilities, saved, sectionTitle, row, line, onOff, requestedEnabled, enabledValue, setEnabled, status, startupDetails, storageErrorDetails, syncStatus, unsaved, draft, execution, storage, saving, saveError, choose, executionReason, storageReason, storageAvailable, executionOptions, storageOptions, unavailableNotes, changed, combinationOk, canSave, modeHint, actualDirectory, save, dialog, useRecommended, reloadTarget, requestedDebug, debugValue, setDebug, get PhCaretDown() {
-      return G5;
+      return G6;
     }, ConfigButton: ConfigButton_default, ConfigNotice: ConfigNotice_default, ConfigSegmented: ConfigSegmented_default, AutoSetupDialog: AutoSetupDialog_default, CapabilityGrid: CapabilityGrid_default, ModalDialog: ModalDialog_default, get settingsErrorDetails() {
       return settingsErrorDetails;
     }, get advancedTexts() {
@@ -41356,8 +41485,8 @@ var __component9 = /* @__PURE__ */ defineComponent({
     __expose();
     const props = __props;
     const look = computed2(() => ({
-      info: { icon: H15, cls: "dvs:bg-dvs-raised dvs:text-dvs-muted dvs:ring-dvs-border" },
-      success: { icon: H9, cls: "dvs:bg-dvs-add-soft dvs:text-dvs-add dvs:ring-transparent" },
+      info: { icon: H16, cls: "dvs:bg-dvs-raised dvs:text-dvs-muted dvs:ring-dvs-border" },
+      success: { icon: H10, cls: "dvs:bg-dvs-add-soft dvs:text-dvs-add dvs:ring-transparent" },
       error: { icon: I19, cls: "dvs:bg-dvs-remove-soft dvs:text-dvs-remove dvs:ring-transparent" },
       busy: { icon: I3, cls: "dvs:bg-dvs-accent-soft dvs:text-dvs-accent dvs:ring-transparent" }
     })[props.kind]);
@@ -41440,7 +41569,7 @@ var __component10 = /* @__PURE__ */ defineComponent({
     }, cancelClear, askClear, run, get PhArrowsClockwise() {
       return G3;
     }, get PhTrash() {
-      return G22;
+      return G23;
     }, ActionButton: ActionButton_default, StatusLine: StatusLine_default };
     Object.defineProperty(__returned__, "__isScriptSetup", { enumerable: false, value: true });
     return __returned__;
@@ -41627,7 +41756,7 @@ var __component12 = /* @__PURE__ */ defineComponent({
     });
     watch2(() => props.forceOpen, (value) => value && (open.value = true));
     const __returned__ = { props, emit, localOpen, open, get PhCaretRight() {
-      return G6;
+      return G7;
     }, LazyBody: LazyBody_default, get pinWhileToggling() {
       return pinWhileToggling;
     } };
@@ -42083,41 +42212,6 @@ function requestPreNarrativeModel(request, signal, send) {
         resolve(response);
     }, reject).finally(() => signal.removeEventListener("abort", abort));
   });
-}
-
-// src/dvs2/worldbook.ts
-function worldbookEntryName(name) {
-  return name.replace(/\[DVS(?::|_)[^\]]*\]/gi, "").trim();
-}
-function allowsWorldbookStage(name, stage) {
-  const tags = parseLorebookTags(name);
-  return !tags.metadata && tags.stages.includes(stage === "variable" ? "ai" : "narrative") && (stage !== "variable" || !tags.ai);
-}
-function sortWorldbookEntries(entries) {
-  for (const entry of entries)
-    if (!Number.isFinite(entry.order))
-      throw new Error(`DVS 世界书条目顺序无效：${entry.book} / ${entry.name}`);
-  return [...entries].sort((a, b) => a.order - b.order);
-}
-async function readWorldbooks(reader, avatar, assertCurrent) {
-  assertCurrent();
-  const names = reader.getCharWorldbookNames(avatar);
-  const books = [...new Set([names.primary, ...names.additional].filter((name) => !!name))];
-  const result = [];
-  for (const book of books) {
-    const entries = await reader.getWorldbook(book);
-    assertCurrent();
-    for (const entry of entries)
-      result.push({
-        book,
-        uid: entry.uid,
-        name: entry.name,
-        content: entry.content,
-        enabled: entry.enabled,
-        order: entry.position.order
-      });
-  }
-  return result;
 }
 
 // src/dvs2/ext/pre_narr_ui/index.ts
@@ -42992,7 +43086,7 @@ function mergeCapsule(body, kind, records, replacedKeys) {
 }
 
 // src/dvs2/adapter.ts
-function createTavernAdapter(owner) {
+function createTavernAdapter(owner, prepareWorldbook) {
   const context = () => owner.SillyTavern.getContext();
   const avatar = () => {
     const ctx = context();
@@ -43111,7 +43205,12 @@ function createTavernAdapter(owner) {
     }
     return;
   };
-  return { context, avatar, capture, latest, helper: owner.TavernHelper, variableWorldbookScan: false };
+  const worldbooks = {
+    getCharWorldbookNames: (avatar) => owner.TavernHelper.getCharWorldbookNames(avatar),
+    getWorldbook: (book) => owner.TavernHelper.getWorldbook(book),
+    prepareWorldbook
+  };
+  return { context, avatar, capture, latest, helper: owner.TavernHelper, worldbooks, variableWorldbookScan: false };
 }
 
 // src/dvs2/compat/script-config.ts
@@ -44503,7 +44602,7 @@ var __component19 = /* @__PURE__ */ defineComponent({
     const props = __props;
     const keys = computed2(() => Object.entries(props.keys));
     const __returned__ = { props, keys, get PhCaretRight() {
-      return G6;
+      return G7;
     } };
     Object.defineProperty(__returned__, "__isScriptSetup", { enumerable: false, value: true });
     return __returned__;
@@ -44567,7 +44666,7 @@ var __component20 = /* @__PURE__ */ defineComponent({
     __expose();
     const props = __props;
     const label = computed2(() => props.op === "delta" && typeof props.value === "number" ? props.value < 0 ? "减少" : "增加" : opLook[props.op].label);
-    const icon = computed2(() => props.op === "replace" ? G16 : props.op === "add" ? I15 : props.op === "remove" ? I12 : typeof props.value === "number" && props.value < 0 ? F13 : D32);
+    const icon = computed2(() => props.op === "replace" ? G17 : props.op === "add" ? I15 : props.op === "remove" ? I12 : typeof props.value === "number" && props.value < 0 ? F13 : D32);
     const __returned__ = { props, label, icon, get opLook() {
       return opLook;
     } };
@@ -44675,9 +44774,9 @@ var __component23 = /* @__PURE__ */ defineComponent({
     const __returned__ = { props, data, filter, commandsOpen, commands, get PhArrowRight() {
       return F;
     }, get PhInfo() {
-      return H15;
+      return H16;
     }, get PhListChecks() {
-      return G13;
+      return G14;
     }, get PhMagnifyingGlass() {
       return I11;
     }, get PhX() {
@@ -44858,7 +44957,8 @@ async function showDvsPopup(owner, component, props, cancelled, signal, appearan
   const popup = new Popup(content, POPUP_TYPE.TEXT, "", {
     okButton: false,
     cancelButton: false,
-    wider: true,
+    wider: appearance.wider ?? true,
+    ...appearance.canClose ? { onClosing: () => signal?.aborted || appearance.canClose() } : {},
     ...appearance.transparent ? { transparent: true } : {}
   });
   const app = createApp(component, props((result) => {
@@ -54691,7 +54791,7 @@ var __component25 = /* @__PURE__ */ defineComponent({
     }, get ComboboxViewport() {
       return ComboboxViewport_default;
     }, get PhCaretDown() {
-      return G5;
+      return G6;
     }, get PhX() {
       return F15;
     } };
@@ -54915,11 +55015,11 @@ var __component26 = /* @__PURE__ */ defineComponent({
     }, get PhArrowUp() {
       return F2;
     }, get PhCaretDown() {
-      return G5;
-    }, get PhCaretLeft() {
-      return H7;
-    }, get PhCaretRight() {
       return G6;
+    }, get PhCaretLeft() {
+      return H8;
+    }, get PhCaretRight() {
+      return G7;
     }, get PhMagnifyingGlass() {
       return I11;
     }, get PhX() {
@@ -55424,8 +55524,8 @@ var __component27 = /* @__PURE__ */ defineComponent({
       { value: "after", label: "更新后" }
     ];
     const tabs = [
-      { value: "data", label: "数据", icon: G17 },
-      { value: "ddl", label: "表结构", icon: G9 }
+      { value: "data", label: "数据", icon: G18 },
+      { value: "ddl", label: "表结构", icon: G10 }
     ];
     const tabClass = (value) => tab.value === value ? "dvs:bg-dvs-raised dvs:text-dvs-text dvs:ring-1 dvs:ring-dvs-border-strong" : "dvs:text-dvs-muted dvs:hover:bg-dvs-hover dvs:hover:text-dvs-text";
     const showDataView = computed2(() => tab.value === "data" && rows.value.kind === "ready" && !current.value?.unavailable);
@@ -55450,7 +55550,7 @@ var __component27 = /* @__PURE__ */ defineComponent({
     }, get PhStack() {
       return J;
     }, get PhTable() {
-      return G21;
+      return G22;
     }, get PhWarningCircle() {
       return I19;
     }, get PhX() {
@@ -55965,7 +56065,7 @@ async function prepareDatabase(options) {
   }
   const plan = migrations(options.entries, current);
   const recovering = !!greeting && !greeting.fid && hasFacts && !greeting.otherFids.length, tables = Object.keys(options.uniqueKeys);
-  let initialSql, recoveredFid;
+  let initialSql = [], recoveredFid;
   if (greeting) {
     const stored = await options.readServerFids();
     assertCurrent();
@@ -55992,9 +56092,7 @@ async function prepareDatabase(options) {
       if (recoveredFid && current === null)
         throw new Error("开场白原状态已有 fid，但对应 DVS 数据库版本缺失。");
     } else if (!greeting.fid) {
-      const initial = initializationEntry(options.entries, greeting.welcomeId);
-      if (initial)
-        initialSql = replaceInitUser(replaceLastFid(initial.content, options.lastFid), options.substitudeMacros);
+      initialSql = initializationEntry(options.entries, greeting.welcomeId).map((initial) => replaceInitUser(replaceLastFid(initial.content, options.lastFid), options.substitudeMacros));
     }
   }
   for (const entry of plan) {
@@ -56019,10 +56117,10 @@ async function prepareDatabase(options) {
           throw new Error("聊天数据库中有业务数据但没有楼层索引，无法恢复开场白关联，请核对聊天文件与数据库。");
       }
     } else {
-      const statements = initialSql === undefined ? [] : [initialSql];
+      const statements = [...initialSql];
       for (const name of tables) {
         statements.push(createIndexSql(name));
-        if (initialSql !== undefined)
+        if (initialSql.length)
           statements.push(`INSERT INTO ${quoteIdentifier(indexTableName(name))} (fid, rid) SELECT ${blobLiteral(fid)}, data.rid FROM ${quoteIdentifier(name)} AS data WHERE NOT EXISTS (SELECT 1 FROM ${quoteIdentifier(indexTableName(name))} AS idx WHERE idx.rid = data.rid)`);
       }
       assertCurrent();
@@ -56519,13 +56617,13 @@ var __component28 = /* @__PURE__ */ defineComponent({
     }, set token(v) {
       token = v;
     }, current, renamed, secondary, light, get PhCheckCircle() {
-      return H9;
+      return H10;
     }, get PhCircleNotch() {
       return I3;
     }, get PhLink() {
-      return G12;
+      return G13;
     }, get PhProhibit() {
-      return H21;
+      return H22;
     }, get PhX() {
       return F15;
     }, get DVS_UI_ROOT_CLASS() {
@@ -56747,7 +56845,7 @@ var __component29 = /* @__PURE__ */ defineComponent({
     }, get PhEye() {
       return I7;
     }, get PhEyeSlash() {
-      return H12;
+      return H13;
     }, DvsSection: DvsSection_default, SavedAnalyses: SavedAnalyses_default, EmptyState: EmptyState_default, StatusLine: StatusLine_default };
     Object.defineProperty(__returned__, "__isScriptSetup", { enumerable: false, value: true });
     return __returned__;
@@ -56989,9 +57087,9 @@ var __component30 = /* @__PURE__ */ defineComponent({
     const __returned__ = { props, entries, flipped, opened, onToggle, transposed, toggleTranspose, cell, get PhArrowsLeftRight() {
       return F4;
     }, get PhCaretRight() {
-      return G6;
+      return G7;
     }, get PhTable() {
-      return G21;
+      return G22;
     }, EmptyState: EmptyState_default, LazyBody: LazyBody_default, get pinWhileToggling() {
       return pinWhileToggling;
     } };
@@ -57171,7 +57269,7 @@ var __component31 = /* @__PURE__ */ defineComponent({
     const props = __props;
     const data = computed2(() => props.ctx.detail.value?.prepared);
     const __returned__ = { props, data, get PhTable() {
-      return G21;
+      return G22;
     }, DvsSection: DvsSection_default, SavedAnalyses: SavedAnalyses_default, DataTables: DataTables_default, EmptyState: EmptyState_default };
     Object.defineProperty(__returned__, "__isScriptSetup", { enumerable: false, value: true });
     return __returned__;
@@ -57549,7 +57647,7 @@ var __component32 = /* @__PURE__ */ defineComponent({
     const items = computed2(() => Array.isArray(props.value) ? props.value : []);
     const entries = computed2(() => Object.entries(props.value ?? {}));
     const __returned__ = { props, kind, isShort, items, entries, get PhShieldCheck() {
-      return G18;
+      return G19;
     } };
     Object.defineProperty(__returned__, "__isScriptSetup", { enumerable: false, value: true });
     return __returned__;
@@ -58527,6 +58625,380 @@ ${regex(content, role, depth)}
 
 // src/dvs2/lorebook-version.ts
 var import_semver3 = __toESM(require_semver2(), 1);
+
+// node_modules/brotli-dec-wasm/pkg/brotli_dec_wasm.js
+class BrotliDecStream {
+  __destroy_into_raw() {
+    const e = this.__wbg_ptr;
+    return this.__wbg_ptr = 0, A36.unregister(this), e;
+  }
+  free() {
+    const e = this.__destroy_into_raw();
+    r.__wbg_brotlidecstream_free(e, 0);
+  }
+  dec(e, _) {
+    const n = a(e, r.__wbindgen_malloc), s = o, R = r.brotlidecstream_dec(this.__wbg_ptr, n, s, _);
+    if (R[2])
+      throw T4(R[1]);
+    return BrotliStreamResult.__wrap(R[0]);
+  }
+  decompress(e, _) {
+    const n = a(e, r.__wbindgen_malloc), s = o, R = r.brotlidecstream_decompress(this.__wbg_ptr, n, s, _);
+    if (R[2])
+      throw T4(R[1]);
+    return BrotliStreamResult.__wrap(R[0]);
+  }
+  constructor() {
+    const e = r.brotlidecstream_new();
+    return this.__wbg_ptr = e >>> 0, A36.register(this, this.__wbg_ptr, this), this;
+  }
+  total_out() {
+    return r.brotlidecstream_total_out(this.__wbg_ptr) >>> 0;
+  }
+}
+Symbol.dispose && (BrotliDecStream.prototype[Symbol.dispose] = BrotliDecStream.prototype.free);
+var BrotliDecStreamErrCode = Object.freeze({ BROTLI_DECODER_ERROR_FORMAT_EXUBERANT_NIBBLE: 1, 1: "BROTLI_DECODER_ERROR_FORMAT_EXUBERANT_NIBBLE", BROTLI_DECODER_ERROR_FORMAT_RESERVED: 2, 2: "BROTLI_DECODER_ERROR_FORMAT_RESERVED", BROTLI_DECODER_ERROR_FORMAT_EXUBERANT_META_NIBBLE: 3, 3: "BROTLI_DECODER_ERROR_FORMAT_EXUBERANT_META_NIBBLE", BROTLI_DECODER_ERROR_FORMAT_SIMPLE_HUFFMAN_ALPHABET: 4, 4: "BROTLI_DECODER_ERROR_FORMAT_SIMPLE_HUFFMAN_ALPHABET", BROTLI_DECODER_ERROR_FORMAT_SIMPLE_HUFFMAN_SAME: 5, 5: "BROTLI_DECODER_ERROR_FORMAT_SIMPLE_HUFFMAN_SAME", BROTLI_DECODER_ERROR_FORMAT_CL_SPACE: 6, 6: "BROTLI_DECODER_ERROR_FORMAT_CL_SPACE", BROTLI_DECODER_ERROR_FORMAT_HUFFMAN_SPACE: 7, 7: "BROTLI_DECODER_ERROR_FORMAT_HUFFMAN_SPACE", BROTLI_DECODER_ERROR_FORMAT_CONTEXT_MAP_REPEAT: 8, 8: "BROTLI_DECODER_ERROR_FORMAT_CONTEXT_MAP_REPEAT", BROTLI_DECODER_ERROR_FORMAT_BLOCK_LENGTH_1: 9, 9: "BROTLI_DECODER_ERROR_FORMAT_BLOCK_LENGTH_1", BROTLI_DECODER_ERROR_FORMAT_BLOCK_LENGTH_2: 10, 10: "BROTLI_DECODER_ERROR_FORMAT_BLOCK_LENGTH_2", BROTLI_DECODER_ERROR_FORMAT_TRANSFORM: 11, 11: "BROTLI_DECODER_ERROR_FORMAT_TRANSFORM", BROTLI_DECODER_ERROR_FORMAT_DICTIONARY: 12, 12: "BROTLI_DECODER_ERROR_FORMAT_DICTIONARY", BROTLI_DECODER_ERROR_FORMAT_WINDOW_BITS: 13, 13: "BROTLI_DECODER_ERROR_FORMAT_WINDOW_BITS", BROTLI_DECODER_ERROR_FORMAT_PADDING_1: 14, 14: "BROTLI_DECODER_ERROR_FORMAT_PADDING_1", BROTLI_DECODER_ERROR_FORMAT_PADDING_2: 15, 15: "BROTLI_DECODER_ERROR_FORMAT_PADDING_2", BROTLI_DECODER_ERROR_FORMAT_DISTANCE: 16, 16: "BROTLI_DECODER_ERROR_FORMAT_DISTANCE", BROTLI_DECODER_ERROR_DICTIONARY_NOT_SET: 19, 19: "BROTLI_DECODER_ERROR_DICTIONARY_NOT_SET", BROTLI_DECODER_ERROR_INVALID_ARGUMENTS: 20, 20: "BROTLI_DECODER_ERROR_INVALID_ARGUMENTS", BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MODES: 21, 21: "BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MODES", BROTLI_DECODER_ERROR_ALLOC_TREE_GROUPS: 22, 22: "BROTLI_DECODER_ERROR_ALLOC_TREE_GROUPS", BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MAP: 25, 25: "BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MAP", BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_1: 26, 26: "BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_1", BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_2: 27, 27: "BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_2", BROTLI_DECODER_ERROR_ALLOC_BLOCK_TYPE_TREES: 30, 30: "BROTLI_DECODER_ERROR_ALLOC_BLOCK_TYPE_TREES", BROTLI_DECODER_ERROR_UNREACHABLE: 31, 31: "BROTLI_DECODER_ERROR_UNREACHABLE" });
+
+class BrotliStreamResult {
+  static __wrap(e) {
+    e = e >>> 0;
+    const _ = Object.create(BrotliStreamResult.prototype);
+    return _.__wbg_ptr = e, L23.register(_, _.__wbg_ptr, _), _;
+  }
+  __destroy_into_raw() {
+    const e = this.__wbg_ptr;
+    return this.__wbg_ptr = 0, L23.unregister(this), e;
+  }
+  free() {
+    const e = this.__destroy_into_raw();
+    r.__wbg_brotlistreamresult_free(e, 0);
+  }
+  get buf() {
+    const e = r.__wbg_get_brotlistreamresult_buf(this.__wbg_ptr);
+    var _ = D34(e[0], e[1]).slice();
+    return r.__wbindgen_free(e[0], e[1] * 1, 1), _;
+  }
+  get code() {
+    return r.__wbg_get_brotlistreamresult_code(this.__wbg_ptr);
+  }
+  get input_offset() {
+    return r.__wbg_get_brotlistreamresult_input_offset(this.__wbg_ptr) >>> 0;
+  }
+  set buf(e) {
+    const _ = a(e, r.__wbindgen_malloc), n = o;
+    r.__wbg_set_brotlistreamresult_buf(this.__wbg_ptr, _, n);
+  }
+  set code(e) {
+    r.__wbg_set_brotlistreamresult_code(this.__wbg_ptr, e);
+  }
+  set input_offset(e) {
+    r.__wbg_set_brotlistreamresult_input_offset(this.__wbg_ptr, e);
+  }
+}
+Symbol.dispose && (BrotliStreamResult.prototype[Symbol.dispose] = BrotliStreamResult.prototype.free);
+var BrotliStreamResultCode = Object.freeze({ ResultSuccess: 1, 1: "ResultSuccess", NeedsMoreInput: 2, 2: "NeedsMoreInput", NeedsMoreOutput: 3, 3: "NeedsMoreOutput" });
+
+class DecompressStream {
+  __destroy_into_raw() {
+    const e = this.__wbg_ptr;
+    return this.__wbg_ptr = 0, g9.unregister(this), e;
+  }
+  free() {
+    const e = this.__destroy_into_raw();
+    r.__wbg_decompressstream_free(e, 0);
+  }
+  decompress(e, _) {
+    const n = a(e, r.__wbindgen_malloc), s = o, R = r.decompressstream_decompress(this.__wbg_ptr, n, s, _);
+    if (R[2])
+      throw T4(R[1]);
+    return BrotliStreamResult.__wrap(R[0]);
+  }
+  constructor() {
+    const e = r.decompressstream_new();
+    return this.__wbg_ptr = e >>> 0, g9.register(this, this.__wbg_ptr, this), this;
+  }
+  total_out() {
+    return r.decompressstream_total_out(this.__wbg_ptr) >>> 0;
+  }
+}
+Symbol.dispose && (DecompressStream.prototype[Symbol.dispose] = DecompressStream.prototype.free);
+function decompress(t) {
+  const e = a(t, r.__wbindgen_malloc), _ = o, n = r.decompress(e, _);
+  if (n[3])
+    throw T4(n[2]);
+  var s = D34(n[0], n[1]).slice();
+  return r.__wbindgen_free(n[0], n[1] * 1, 1), s;
+}
+function p3() {
+  return { __proto__: null, "./brotli_dec_wasm_bg.js": { __proto__: null, __wbg_Error_83742b46f01ce22d: function(e, _) {
+    return Error(d(e, _));
+  }, __wbg___wbindgen_throw_6ddd609b62940d55: function(e, _) {
+    throw new Error(d(e, _));
+  }, __wbg_error_a6fa202b58aa1cd3: function(e, _) {
+    let n, s;
+    try {
+      n = e, s = _, console.error(d(e, _));
+    } finally {
+      r.__wbindgen_free(n, s, 1);
+    }
+  }, __wbg_new_227d7c05414eb861: function() {
+    return new Error;
+  }, __wbg_stack_3b0d974bbf31e44f: function(e, _) {
+    const n = _.stack, s = B57(n, r.__wbindgen_malloc, r.__wbindgen_realloc), R = o;
+    I20().setInt32(e + 4, R, true), I20().setInt32(e + 0, s, true);
+  }, __wbindgen_init_externref_table: function() {
+    const e = r.__wbindgen_externrefs, _ = e.grow(4);
+    e.set(0, undefined), e.set(_ + 0, undefined), e.set(_ + 1, null), e.set(_ + 2, true), e.set(_ + 3, false);
+  } } };
+}
+var A36 = typeof FinalizationRegistry > "u" ? { register: () => {}, unregister: () => {} } : new FinalizationRegistry((t) => r.__wbg_brotlidecstream_free(t >>> 0, 1));
+var g9 = typeof FinalizationRegistry > "u" ? { register: () => {}, unregister: () => {} } : new FinalizationRegistry((t) => r.__wbg_decompressstream_free(t >>> 0, 1));
+var L23 = typeof FinalizationRegistry > "u" ? { register: () => {}, unregister: () => {} } : new FinalizationRegistry((t) => r.__wbg_brotlistreamresult_free(t >>> 0, 1));
+function D34(t, e) {
+  return t = t >>> 0, c().subarray(t / 1, t / 1 + e);
+}
+var O2 = null;
+function I20() {
+  return (O2 === null || O2.buffer.detached === true || O2.buffer.detached === undefined && O2.buffer !== r.memory.buffer) && (O2 = new DataView(r.memory.buffer)), O2;
+}
+function d(t, e) {
+  return t = t >>> 0, m2(t, e);
+}
+var b57 = null;
+function c() {
+  return (b57 === null || b57.byteLength === 0) && (b57 = new Uint8Array(r.memory.buffer)), b57;
+}
+function a(t, e) {
+  const _ = e(t.length * 1, 1) >>> 0;
+  return c().set(t, _ / 1), o = t.length, _;
+}
+function B57(t, e, _) {
+  if (_ === undefined) {
+    const E = l.encode(t), f = e(E.length, 1) >>> 0;
+    return c().subarray(f, f + E.length).set(E), o = E.length, f;
+  }
+  let n = t.length, s = e(n, 1) >>> 0;
+  const R = c();
+  let i = 0;
+  for (;i < n; i++) {
+    const E = t.charCodeAt(i);
+    if (E > 127)
+      break;
+    R[s + i] = E;
+  }
+  if (i !== n) {
+    i !== 0 && (t = t.slice(i)), s = _(s, n, n = i + t.length * 3, 1) >>> 0;
+    const E = c().subarray(s + i, s + n), f = l.encodeInto(t, E);
+    i += f.written, s = _(s, n, i, 1) >>> 0;
+  }
+  return o = i, s;
+}
+function T4(t) {
+  const e = r.__wbindgen_externrefs.get(t);
+  return r.__externref_table_dealloc(t), e;
+}
+var u2 = new TextDecoder("utf-8", { ignoreBOM: true, fatal: true });
+u2.decode();
+var y38 = 2146435072;
+var w57 = 0;
+function m2(t, e) {
+  return w57 += e, w57 >= y38 && (u2 = new TextDecoder("utf-8", { ignoreBOM: true, fatal: true }), u2.decode(), w57 = e), u2.decode(c().subarray(t, t + e));
+}
+var l = new TextEncoder;
+"encodeInto" in l || (l.encodeInto = function(t, e) {
+  const _ = l.encode(t);
+  return e.set(_), { read: t.length, written: _.length };
+});
+var o = 0;
+var M47;
+var r;
+function C52(t, e) {
+  return r = t.exports, M47 = e, O2 = null, b57 = null, r.__wbindgen_start(), r;
+}
+async function F16(t, e) {
+  if (typeof Response == "function" && t instanceof Response) {
+    if (typeof WebAssembly.instantiateStreaming == "function")
+      try {
+        return await WebAssembly.instantiateStreaming(t, e);
+      } catch (s) {
+        if (t.ok && _(t.type) && t.headers.get("Content-Type") !== "application/wasm")
+          console.warn("`WebAssembly.instantiateStreaming` failed because your server does not serve Wasm with `application/wasm` MIME type. Falling back to `WebAssembly.instantiate` which is slower. Original error:\n", s);
+        else
+          throw s;
+      }
+    const n = await t.arrayBuffer();
+    return await WebAssembly.instantiate(n, e);
+  } else {
+    const n = await WebAssembly.instantiate(t, e);
+    return n instanceof WebAssembly.Instance ? { instance: n, module: t } : n;
+  }
+  function _(n) {
+    switch (n) {
+      case "basic":
+      case "cors":
+      case "default":
+        return true;
+    }
+    return false;
+  }
+}
+async function N57(t) {
+  if (r !== undefined)
+    return r;
+  t !== undefined && (Object.getPrototypeOf(t) === Object.prototype ? { module_or_path: t } = t : console.warn("using deprecated parameters for the initialization function; pass a single object instead")), t === undefined && (t = new URL("brotli_dec_wasm_bg.wasm", import.meta.url));
+  const e = p3();
+  (typeof t == "string" || typeof Request == "function" && t instanceof Request || typeof URL == "function" && t instanceof URL) && (t = fetch(t));
+  const { instance: _, module: n } = await F16(await t, e);
+  return C52(_, n);
+}
+
+// src/dvs2/worldbook-compression.ts
+class WorldbookDecompressionError extends Error {
+  book;
+  failures;
+  constructor(book, failures) {
+    super(`世界书“${book}”解压失败，本次未保存：${failures.map((entry) => `条目“${entry.name}”（uid ${entry.uid}）：${entry.reason}`).join("；")}`);
+    this.book = book;
+    this.failures = failures;
+    this.name = "WorldbookDecompressionError";
+  }
+}
+
+class WorldbookRestorationError extends Error {
+  progressReported;
+  constructor(message, cause, progressReported) {
+    super(message, { cause });
+    this.progressReported = progressReported;
+    this.name = "WorldbookRestorationError";
+  }
+}
+async function yieldProgressFrame() {
+  if (typeof window === "undefined")
+    return;
+  if (window.document.visibilityState !== "visible" || typeof window.requestAnimationFrame !== "function") {
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    return;
+  }
+  await new Promise((resolve) => {
+    const timeout = window.setTimeout(() => {
+      window.cancelAnimationFrame(frame);
+      resolve();
+    }, 50);
+    const frame = window.requestAnimationFrame(() => {
+      window.clearTimeout(timeout);
+      window.setTimeout(resolve, 0);
+    });
+  });
+}
+var decoderReady;
+var decodeBrotli = async (bytes) => {
+  await (decoderReady ??= N57({ module_or_path: `${EXTENSION_PATH}brotli-dec.wasm` }));
+  return decompress(bytes);
+};
+async function decodeCompressedContent(content, decode = decodeBrotli) {
+  if (!isCompressedContent(content))
+    return content;
+  const base64 = content.slice(content.indexOf(`
+`) + 1);
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64) || !base64)
+    throw new Error("压缩正文的 Base64 编码无效。");
+  const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await decode(bytes));
+}
+async function restoreWorldbook(source, name, decode, onProgress) {
+  if (!source?.entries || typeof source.entries !== "object" || Array.isArray(source.entries))
+    throw new Error(`世界书“${name}”不存在或内容无效。`);
+  const compressed = Object.entries(source.entries).filter(([, entry]) => isCompressedContent(entry?.content));
+  if (!compressed.length)
+    return { book: source, changed: false };
+  const book = structuredClone(source);
+  let succeeded = 0;
+  const failures = [];
+  const progress = (phase) => onProgress?.({ book: name, total: compressed.length, succeeded, phase, failures: [...failures] });
+  progress("decoding");
+  if (onProgress)
+    await yieldProgressFrame();
+  let frameStarted = performance.now();
+  for (const [key, entry] of compressed) {
+    try {
+      const content = await decodeCompressedContent(entry.content, decode);
+      book.entries[key].content = content;
+      const original = book.originalData;
+      if (Array.isArray(original?.entries)) {
+        const copy = original.entries.find((value) => String(value.id ?? value.uid) === String(entry.uid ?? key));
+        if (copy)
+          copy.content = content;
+      }
+      succeeded++;
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : String(cause);
+      failures.push({ name: entry.comment ?? "", uid: typeof entry.uid === "number" ? entry.uid : key, reason });
+    }
+    progress("decoding");
+    if (onProgress && performance.now() - frameStarted >= 16) {
+      await yieldProgressFrame();
+      frameStarted = performance.now();
+    }
+  }
+  if (failures.length) {
+    progress("decode-failed");
+    throw new WorldbookDecompressionError(name, failures);
+  }
+  return { book, changed: true };
+}
+function createWorldbookRestorer(port, decode, onProgress) {
+  const pending = new Map;
+  const failures = new Set;
+  const ensure = (name) => {
+    const active = pending.get(name);
+    if (active)
+      return active;
+    const work = (async () => {
+      let lastProgress;
+      try {
+        const restored = await restoreWorldbook(await port.load(name), name, decode, onProgress ? (progress) => {
+          lastProgress = progress;
+          onProgress(progress);
+        } : undefined);
+        if (restored.changed) {
+          onProgress?.({ ...lastProgress, phase: "saving" });
+          try {
+            await port.save(name, restored.book);
+          } catch (cause) {
+            onProgress?.({
+              ...lastProgress,
+              phase: "save-unconfirmed",
+              error: cause instanceof Error ? cause.message : String(cause)
+            });
+            throw cause;
+          }
+          onProgress?.({ ...lastProgress, phase: "saved" });
+        }
+        return restored.book;
+      } catch (cause) {
+        throw new WorldbookRestorationError(`世界书“${name}”还原未完成：${cause instanceof Error ? cause.message : String(cause)}`, cause, !!lastProgress && !!onProgress);
+      }
+    })();
+    pending.set(name, work);
+    work.then(() => pending.delete(name), () => failures.add(name));
+    return work;
+  };
+  return {
+    ensure,
+    resetFailures(name) {
+      for (const failed of [...failures]) {
+        if (name !== undefined && failed !== name)
+          continue;
+        port.invalidate?.(failed);
+        pending.delete(failed);
+        failures.delete(failed);
+        decoderReady = undefined;
+      }
+    }
+  };
+}
+
+// src/dvs2/lorebook-version.ts
 function version2(value, label) {
   if (typeof value !== "string")
     throw new Error(`${label}缺少完整版本号，请填写 major.minor.patch。`);
@@ -58572,7 +59044,7 @@ async function checkLorebookVersion(port, options, now = () => new Date) {
     const assert = () => port.assertCurrent(fixed, expectedPrimary);
     assert();
     const cardVersion = version2(fixed.version, "角色卡版本");
-    const original = await port.load(fixed.primary);
+    const original = (await restoreWorldbook(await port.load(fixed.primary), fixed.primary)).book;
     assert();
     const oldVersion = worldbookVersion(original, fixed.primary);
     if (!import_semver3.lt(oldVersion, cardVersion))
@@ -58584,7 +59056,7 @@ async function checkLorebookVersion(port, options, now = () => new Date) {
     if (!await port.confirmUpdate(`主世界书“${fixed.primary}”的版本 ${oldVersion.raw} 低于角色卡版本 ${cardVersion.raw}。确认后会先另名保留旧书及全部本地修改，再从当前角色卡内嵌世界书导入新版并重新关联。是否备份并更新？`))
       return;
     assert();
-    const source = await port.embedded(fixed);
+    const source = (await restoreWorldbook(await port.embedded(fixed), fixed.primary)).book;
     assert();
     const raw = await port.read(fixed.primary);
     assert();
@@ -58657,7 +59129,7 @@ function notifyLorebookVersion(owner, kind, message) {
     console.error("DVS 主世界书提示显示失败", error);
   }
 }
-async function createLorebookVersionPort(owner, assertAlive) {
+async function createLorebookVersionPort(owner, assertAlive, prepareWorldbook) {
   const initial = captureTarget(owner, assertAlive);
   const nativeImport = (path) => import(path);
   const [world, script, utils, popup] = await Promise.all([
@@ -58754,7 +59226,10 @@ async function createLorebookVersionPort(owner, assertAlive) {
         owner.location.reload();
       }
     },
-    load: (name) => world.loadWorldInfo(name),
+    async load(name) {
+      await prepareWorldbook?.(name);
+      return world.loadWorldInfo(name);
+    },
     async embedded(target) {
       const card = await readCard(target);
       assertCurrent(target, target.primary);
@@ -58826,7 +59301,7 @@ var definitions = [
   preNarrativeUi
 ];
 function createDvsRuntime(owner, service, options) {
-  const adapter = createTavernAdapter(owner), sqlite = createPublicApi(service), preparation = createPreparationTables();
+  const adapter = createTavernAdapter(owner, options.prepareWorldbook), sqlite = createPublicApi(service), preparation = createPreparationTables();
   const updates = new Map, statuses = new Map, registrations = new Map;
   let registration, generation, pending = false, alive = true;
   let lifetimeAbort;
@@ -59044,7 +59519,7 @@ function createDvsRuntime(owner, service, options) {
       preparationTarget.assertCurrent();
     };
     const prepare = async () => {
-      const entries = await readWorldbooks(adapter.helper, avatar, assertPreparation);
+      const entries = await readWorldbooks(adapter.worldbooks, avatar, assertPreparation);
       const currentVersion = preparationTarget.version();
       const server = await preparationTarget.readServer();
       return prepareDatabase({
@@ -59181,7 +59656,7 @@ function createDvsRuntime(owner, service, options) {
         ...read,
         signal: read.signal,
         readLorebook: async () => {
-          const entries = await readWorldbooks(adapter.helper, source.avatar, read.assertCurrent);
+          const entries = await readWorldbooks(adapter.worldbooks, source.avatar, read.assertCurrent);
           if (!variablePhase)
             return entries;
           const result = [];
@@ -59250,7 +59725,7 @@ function createDvsRuntime(owner, service, options) {
               throw new Error("变量扫描起点尚未准备。");
             const entries = await scanVariableWorldbooks({
               adapter,
-              entries: await readWorldbooks(adapter.helper, source.avatar, helper.assertCurrent),
+              entries: await readWorldbooks(adapter.worldbooks, source.avatar, helper.assertCurrent),
               state,
               messages: structuredClone(adapter.context().chat.slice(0, ai.floorid + 1)).map((row) => ({
                 ...row,
@@ -59470,7 +59945,7 @@ function createDvsRuntime(owner, service, options) {
             adapter,
             stage: "user",
             ejs: controller.runtime.exchange.ejs,
-            entries: await readWorldbooks(adapter.helper, source.avatar, helper.assertCurrent),
+            entries: await readWorldbooks(adapter.worldbooks, source.avatar, helper.assertCurrent),
             state,
             messages: structuredClone(adapter.context().chat.slice(0, target.floorid + 1)).map((row) => ({
               ...row,
@@ -59682,7 +60157,7 @@ function createDvsRuntime(owner, service, options) {
         if (!alive)
           throw new Error("当前页面的 DVS 已关闭。");
       };
-      const port = options.versionPort ?? await createLorebookVersionPort(owner, assertAlive);
+      const port = options.versionPort ?? await createLorebookVersionPort(owner, assertAlive, options.prepareWorldbook);
       assertAlive();
       await checkLorebookVersion(port, versionOptions);
     }
@@ -60394,13 +60869,13 @@ var __component35 = /* @__PURE__ */ defineComponent({
       }
     });
     const __returned__ = { emit, root, records, unsubscribe, expanded, feedback, yaml, purpose, toggle, copy, download, clear, action, get PhCaretDown() {
-      return G5;
+      return G6;
     }, get PhCopy() {
       return I4;
     }, get PhDownloadSimple() {
-      return G10;
+      return G11;
     }, get PhTrash() {
-      return G22;
+      return G23;
     }, get PhWarningCircle() {
       return I19;
     }, get PhX() {
@@ -60823,8 +61298,8 @@ var __component37 = /* @__PURE__ */ defineComponent({
       }
     }
     const statusLook = computed2(() => ({
-      passed: { icon: H9, tone: look.add, text: "通过" },
-      failed: { icon: G23, tone: look.remove, text: "未通过" },
+      passed: { icon: H10, tone: look.add, text: "通过" },
+      failed: { icon: G24, tone: look.remove, text: "未通过" },
       unfinished: { icon: I2, tone: look.faint, text: "未完成" }
     }));
     const testRows = computed2(() => result.value ? [
@@ -60867,13 +61342,13 @@ var __component37 = /* @__PURE__ */ defineComponent({
     }, get PhArrowCounterClockwise() {
       return G;
     }, get PhCaretDown() {
-      return G5;
+      return G6;
     }, get PhCloudArrowDown() {
-      return G8;
+      return G9;
     }, get PhFlask() {
-      return G11;
+      return G12;
     }, get PhLightning() {
-      return H16;
+      return H17;
     }, get PhSlidersHorizontal() {
       return I16;
     }, get PhStop() {
@@ -61391,7 +61866,7 @@ var __component38 = /* @__PURE__ */ defineComponent({
     const emit = __emit;
     const look = inject(configLookKey);
     const __returned__ = { emit, look, get PhCaretDown() {
-      return G5;
+      return G6;
     } };
     Object.defineProperty(__returned__, "__isScriptSetup", { enumerable: false, value: true });
     return __returned__;
@@ -61518,7 +61993,7 @@ var __component39 = /* @__PURE__ */ defineComponent({
       },
       {
         purpose: "input_inject",
-        icon: G19,
+        icon: G20,
         title: PURPOSE_NAMES.input_inject,
         desc: `角色卡开启后，筛选正文资料并规划剧情${library.value.inputInjectConfigId === null && followName.value ? `；当前跟随使用「${followName.value}」` : ""}`,
         value: library.value.inputInjectConfigId ?? "",
@@ -61853,7 +62328,7 @@ var __component39 = /* @__PURE__ */ defineComponent({
       return {
         purpose,
         title: PURPOSE_NAMES[purpose],
-        icon: purpose === "variable" ? I6 : G19,
+        icon: purpose === "variable" ? I6 : G20,
         name: config?.name,
         url: config?.config.apiUrl,
         follow: purpose === "input_inject" && own === null && !!config
@@ -61861,7 +62336,7 @@ var __component39 = /* @__PURE__ */ defineComponent({
     }));
     const themeOptions = [
       { value: "tavern", label: "跟随酒馆主题", icon: I13 },
-      { value: "dark", label: "深色", icon: H18 },
+      { value: "dark", label: "深色", icon: H19 },
       { value: "light", label: "浅色", icon: I18 }
     ];
     function chooseTheme(mode) {
@@ -61912,9 +62387,9 @@ var __component39 = /* @__PURE__ */ defineComponent({
     }, set unsubscribe(v) {
       unsubscribe = v;
     }, collapsed, brief, themeOptions, chooseTheme, floorDataOptions, sectionTitle: sectionTitle2, get PhCaretDown() {
-      return G5;
+      return G6;
     }, get PhCheck() {
-      return G7;
+      return G8;
     }, get PhCircleNotch() {
       return I3;
     }, get PhCopy() {
@@ -61924,11 +62399,11 @@ var __component39 = /* @__PURE__ */ defineComponent({
     }, get PhKey() {
       return F11;
     }, get PhPencilSimple() {
-      return G16;
+      return G17;
     }, get PhPlus() {
       return I15;
     }, get PhTrash() {
-      return G22;
+      return G23;
     }, get PhWarningCircle() {
       return I19;
     }, ConfigButton: ConfigButton_default, get openDvsRequestErrors() {
@@ -62583,9 +63058,9 @@ var __component40 = /* @__PURE__ */ defineComponent({
       { value: "include", label: "只留所需" }
     ];
     const __returned__ = { props, emit, look, expanded, contentId, primary, optimizations, filterOptions, get PhCaretDown() {
-      return G5;
+      return G6;
     }, get PhCheck() {
-      return G7;
+      return G8;
     }, get PhSlidersHorizontal() {
       return I16;
     }, ConfigNotice: ConfigNotice_default, ConfigSegmented: ConfigSegmented_default, get pinWhileToggling() {
@@ -63015,11 +63490,11 @@ var __component41 = /* @__PURE__ */ defineComponent({
       emit("toggle", open.value);
     }
     const __returned__ = { props, toneLook, emit, open, onToggle, get PhCaretDown() {
-      return G5;
+      return G6;
     }, get PhCircleNotch() {
       return I3;
     }, get PhLockSimple() {
-      return G14;
+      return G15;
     }, get DVS_UI_ROOT_CLASS() {
       return DVS_UI_ROOT_CLASS;
     }, LazyBody: LazyBody_default, get pinWhileToggling() {
@@ -63340,7 +63815,7 @@ function createCapsule(owner, runtime, initialTarget, type) {
             assertContext();
             return runtime.openDisplayDatabases(contextTarget);
           },
-          readLorebook: () => readWorldbooks(runtime.adapter.helper, contextTarget.avatar, assertContext),
+          readLorebook: () => readWorldbooks(runtime.adapter.worldbooks, contextTarget.avatar, assertContext),
           lorebook: runtime.adapter.helper,
           readFloorData: () => {
             assertContext();
@@ -63370,7 +63845,7 @@ function createCapsule(owner, runtime, initialTarget, type) {
         class: "dvs2-result",
         "data-dvs-version": "2",
         "data-dvs-type": type,
-        icon: type === "ai" ? I6 : G19,
+        icon: type === "ai" ? I6 : G20,
         title: type === "ai" ? "正文分析" : "输入增强",
         meta: [],
         tone,
@@ -63628,6 +64103,289 @@ async function ensureCapsuleVisibility() {
   await script.saveSettings();
 }
 
+// src/dvs2/worldbook-compression-tavern.ts
+async function createWorldbookCompressionPort(owner) {
+  const nativeImport = (path) => import(path);
+  const [world, script] = await Promise.all([nativeImport("/scripts/world-info.js"), nativeImport("/script.js")]);
+  if (typeof world.loadWorldInfo !== "function" || !world.worldInfoCache?.set || !script.eventSource?.emit || !script.event_types?.WORLDINFO_UPDATED)
+    throw new Error("当前酒馆缺少世界书读取、缓存或更新通知接口，请更新后刷新页面。");
+  return {
+    load: (name) => world.loadWorldInfo(name),
+    invalidate: (name) => world.worldInfoCache.delete(name),
+    async save(name, book) {
+      const response = await (owner.fetch ?? fetch).call(owner, "/api/worldinfo/edit", {
+        method: "POST",
+        headers: owner.SillyTavern.getContext().getRequestHeaders(),
+        body: JSON.stringify({ name, data: book })
+      });
+      if (!response.ok)
+        throw new Error(`保存世界书失败（HTTP ${response.status}）。`);
+      world.worldInfoCache.set(name, book);
+      await script.eventSource.emit(script.event_types.WORLDINFO_UPDATED, name, book);
+    }
+  };
+}
+async function attachWorldbookCompression(owner, reportError, supplied, options = {}) {
+  const restorer = supplied ?? createWorldbookRestorer(await createWorldbookCompressionPort(owner), undefined, options.onProgress);
+  const context = owner.SillyTavern.getContext();
+  const source = context.eventSource;
+  const event = context.eventTypes?.WORLDINFO_ENTRIES_LOADED;
+  if (!source?.makeFirst || !event)
+    throw new Error("酒馆缺少世界书事件排序接口，压缩正文无法还原。");
+  let activeLoads = 0;
+  const loading = async (work) => {
+    if (activeLoads++ === 0)
+      options.onLoading?.(true);
+    try {
+      return await work();
+    } finally {
+      if (--activeLoads === 0)
+        options.onLoading?.(false);
+    }
+  };
+  const names = () => {
+    const current = owner.SillyTavern.getContext();
+    if (current.groupId != null && current.groupId !== "")
+      return [];
+    if (current.characterId == null || current.characterId === "")
+      return [];
+    const card = current.characters[Number(current.characterId)];
+    if (!card?.avatar)
+      return [];
+    const books = owner.TavernHelper.getCharWorldbookNames(card.avatar);
+    return [...new Set([books.primary, ...books.additional].filter((name) => !!name))];
+  };
+  const prepareBooks = (bookNames) => loading(async () => {
+    const books = new Map;
+    const failures = [];
+    for (const name of bookNames) {
+      try {
+        books.set(name, await restorer.ensure(name));
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length)
+      throw new AggregateError(failures, failures.map((error) => error instanceof Error ? error.message : String(error)).join(`
+`));
+    return books;
+  });
+  const scan = async (data) => {
+    const bound = new Set(names());
+    const compressedBooks = [
+      ...new Set([data.characterLore, data.globalLore, data.chatLore, data.personaLore].flatMap((entries) => entries.filter((entry) => bound.has(entry.world) && isCompressedContent(entry.content)).map((entry) => entry.world)))
+    ];
+    if (!compressedBooks.length)
+      return;
+    try {
+      const books = await prepareBooks(compressedBooks);
+      for (const entries of [data.characterLore, data.globalLore, data.chatLore, data.personaLore]) {
+        for (const entry of entries) {
+          const restored = books.get(entry.world)?.entries[String(entry.uid)];
+          if (isCompressedContent(entry.content) && typeof restored?.content === "string")
+            entry.content = restored.content;
+        }
+      }
+    } catch (error) {
+      for (const entries of [data.characterLore, data.globalLore, data.chatLore, data.personaLore]) {
+        const retained = entries.filter((entry) => {
+          if (!bound.has(entry.world) || !isCompressedContent(entry.content))
+            return true;
+          entry.content = "";
+          entry.disable = true;
+          return false;
+        });
+        entries.splice(0, entries.length, ...retained);
+      }
+      owner.SillyTavern.getContext().stopGeneration?.();
+      reportError(error);
+    }
+  };
+  const changed = () => {
+    restorer.resetFailures();
+    prepareBooks(names()).catch(reportError);
+  };
+  const updated = (name) => restorer.resetFailures(name);
+  source.on(event, scan);
+  source.makeFirst(event, scan);
+  const chatChanged = context.eventTypes?.CHAT_CHANGED;
+  if (chatChanged)
+    source.on(chatChanged, changed);
+  const worldUpdated = context.eventTypes?.WORLDINFO_UPDATED;
+  if (worldUpdated)
+    source.on(worldUpdated, updated);
+  changed();
+  return {
+    ensure: (name) => loading(() => restorer.ensure(name)),
+    prioritize: () => source.makeFirst(event, scan),
+    dispose() {
+      source.removeListener(event, scan);
+      if (chatChanged)
+        source.removeListener(chatChanged, changed);
+      if (worldUpdated)
+        source.removeListener(worldUpdated, updated);
+    }
+  };
+}
+
+// src/dvs2/ui/components/WorldbookCompressionWindow.vue
+var __component42 = /* @__PURE__ */ defineComponent({
+  __name: "WorldbookCompressionWindow",
+  props: {
+    books: { type: Map, required: true },
+    canClose: { type: Object, required: true }
+  },
+  emits: ["close"],
+  setup(__props, { expose: __expose, emit: __emit }) {
+    __expose();
+    const props = __props;
+    const emit = __emit;
+    const allSaved = computed2(() => props.canClose.value && [...props.books.values()].every((book) => book.phase === "saved"));
+    watch2(allSaved, (saved, _, onCleanup) => {
+      if (!saved)
+        return;
+      const timer = window.setTimeout(() => emit("close"), 1000);
+      onCleanup(() => window.clearTimeout(timer));
+    }, { immediate: true });
+    const titles = {
+      decoding: "正在解压世界书",
+      saving: "正在保存世界书",
+      saved: "世界书解压完成",
+      "decode-failed": "世界书解压失败",
+      "save-unconfirmed": "世界书保存失败"
+    };
+    const __returned__ = { props, emit, allSaved, titles, get PhBooks() {
+      return G5;
+    }, get PhCheckCircle() {
+      return H10;
+    }, get PhWarningCircle() {
+      return I19;
+    }, ActionButton: ActionButton_default };
+    Object.defineProperty(__returned__, "__isScriptSetup", { enumerable: false, value: true });
+    return __returned__;
+  }
+});
+var _hoisted_169 = {
+  role: "document",
+  "aria-label": "世界书解压",
+  class: "dvs-ui dvs:flex dvs:max-h-[80dvh] dvs:flex-col dvs:overflow-hidden dvs:rounded-xl dvs:border dvs:border-dvs-border-strong dvs:bg-dvs-solid dvs:text-left dvs:text-dvs-text"
+};
+var _hoisted_241 = {
+  class: "dvs-scroll dvs:min-h-0 dvs:overflow-y-auto",
+  "aria-live": "polite"
+};
+var _hoisted_324 = { class: "dvs:flex dvs:items-center dvs:gap-2" };
+var _hoisted_419 = { class: "dvs:m-0 dvs:text-base dvs:font-semibold" };
+var _hoisted_519 = { class: "dvs:space-y-2 dvs:break-words dvs:text-sm dvs:leading-relaxed dvs:text-dvs-muted" };
+var _hoisted_616 = { key: 0 };
+var _hoisted_715 = { key: 1 };
+var _hoisted_814 = ["aria-label", "aria-valuenow", "aria-valuemax"];
+var _hoisted_913 = { key: 1 };
+var _hoisted_1011 = { class: "dvs:list-disc dvs:space-y-1 dvs:ps-6 dvs:text-dvs-text" };
+var _hoisted_1118 = {
+  key: 0,
+  class: "dvs:flex dvs:justify-end dvs:border-t dvs:border-dvs-border dvs:px-4 dvs:py-3"
+};
+function render43(_ctx, _cache, $props, $setup, $data, $options) {
+  return openBlock(), createElementBlock("div", _hoisted_169, [
+    createBaseVNode("div", _hoisted_241, [
+      (openBlock(true), createElementBlock(Fragment, null, renderList($props.books, ([name, book]) => {
+        return openBlock(), createElementBlock("section", {
+          key: name,
+          class: "dvs:space-y-3 dvs:border-b dvs:border-dvs-border dvs:p-4 dvs:last:border-0"
+        }, [
+          createBaseVNode("header", _hoisted_324, [
+            book.phase === "decode-failed" || book.phase === "save-unconfirmed" ? (openBlock(), createBlock($setup["PhWarningCircle"], {
+              key: 0,
+              size: 20,
+              class: "dvs:shrink-0 dvs:text-dvs-remove"
+            })) : book.phase === "saved" ? (openBlock(), createBlock($setup["PhCheckCircle"], {
+              key: 1,
+              size: 20,
+              class: "dvs:shrink-0 dvs:text-dvs-add"
+            })) : (openBlock(), createBlock($setup["PhBooks"], {
+              key: 2,
+              size: 20,
+              class: "dvs:shrink-0 dvs:text-dvs-accent"
+            })),
+            createBaseVNode("h3", _hoisted_419, toDisplayString($setup.titles[book.phase]), 1)
+          ]),
+          createBaseVNode("div", _hoisted_519, [
+            book.phase === "decoding" || book.phase === "saving" ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
+              createBaseVNode("p", null, "《" + toDisplayString(name) + "》", 1),
+              book.phase === "decoding" ? (openBlock(), createElementBlock("p", _hoisted_616, "已解压 " + toDisplayString(book.succeeded) + " / " + toDisplayString(book.total) + " 个条目", 1)) : (openBlock(), createElementBlock("p", _hoisted_715, toDisplayString(book.total) + " 个条目已全部解压，正在保存到酒馆。", 1)),
+              createBaseVNode("div", {
+                role: "progressbar",
+                "aria-label": name,
+                "aria-valuemin": "0",
+                "aria-valuenow": book.succeeded,
+                "aria-valuemax": book.total,
+                class: "dvs:h-1.5 dvs:overflow-hidden dvs:rounded-full dvs:bg-dvs-hover"
+              }, [
+                createBaseVNode("div", {
+                  class: "dvs:h-full dvs:rounded-full dvs:bg-dvs-accent",
+                  style: normalizeStyle({ width: 100 * book.succeeded / book.total + "%" })
+                }, null, 4)
+              ], 8, _hoisted_814)
+            ], 64)) : book.phase === "saved" ? (openBlock(), createElementBlock("p", _hoisted_913, "《" + toDisplayString(name) + "》的 " + toDisplayString(book.total) + " 个条目已解压并保存。", 1)) : book.phase === "decode-failed" ? (openBlock(), createElementBlock(Fragment, { key: 2 }, [
+              createBaseVNode("p", null, "无法解压《" + toDisplayString(name) + "》中的以下条目：", 1),
+              createBaseVNode("ul", _hoisted_1011, [
+                (openBlock(true), createElementBlock(Fragment, null, renderList(book.failures, (item) => {
+                  return openBlock(), createElementBlock("li", {
+                    key: item.uid
+                  }, toDisplayString(item.name || `未命名条目（编号 ${item.uid}）`), 1);
+                }), 128))
+              ]),
+              _cache[1] || (_cache[1] = createBaseVNode("p", null, "请删除这本世界书，然后从角色卡重新导入内嵌世界书。如果仍然失败，请尝试重新导入角色卡，或联系卡作者。", -1))
+            ], 64)) : (openBlock(), createElementBlock(Fragment, { key: 3 }, [
+              createBaseVNode("p", null, "《" + toDisplayString(name) + "》", 1),
+              _cache[2] || (_cache[2] = createBaseVNode("p", null, "世界书解压完成，但保存确认失败。请检查酒馆连接，然后重新打开聊天。", -1))
+            ], 64))
+          ])
+        ]);
+      }), 128))
+    ]),
+    $setup.props.canClose.value && !$setup.allSaved ? (openBlock(), createElementBlock("footer", _hoisted_1118, [
+      createVNode($setup["ActionButton"], {
+        label: "关闭",
+        variant: "primary",
+        onClick: _cache[0] || (_cache[0] = ($event) => _ctx.$emit("close"))
+      })
+    ])) : createCommentVNode("v-if", true)
+  ]);
+}
+__component42.render = render43;
+var WorldbookCompressionWindow_default = __component42;
+
+// src/dvs2/ui/worldbook-compression-dialog.ts
+function createWorldbookCompressionDialog(owner, reportError) {
+  const books = reactive(new Map);
+  const loading = ref(false);
+  const canClose = computed2(() => !loading.value && [...books.values()].every((book) => book.phase !== "decoding" && book.phase !== "saving"));
+  const lifetime = new AbortController;
+  let opened = false;
+  return {
+    onProgress(progress) {
+      if (lifetime.signal.aborted)
+        return;
+      books.set(progress.book, progress);
+      if (opened)
+        return;
+      opened = true;
+      showDvsPopup(owner, WorldbookCompressionWindow_default, (finish) => ({ books, canClose, onClose: finish }), undefined, lifetime.signal, { wider: false, canClose: () => canClose.value }).catch(reportError).finally(() => {
+        books.clear();
+        opened = false;
+      });
+    },
+    onLoading(active) {
+      loading.value = active;
+    },
+    dispose() {
+      lifetime.abort();
+    }
+  };
+}
+
 // src/tavern/extension-entry.ts
 var cleanupKey = Symbol.for("st-sqlite-helper.dvs-config-cleanup");
 var startupKey = Symbol.for("st-sqlite-helper.extension-startup");
@@ -63657,11 +64415,32 @@ var start = async () => {
     const unmount = mountStoragePanel(owner, host), viewer = mountDatabaseViewer(owner, host);
     const settings = host.settings;
     const readModelSnapshot = createSavedModelReader(settings, facade);
+    const shownWorldbookError = (error) => error instanceof WorldbookRestorationError ? error.progressReported : error instanceof AggregateError && error.errors.every(shownWorldbookError);
+    const reportWorldbookError = (error) => {
+      console.error("世界书正文还原未完成", error);
+      host.diagnostics.error("worldbook", error);
+      if (!shownWorldbookError(error))
+        owner.toastr?.error(error instanceof Error ? error.message : String(error), "世界书正文还原未完成", {
+          escapeHtml: true,
+          timeOut: 0,
+          extendedTimeOut: 0,
+          closeButton: true
+        });
+    };
+    const compressionDialog = createWorldbookCompressionDialog(owner, reportWorldbookError);
+    let compression;
+    try {
+      compression = await attachWorldbookCompression(owner, reportWorldbookError, undefined, compressionDialog);
+    } catch (error) {
+      reportWorldbookError(error);
+    }
     let dvs;
     let restoreStorage;
     const cleanup = () => {
       restoreStorage?.();
       dvs?.dispose();
+      compression?.dispose();
+      compressionDialog.dispose();
       readModelSnapshot.dispose();
       viewer();
       unmount();
@@ -63680,6 +64459,7 @@ var start = async () => {
       readModelSnapshot,
       readLegacyFilterModes: () => readSavedInputFilterModes(settings),
       settings,
+      prepareWorldbook: compression?.ensure,
       reportError: (error) => host.diagnostics.error("dvs2", error),
       prepareCurrent: async () => {
         host.enablement.assertActive();
@@ -63689,6 +64469,7 @@ var start = async () => {
         await opening.prepareCurrent();
       }
     });
+    compression?.prioritize();
     const previousStorageChanged = host.client.onStorageChanged;
     const storageChanged = createModelStorageListener(host.client.storage, () => {
       readModelSnapshot.storageChanged();

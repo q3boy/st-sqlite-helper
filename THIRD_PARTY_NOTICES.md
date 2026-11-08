@@ -2,6 +2,22 @@
 
 本文件列出完整运行包实际分发的第三方代码及类型声明。项目自有材料的 CC BY-NC-SA 4.0 不替换下列组件的许可。Bun、TypeScript、测试框架和房车卡资源未随此扩展运行包分发。
 
+## brotli-dec-wasm 2.3.2
+
+世界书条目解压使用插件随包提供的 `src/brotli-dec.wasm` 和 JavaScript 加载代码。上游提供 MIT 或 Apache-2.0 许可，本包按 MIT 分发。[项目与源码](https://github.com/ustclug-dev/brotli-dec-wasm)
+
+```text
+MIT License
+
+Copyright (c) 2026 Yulong Ming <i@myl7.org>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
 ## sql.js 1.14.2
 
 来源：[sql.js](https://github.com/sql-js/sql.js)。分发文件为 `src/sql-wasm.js` 和 `src/sql-wasm.wasm`；下面保留安装包的完整 LICENSE 与 AUTHORS。

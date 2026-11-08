@@ -8,6 +8,7 @@ export interface WorldbookEntry {
     promptPrepared?: boolean;
 }
 export interface WorldbookReader {
+    prepareWorldbook?(book: string): Promise<unknown>;
     getCharWorldbookNames(avatar: string): {
         primary: string | null;
         additional: string[];

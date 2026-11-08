@@ -5,4 +5,4 @@ export interface MigrationEntry extends LorebookEntry {
 }
 export declare function strictVersion(version: string): string;
 export declare function migrations(entries: readonly LorebookEntry[], current: string | null): MigrationEntry[];
-export declare function initializationEntry(entries: readonly LorebookEntry[], welcomeId: number): LorebookEntry | null;
+export declare function initializationEntry(entries: readonly LorebookEntry[], welcomeId: number): LorebookEntry[];
