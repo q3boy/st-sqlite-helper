@@ -2097,7 +2097,7 @@ function fileRetryable(error) {
 
 // src/protocol.ts
 var PROTOCOL_VERSION = 27;
-var BUILD_ID = "993afeee-e391-4600-bbce-1b4ecb65e186";
+var BUILD_ID = "54a98885-c6ce-4dff-8682-fd2a9c7316d5";
 var extensionEntryPath = new URL(import.meta.url).pathname;
 var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
 var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;
@@ -8801,9 +8801,10 @@ function isUserRule(tags) {
 
 // src/shared/worldbook-compression-format.ts
 var BROTLI_HEADER = "DVS-BROTLI-BASE64";
+var U20_HEADER = "DVS-BROTLI-U20";
 function isCompressedContent(content) {
-  return typeof content === "string" && (content === BROTLI_HEADER || content.startsWith(`${BROTLI_HEADER}
-`) || content.startsWith(`${BROTLI_HEADER}\r
+  return typeof content === "string" && [BROTLI_HEADER, U20_HEADER].some((header) => content === header || content.startsWith(header + `
+`) || content.startsWith(header + `\r
 `));
 }
 
@@ -58626,230 +58627,31 @@ ${regex(content, role, depth)}
 // src/dvs2/lorebook-version.ts
 var import_semver3 = __toESM(require_semver2(), 1);
 
-// node_modules/brotli-dec-wasm/pkg/brotli_dec_wasm.js
-class BrotliDecStream {
-  __destroy_into_raw() {
-    const e = this.__wbg_ptr;
-    return this.__wbg_ptr = 0, A36.unregister(this), e;
-  }
-  free() {
-    const e = this.__destroy_into_raw();
-    r.__wbg_brotlidecstream_free(e, 0);
-  }
-  dec(e, _) {
-    const n = a(e, r.__wbindgen_malloc), s = o, R = r.brotlidecstream_dec(this.__wbg_ptr, n, s, _);
-    if (R[2])
-      throw T4(R[1]);
-    return BrotliStreamResult.__wrap(R[0]);
-  }
-  decompress(e, _) {
-    const n = a(e, r.__wbindgen_malloc), s = o, R = r.brotlidecstream_decompress(this.__wbg_ptr, n, s, _);
-    if (R[2])
-      throw T4(R[1]);
-    return BrotliStreamResult.__wrap(R[0]);
-  }
-  constructor() {
-    const e = r.brotlidecstream_new();
-    return this.__wbg_ptr = e >>> 0, A36.register(this, this.__wbg_ptr, this), this;
-  }
-  total_out() {
-    return r.brotlidecstream_total_out(this.__wbg_ptr) >>> 0;
-  }
-}
-Symbol.dispose && (BrotliDecStream.prototype[Symbol.dispose] = BrotliDecStream.prototype.free);
-var BrotliDecStreamErrCode = Object.freeze({ BROTLI_DECODER_ERROR_FORMAT_EXUBERANT_NIBBLE: 1, 1: "BROTLI_DECODER_ERROR_FORMAT_EXUBERANT_NIBBLE", BROTLI_DECODER_ERROR_FORMAT_RESERVED: 2, 2: "BROTLI_DECODER_ERROR_FORMAT_RESERVED", BROTLI_DECODER_ERROR_FORMAT_EXUBERANT_META_NIBBLE: 3, 3: "BROTLI_DECODER_ERROR_FORMAT_EXUBERANT_META_NIBBLE", BROTLI_DECODER_ERROR_FORMAT_SIMPLE_HUFFMAN_ALPHABET: 4, 4: "BROTLI_DECODER_ERROR_FORMAT_SIMPLE_HUFFMAN_ALPHABET", BROTLI_DECODER_ERROR_FORMAT_SIMPLE_HUFFMAN_SAME: 5, 5: "BROTLI_DECODER_ERROR_FORMAT_SIMPLE_HUFFMAN_SAME", BROTLI_DECODER_ERROR_FORMAT_CL_SPACE: 6, 6: "BROTLI_DECODER_ERROR_FORMAT_CL_SPACE", BROTLI_DECODER_ERROR_FORMAT_HUFFMAN_SPACE: 7, 7: "BROTLI_DECODER_ERROR_FORMAT_HUFFMAN_SPACE", BROTLI_DECODER_ERROR_FORMAT_CONTEXT_MAP_REPEAT: 8, 8: "BROTLI_DECODER_ERROR_FORMAT_CONTEXT_MAP_REPEAT", BROTLI_DECODER_ERROR_FORMAT_BLOCK_LENGTH_1: 9, 9: "BROTLI_DECODER_ERROR_FORMAT_BLOCK_LENGTH_1", BROTLI_DECODER_ERROR_FORMAT_BLOCK_LENGTH_2: 10, 10: "BROTLI_DECODER_ERROR_FORMAT_BLOCK_LENGTH_2", BROTLI_DECODER_ERROR_FORMAT_TRANSFORM: 11, 11: "BROTLI_DECODER_ERROR_FORMAT_TRANSFORM", BROTLI_DECODER_ERROR_FORMAT_DICTIONARY: 12, 12: "BROTLI_DECODER_ERROR_FORMAT_DICTIONARY", BROTLI_DECODER_ERROR_FORMAT_WINDOW_BITS: 13, 13: "BROTLI_DECODER_ERROR_FORMAT_WINDOW_BITS", BROTLI_DECODER_ERROR_FORMAT_PADDING_1: 14, 14: "BROTLI_DECODER_ERROR_FORMAT_PADDING_1", BROTLI_DECODER_ERROR_FORMAT_PADDING_2: 15, 15: "BROTLI_DECODER_ERROR_FORMAT_PADDING_2", BROTLI_DECODER_ERROR_FORMAT_DISTANCE: 16, 16: "BROTLI_DECODER_ERROR_FORMAT_DISTANCE", BROTLI_DECODER_ERROR_DICTIONARY_NOT_SET: 19, 19: "BROTLI_DECODER_ERROR_DICTIONARY_NOT_SET", BROTLI_DECODER_ERROR_INVALID_ARGUMENTS: 20, 20: "BROTLI_DECODER_ERROR_INVALID_ARGUMENTS", BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MODES: 21, 21: "BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MODES", BROTLI_DECODER_ERROR_ALLOC_TREE_GROUPS: 22, 22: "BROTLI_DECODER_ERROR_ALLOC_TREE_GROUPS", BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MAP: 25, 25: "BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MAP", BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_1: 26, 26: "BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_1", BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_2: 27, 27: "BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_2", BROTLI_DECODER_ERROR_ALLOC_BLOCK_TYPE_TREES: 30, 30: "BROTLI_DECODER_ERROR_ALLOC_BLOCK_TYPE_TREES", BROTLI_DECODER_ERROR_UNREACHABLE: 31, 31: "BROTLI_DECODER_ERROR_UNREACHABLE" });
-
-class BrotliStreamResult {
-  static __wrap(e) {
-    e = e >>> 0;
-    const _ = Object.create(BrotliStreamResult.prototype);
-    return _.__wbg_ptr = e, L23.register(_, _.__wbg_ptr, _), _;
-  }
-  __destroy_into_raw() {
-    const e = this.__wbg_ptr;
-    return this.__wbg_ptr = 0, L23.unregister(this), e;
-  }
-  free() {
-    const e = this.__destroy_into_raw();
-    r.__wbg_brotlistreamresult_free(e, 0);
-  }
-  get buf() {
-    const e = r.__wbg_get_brotlistreamresult_buf(this.__wbg_ptr);
-    var _ = D34(e[0], e[1]).slice();
-    return r.__wbindgen_free(e[0], e[1] * 1, 1), _;
-  }
-  get code() {
-    return r.__wbg_get_brotlistreamresult_code(this.__wbg_ptr);
-  }
-  get input_offset() {
-    return r.__wbg_get_brotlistreamresult_input_offset(this.__wbg_ptr) >>> 0;
-  }
-  set buf(e) {
-    const _ = a(e, r.__wbindgen_malloc), n = o;
-    r.__wbg_set_brotlistreamresult_buf(this.__wbg_ptr, _, n);
-  }
-  set code(e) {
-    r.__wbg_set_brotlistreamresult_code(this.__wbg_ptr, e);
-  }
-  set input_offset(e) {
-    r.__wbg_set_brotlistreamresult_input_offset(this.__wbg_ptr, e);
-  }
-}
-Symbol.dispose && (BrotliStreamResult.prototype[Symbol.dispose] = BrotliStreamResult.prototype.free);
-var BrotliStreamResultCode = Object.freeze({ ResultSuccess: 1, 1: "ResultSuccess", NeedsMoreInput: 2, 2: "NeedsMoreInput", NeedsMoreOutput: 3, 3: "NeedsMoreOutput" });
-
-class DecompressStream {
-  __destroy_into_raw() {
-    const e = this.__wbg_ptr;
-    return this.__wbg_ptr = 0, g9.unregister(this), e;
-  }
-  free() {
-    const e = this.__destroy_into_raw();
-    r.__wbg_decompressstream_free(e, 0);
-  }
-  decompress(e, _) {
-    const n = a(e, r.__wbindgen_malloc), s = o, R = r.decompressstream_decompress(this.__wbg_ptr, n, s, _);
-    if (R[2])
-      throw T4(R[1]);
-    return BrotliStreamResult.__wrap(R[0]);
-  }
-  constructor() {
-    const e = r.decompressstream_new();
-    return this.__wbg_ptr = e >>> 0, g9.register(this, this.__wbg_ptr, this), this;
-  }
-  total_out() {
-    return r.decompressstream_total_out(this.__wbg_ptr) >>> 0;
-  }
-}
-Symbol.dispose && (DecompressStream.prototype[Symbol.dispose] = DecompressStream.prototype.free);
-function decompress(t) {
-  const e = a(t, r.__wbindgen_malloc), _ = o, n = r.decompress(e, _);
-  if (n[3])
-    throw T4(n[2]);
-  var s = D34(n[0], n[1]).slice();
-  return r.__wbindgen_free(n[0], n[1] * 1, 1), s;
-}
-function p3() {
-  return { __proto__: null, "./brotli_dec_wasm_bg.js": { __proto__: null, __wbg_Error_83742b46f01ce22d: function(e, _) {
-    return Error(d(e, _));
-  }, __wbg___wbindgen_throw_6ddd609b62940d55: function(e, _) {
-    throw new Error(d(e, _));
-  }, __wbg_error_a6fa202b58aa1cd3: function(e, _) {
-    let n, s;
+// src/shared/worldbook-codec.ts
+function createWorldbookCodec(module) {
+  const wasm = new WebAssembly.Instance(module).exports;
+  const encoder = new TextEncoder;
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  return (text, mode = "decode") => {
+    const bytes = encoder.encode(text);
+    const input = wasm.alloc(bytes.length);
     try {
-      n = e, s = _, console.error(d(e, _));
-    } finally {
-      r.__wbindgen_free(n, s, 1);
-    }
-  }, __wbg_new_227d7c05414eb861: function() {
-    return new Error;
-  }, __wbg_stack_3b0d974bbf31e44f: function(e, _) {
-    const n = _.stack, s = B57(n, r.__wbindgen_malloc, r.__wbindgen_realloc), R = o;
-    I20().setInt32(e + 4, R, true), I20().setInt32(e + 0, s, true);
-  }, __wbindgen_init_externref_table: function() {
-    const e = r.__wbindgen_externrefs, _ = e.grow(4);
-    e.set(0, undefined), e.set(_ + 0, undefined), e.set(_ + 1, null), e.set(_ + 2, true), e.set(_ + 3, false);
-  } } };
-}
-var A36 = typeof FinalizationRegistry > "u" ? { register: () => {}, unregister: () => {} } : new FinalizationRegistry((t) => r.__wbg_brotlidecstream_free(t >>> 0, 1));
-var g9 = typeof FinalizationRegistry > "u" ? { register: () => {}, unregister: () => {} } : new FinalizationRegistry((t) => r.__wbg_decompressstream_free(t >>> 0, 1));
-var L23 = typeof FinalizationRegistry > "u" ? { register: () => {}, unregister: () => {} } : new FinalizationRegistry((t) => r.__wbg_brotlistreamresult_free(t >>> 0, 1));
-function D34(t, e) {
-  return t = t >>> 0, c().subarray(t / 1, t / 1 + e);
-}
-var O2 = null;
-function I20() {
-  return (O2 === null || O2.buffer.detached === true || O2.buffer.detached === undefined && O2.buffer !== r.memory.buffer) && (O2 = new DataView(r.memory.buffer)), O2;
-}
-function d(t, e) {
-  return t = t >>> 0, m2(t, e);
-}
-var b57 = null;
-function c() {
-  return (b57 === null || b57.byteLength === 0) && (b57 = new Uint8Array(r.memory.buffer)), b57;
-}
-function a(t, e) {
-  const _ = e(t.length * 1, 1) >>> 0;
-  return c().set(t, _ / 1), o = t.length, _;
-}
-function B57(t, e, _) {
-  if (_ === undefined) {
-    const E = l.encode(t), f = e(E.length, 1) >>> 0;
-    return c().subarray(f, f + E.length).set(E), o = E.length, f;
-  }
-  let n = t.length, s = e(n, 1) >>> 0;
-  const R = c();
-  let i = 0;
-  for (;i < n; i++) {
-    const E = t.charCodeAt(i);
-    if (E > 127)
-      break;
-    R[s + i] = E;
-  }
-  if (i !== n) {
-    i !== 0 && (t = t.slice(i)), s = _(s, n, n = i + t.length * 3, 1) >>> 0;
-    const E = c().subarray(s + i, s + n), f = l.encodeInto(t, E);
-    i += f.written, s = _(s, n, i, 1) >>> 0;
-  }
-  return o = i, s;
-}
-function T4(t) {
-  const e = r.__wbindgen_externrefs.get(t);
-  return r.__externref_table_dealloc(t), e;
-}
-var u2 = new TextDecoder("utf-8", { ignoreBOM: true, fatal: true });
-u2.decode();
-var y38 = 2146435072;
-var w57 = 0;
-function m2(t, e) {
-  return w57 += e, w57 >= y38 && (u2 = new TextDecoder("utf-8", { ignoreBOM: true, fatal: true }), u2.decode(), w57 = e), u2.decode(c().subarray(t, t + e));
-}
-var l = new TextEncoder;
-"encodeInto" in l || (l.encodeInto = function(t, e) {
-  const _ = l.encode(t);
-  return e.set(_), { read: t.length, written: _.length };
-});
-var o = 0;
-var M47;
-var r;
-function C52(t, e) {
-  return r = t.exports, M47 = e, O2 = null, b57 = null, r.__wbindgen_start(), r;
-}
-async function F16(t, e) {
-  if (typeof Response == "function" && t instanceof Response) {
-    if (typeof WebAssembly.instantiateStreaming == "function")
+      new Uint8Array(wasm.memory.buffer, input, bytes.length).set(bytes);
+      const result = wasm.transform(input, bytes.length, mode === "decode" ? 0 : mode === "custom" ? 1 : 2);
+      const ptr = Number(result & 0xffffffffn);
+      const size = Number(result >> 32n & 0x7fffffffn);
       try {
-        return await WebAssembly.instantiateStreaming(t, e);
-      } catch (s) {
-        if (t.ok && _(t.type) && t.headers.get("Content-Type") !== "application/wasm")
-          console.warn("`WebAssembly.instantiateStreaming` failed because your server does not serve Wasm with `application/wasm` MIME type. Falling back to `WebAssembly.instantiate` which is slower. Original error:\n", s);
-        else
-          throw s;
+        const output = decoder.decode(new Uint8Array(wasm.memory.buffer, ptr, size));
+        if (result < 0n)
+          throw new Error(output);
+        return output;
+      } finally {
+        wasm.release(ptr, size);
       }
-    const n = await t.arrayBuffer();
-    return await WebAssembly.instantiate(n, e);
-  } else {
-    const n = await WebAssembly.instantiate(t, e);
-    return n instanceof WebAssembly.Instance ? { instance: n, module: t } : n;
-  }
-  function _(n) {
-    switch (n) {
-      case "basic":
-      case "cors":
-      case "default":
-        return true;
+    } finally {
+      wasm.release(input, bytes.length);
     }
-    return false;
-  }
-}
-async function N57(t) {
-  if (r !== undefined)
-    return r;
-  t !== undefined && (Object.getPrototypeOf(t) === Object.prototype ? { module_or_path: t } = t : console.warn("using deprecated parameters for the initialization function; pass a single object instead")), t === undefined && (t = new URL("brotli_dec_wasm_bg.wasm", import.meta.url));
-  const e = p3();
-  (typeof t == "string" || typeof Request == "function" && t instanceof Request || typeof URL == "function" && t instanceof URL) && (t = fetch(t));
-  const { instance: _, module: n } = await F16(await t, e);
-  return C52(_, n);
+  };
 }
 
 // src/dvs2/worldbook-compression.ts
@@ -58891,19 +58693,22 @@ async function yieldProgressFrame() {
   });
 }
 var decoderReady;
-var decodeBrotli = async (bytes) => {
-  await (decoderReady ??= N57({ module_or_path: `${EXTENSION_PATH}brotli-dec.wasm` }));
-  return decompress(bytes);
-};
+function initializeWorldbookDecoder(module) {
+  return decoderReady = module.then(createWorldbookCodec).catch((error) => {
+    decoderReady = undefined;
+    throw error;
+  });
+}
+async function decodeBrotli(content) {
+  const decoder = await (decoderReady ?? initializeWorldbookDecoder(fetch(`${EXTENSION_PATH}worldbook-decoder.wasm`).then(async (response) => {
+    if (!response.ok)
+      throw new Error(`加载世界书解码器失败（HTTP ${response.status}）。`);
+    return WebAssembly.compile(await response.arrayBuffer());
+  })));
+  return decoder(content);
+}
 async function decodeCompressedContent(content, decode = decodeBrotli) {
-  if (!isCompressedContent(content))
-    return content;
-  const base64 = content.slice(content.indexOf(`
-`) + 1);
-  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64) || !base64)
-    throw new Error("压缩正文的 Base64 编码无效。");
-  const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
-  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await decode(bytes));
+  return isCompressedContent(content) ? decode(content) : content;
 }
 async function restoreWorldbook(source, name, decode, onProgress) {
   if (!source?.entries || typeof source.entries !== "object" || Array.isArray(source.entries))
@@ -58992,7 +58797,6 @@ function createWorldbookRestorer(port, decode, onProgress) {
         port.invalidate?.(failed);
         pending.delete(failed);
         failures.delete(failed);
-        decoderReady = undefined;
       }
     }
   };
@@ -64235,18 +64039,12 @@ var __component42 = /* @__PURE__ */ defineComponent({
     books: { type: Map, required: true },
     canClose: { type: Object, required: true }
   },
-  emits: ["close"],
+  emits: ["close", "refresh"],
   setup(__props, { expose: __expose, emit: __emit }) {
     __expose();
     const props = __props;
     const emit = __emit;
     const allSaved = computed2(() => props.canClose.value && [...props.books.values()].every((book) => book.phase === "saved"));
-    watch2(allSaved, (saved, _, onCleanup) => {
-      if (!saved)
-        return;
-      const timer = window.setTimeout(() => emit("close"), 1000);
-      onCleanup(() => window.clearTimeout(timer));
-    }, { immediate: true });
     const titles = {
       decoding: "正在解压世界书",
       saving: "正在保存世界书",
@@ -64282,10 +64080,7 @@ var _hoisted_715 = { key: 1 };
 var _hoisted_814 = ["aria-label", "aria-valuenow", "aria-valuemax"];
 var _hoisted_913 = { key: 1 };
 var _hoisted_1011 = { class: "dvs:list-disc dvs:space-y-1 dvs:ps-6 dvs:text-dvs-text" };
-var _hoisted_1118 = {
-  key: 0,
-  class: "dvs:flex dvs:justify-end dvs:border-t dvs:border-dvs-border dvs:px-4 dvs:py-3"
-};
+var _hoisted_1118 = { class: "dvs:flex dvs:justify-end dvs:border-t dvs:border-dvs-border dvs:px-4 dvs:py-3" };
 function render43(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("div", _hoisted_169, [
     createBaseVNode("div", _hoisted_241, [
@@ -64336,22 +64131,29 @@ function render43(_ctx, _cache, $props, $setup, $data, $options) {
                   }, toDisplayString(item.name || `未命名条目（编号 ${item.uid}）`), 1);
                 }), 128))
               ]),
-              _cache[1] || (_cache[1] = createBaseVNode("p", null, "请删除这本世界书，然后从角色卡重新导入内嵌世界书。如果仍然失败，请尝试重新导入角色卡，或联系卡作者。", -1))
+              _cache[2] || (_cache[2] = createBaseVNode("p", null, "请删除这本世界书，然后从角色卡重新导入内嵌世界书。如果仍然失败，请尝试重新导入角色卡，或联系卡作者。", -1))
             ], 64)) : (openBlock(), createElementBlock(Fragment, { key: 3 }, [
               createBaseVNode("p", null, "《" + toDisplayString(name) + "》", 1),
-              _cache[2] || (_cache[2] = createBaseVNode("p", null, "世界书解压完成，但保存确认失败。请检查酒馆连接，然后重新打开聊天。", -1))
+              _cache[3] || (_cache[3] = createBaseVNode("p", null, "世界书解压完成，但保存确认失败。请检查酒馆连接，然后重新打开聊天。", -1))
             ], 64))
           ])
         ]);
       }), 128))
     ]),
-    $setup.props.canClose.value && !$setup.allSaved ? (openBlock(), createElementBlock("footer", _hoisted_1118, [
-      createVNode($setup["ActionButton"], {
+    createBaseVNode("footer", _hoisted_1118, [
+      $setup.props.canClose.value && !$setup.allSaved ? (openBlock(), createBlock($setup["ActionButton"], {
+        key: 0,
         label: "关闭",
         variant: "primary",
         onClick: _cache[0] || (_cache[0] = ($event) => _ctx.$emit("close"))
-      })
-    ])) : createCommentVNode("v-if", true)
+      })) : (openBlock(), createBlock($setup["ActionButton"], {
+        key: 1,
+        label: "刷新",
+        variant: "primary",
+        disabled: !$setup.allSaved,
+        onClick: _cache[1] || (_cache[1] = ($event) => $setup.emit("refresh"))
+      }, null, 8, ["disabled"]))
+    ])
   ]);
 }
 __component42.render = render43;
@@ -64372,7 +64174,7 @@ function createWorldbookCompressionDialog(owner, reportError) {
       if (opened)
         return;
       opened = true;
-      showDvsPopup(owner, WorldbookCompressionWindow_default, (finish) => ({ books, canClose, onClose: finish }), undefined, lifetime.signal, { wider: false, canClose: () => canClose.value }).catch(reportError).finally(() => {
+      showDvsPopup(owner, WorldbookCompressionWindow_default, (finish) => ({ books, canClose, onClose: finish, onRefresh: () => owner.location.reload() }), undefined, lifetime.signal, { wider: false, canClose: () => canClose.value && [...books.values()].some((book) => book.phase !== "saved") }).catch(reportError).finally(() => {
         books.clear();
         opened = false;
       });

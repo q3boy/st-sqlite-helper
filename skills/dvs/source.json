@@ -39,12 +39,14 @@
       "sources": [
         "scripts/card-compress/cli.ts",
         "scripts/card-compress/pack.ts",
-        "src/shared/worldbook-compression-format.ts"
+        "src/shared/worldbook-codec.ts",
+        "src/shared/worldbook-compression-format.ts",
+        "codec/worldbook/wasm/author.wasm"
       ],
       "dependencies": {
         "yaml": "2.9.1"
       }
     }
   },
-  "contentHash": "7272bd97c66159c33ef04e92a48a9a3fb2afdc0a65cedbb4fff76dc70fc6dfc8"
+  "contentHash": "c377fecf176c43f336a4d60026ae76290ac16152e22dc9f719728cc694e7b6ea"
 }
