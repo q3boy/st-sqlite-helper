@@ -3,5 +3,5 @@
   "buildMode": "release",
   "extensionName": "st-sqlite-helper",
   "sourceCommit": "d9f73c2da04f85367c34919b28a8e322b337e652",
-  "releaseVersion": "0.6.1-rc.1"
+  "releaseVersion": "0.6.1"
 }
