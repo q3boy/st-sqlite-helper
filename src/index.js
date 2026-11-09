@@ -2097,7 +2097,7 @@ function fileRetryable(error) {
 
 // src/protocol.ts
 var PROTOCOL_VERSION = 27;
-var BUILD_ID = "54a98885-c6ce-4dff-8682-fd2a9c7316d5";
+var BUILD_ID = "0537afdc-fc78-408d-90a4-03b63ff09274";
 var extensionEntryPath = new URL(import.meta.url).pathname;
 var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
 var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;
@@ -8806,6 +8806,16 @@ function isCompressedContent(content) {
   return typeof content === "string" && [BROTLI_HEADER, U20_HEADER].some((header) => content === header || content.startsWith(header + `
 `) || content.startsWith(header + `\r
 `));
+}
+function isCompressedScript(text) {
+  return typeof text === "string" && text.startsWith("//") && isCompressedContent(text.slice(2));
+}
+function uncommentCompressedScript(text) {
+  const newline = text.indexOf(`
+`);
+  if (newline < 0 || !text.startsWith("//", newline + 1))
+    throw new Error("脚本缺少压缩正文。");
+  return text.slice(2, newline + 1) + text.slice(newline + 3).replaceAll("\\x3c", "<");
 }
 
 // src/dvs2/worldbook.ts
@@ -41397,7 +41407,7 @@ function createStage(name, onCapsuleWrite) {
 }
 
 // src/dvs2/ext/pre_narr_ui/contracts.ts
-function json(value, ancestors = new Set) {
+function isJsonValue(value, ancestors = new Set) {
   if (value === null || typeof value === "string" || typeof value === "boolean")
     return true;
   if (typeof value === "number")
@@ -41414,7 +41424,7 @@ function json(value, ancestors = new Set) {
     return false;
   ancestors.add(value);
   const entries = Object.entries(Object.getOwnPropertyDescriptors(value)).filter(([name]) => !Array.isArray(value) || name !== "length");
-  const valid = (!Array.isArray(value) || entries.length === value.length) && entries.every(([name, descriptor]) => ("value" in descriptor) && descriptor.enumerable && (!Array.isArray(value) || /^(0|[1-9]\d*)$/.test(name) && Number(name) < value.length) && json(descriptor.value, ancestors));
+  const valid = (!Array.isArray(value) || entries.length === value.length) && entries.every(([name, descriptor]) => ("value" in descriptor) && descriptor.enumerable && (!Array.isArray(value) || /^(0|[1-9]\d*)$/.test(name) && Number(name) < value.length) && isJsonValue(descriptor.value, ancestors));
   ancestors.delete(value);
   return valid;
 }
@@ -41422,7 +41432,7 @@ function isPreNarrativeUiRecord(input) {
   if (!input || typeof input !== "object" || Array.isArray(input))
     return false;
   const record = input;
-  return record.key === null ? Object.keys(record).length === 1 : typeof record.key === "string" && !!record.key.trim() && (Object.keys(record).length === 1 || Object.keys(record).length === 2 && Object.hasOwn(record, "result") && json(record.result));
+  return record.key === null ? Object.keys(record).length === 1 : typeof record.key === "string" && !!record.key.trim() && Object.entries(record).every(([field, value]) => field === "key" || (field === "params" || field === "result") && isJsonValue(value));
 }
 // src/dvs2/ui/components/record/ActionButton.vue
 var __component8 = /* @__PURE__ */ defineComponent({
@@ -42126,17 +42136,24 @@ ${item.condition}
 }
 function preNarrativeTask(payload) {
   const registrations = preNarrativeRegistrations(payload);
+  const params = Object.fromEntries(registrations.flatMap((item) => item.paramsSchema ? [[item.key, item.paramsSchema]] : []));
+  const hasParams = Object.keys(params).length > 0;
   return {
     order: 20,
     instruct: `根据 last_user_input、已有资料和本次可用的 plot_plan，判断以下条件是否命中。
 无plot_plan时，直接根据用户输入和已有资料判断。返回所有命中 key；未命中返回空数组。
-不要替玩家决定交互中待确认的具体结果。
+不要替玩家决定交互中待确认的具体结果。${hasParams ? `
+对命中且声明参数的 key，在 data.params[key] 中按以下 JSON Schema 填写参数：
+${JSON.stringify(params)}` : ""}
 
 ${preNarrativeConditions(payload)}`,
     example: { data: { keys: [] } },
     schema: {
       type: "object",
-      properties: { keys: { type: "array", items: { type: "string", enum: registrations.map((item) => item.key) } } },
+      properties: {
+        keys: { type: "array", items: { type: "string", enum: registrations.map((item) => item.key) } },
+        ...hasParams ? { params: { type: "object", properties: params, additionalProperties: false } } : {}
+      },
       required: ["keys"],
       additionalProperties: false
     }
@@ -42236,6 +42253,10 @@ function validatePreNarrativeUiRegistration(input) {
       throw new Error(`生成拦截 ${item.key} 须提供非空 condition。`);
     if (item.narrativeEntriesSkip !== undefined && (!Array.isArray(item.narrativeEntriesSkip) || item.narrativeEntriesSkip.some((name) => typeof name !== "string" || !name.trim())))
       throw new Error(`生成拦截 ${item.key} 的 narrativeEntriesSkip 须为条目名称数组，名称不能为空。`);
+    if (item.paramsSchema !== undefined && (!item.paramsSchema || typeof item.paramsSchema !== "object" || Array.isArray(item.paramsSchema) || !isJsonValue(item.paramsSchema)))
+      throw new Error(`生成拦截 ${item.key} 的 paramsSchema 须为 JSON Schema 对象。`);
+    if (item.validateParams !== undefined && (!item.paramsSchema || typeof item.validateParams !== "function"))
+      throw new Error(`生成拦截 ${item.key} 的 validateParams 须与 paramsSchema 一起声明为函数。`);
     const component = item.component;
     if (!component || typeof component !== "object" || ["mount", "mountResult", "toPrompt"].some((name) => typeof component[name] !== "function"))
       throw new Error(`生成拦截 ${item.key} 须提供 mount、mountResult 和 toPrompt。`);
@@ -42244,6 +42265,8 @@ function validatePreNarrativeUiRegistration(input) {
       ...item.buttonText === undefined ? {} : { buttonText: item.buttonText },
       ...item.insist === undefined ? {} : { insist: item.insist },
       condition: item.condition,
+      ...item.paramsSchema === undefined ? {} : { paramsSchema: structuredClone(item.paramsSchema) },
+      ...item.validateParams === undefined ? {} : { validateParams: item.validateParams.bind(item) },
       ...item.narrativeEntriesSkip === undefined ? {} : { narrativeEntriesSkip: item.narrativeEntriesSkip.map((name) => name.trim()) },
       component: {
         mount: component.mount.bind(component),
@@ -42252,6 +42275,18 @@ function validatePreNarrativeUiRegistration(input) {
       }
     };
   });
+}
+function sameParams(left, right) {
+  if (left === right)
+    return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object")
+    return false;
+  if (Array.isArray(left))
+    return Array.isArray(right) && left.length === right.length && left.every((item, i) => sameParams(item, right[i]));
+  if (Array.isArray(right))
+    return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every((key) => Object.hasOwn(right, key) && sameParams(left[key], right[key]));
 }
 
 class PreNarrativeUi {
@@ -42282,7 +42317,7 @@ class PreNarrativeUi {
       const record = ctx.getCapsule();
       if (ctx.helper.registration.preNarrativeUi?.length && !isPreNarrativeUiRecord(record))
         throw new Error("生成拦截记录格式损坏。");
-      this.selected = isPreNarrativeUiRecord(record) && record.key !== null && !("result" in record) ? record.key : undefined;
+      this.selected = isPreNarrativeUiRecord(record) && record.key !== null && !("result" in record) ? record : undefined;
       return;
     }
     const registrations = ctx.helper.registration.preNarrativeUi ?? [];
@@ -42291,24 +42326,31 @@ class PreNarrativeUi {
     const keys = data.keys;
     if (keys.some((key) => typeof key !== "string" || !registrations.some((item) => item.key === key)))
       throw new Error("生成拦截判断包含未注册的 key。");
-    this.selected = registrations.find((item) => keys.includes(item.key))?.key ?? null;
+    const selected = registrations.find((item) => keys.includes(item.key));
+    const paramsMap = data.params;
+    let params;
+    if (selected?.paramsSchema) {
+      const supplied = paramsMap && Object.hasOwn(paramsMap, selected.key) ? paramsMap[selected.key] : undefined;
+      if (!isJsonValue(supplied) || selected.validateParams && !selected.validateParams(supplied))
+        throw new Error(`生成拦截 ${selected.key} 的判断参数无效。`);
+      params = supplied;
+    }
+    this.selected = selected ? { key: selected.key, ...params === undefined ? {} : { params } } : undefined;
     const previous = ctx.getCapsule();
-    ctx.setCapsule(isPreNarrativeUiRecord(previous) && previous.key === this.selected && "result" in previous ? previous : { key: this.selected });
+    if (this.selected && isPreNarrativeUiRecord(previous) && previous.key === this.selected.key && "result" in previous)
+      return;
+    ctx.setCapsule(this.selected ?? { key: null });
   }
   async complete(ctx, services, reopen = false) {
     if (reopen) {
       const record = ctx.getCapsule();
       if (!isPreNarrativeUiRecord(record) || record.key === null)
         throw new Error("这条消息没有可继续的生成拦截。");
-      this.selected = record.key;
+      this.selected = record;
     }
     if (this.selected === undefined)
       return false;
-    if (this.selected === null) {
-      this.selected = undefined;
-      return false;
-    }
-    const key = this.selected, registration = ctx.helper.registration.preNarrativeUi.find((item) => item.key === key);
+    const { key, params: selectedParams } = this.selected, registration = ctx.helper.registration.preNarrativeUi.find((item) => item.key === key);
     const controller = new AbortController, abort = () => controller.abort(ctx.helper.signal.reason);
     ctx.helper.signal.addEventListener("abort", abort, { once: true });
     if (ctx.helper.signal.aborted)
@@ -42322,10 +42364,12 @@ class PreNarrativeUi {
       const adoptedPlot = Object.hasOwn(ctx.narrativePrompt.afterUserInput, "plot_plan") ? ctx.narrativePrompt.afterUserInput.plot_plan?.data ?? plotPlan ?? null : null;
       const plot = structuredClone(adoptedPlot);
       const previous = ctx.getCapsule();
+      const params = selectedParams === undefined ? {} : { params: selectedParams };
       const result = await services.mount(registration.component, {
+        ...structuredClone(params),
         userInput: materials.userInput,
         plotPlan: plot,
-        ...isPreNarrativeUiRecord(previous) && previous.key === key && "result" in previous ? { result: structuredClone(previous.result) } : {},
+        ...isPreNarrativeUiRecord(previous) && previous.key === key && "result" in previous && sameParams(previous.params, selectedParams) ? { result: structuredClone(previous.result) } : {},
         prompt: createPreNarrativePrompt({ plotPlan: plot, materials }),
         worldbook: {
           getEntries: async (names) => {
@@ -42349,7 +42393,7 @@ class PreNarrativeUi {
       controller.signal.throwIfAborted();
       if (!isPreNarrativeUiRecord({ key, result }))
         throw new Error("生成拦截结果须为有效 JSON。");
-      ctx.setCapsule({ key, result: structuredClone(result) });
+      ctx.setCapsule({ key, ...params, result: structuredClone(result) });
       this.selected = undefined;
       return true;
     } finally {
@@ -42931,8 +42975,8 @@ function validatePatch(value) {
 // src/dvs2/compat/capsule.ts
 var object2 = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 var scalar2 = (value) => value === null || typeof value === "string" || typeof value === "number" && Number.isFinite(value);
-function json2(value) {
-  return value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "number" && Number.isFinite(value) || (Array.isArray(value) ? value.every(json2) : object2(value) && Object.values(value).every(json2));
+function json(value) {
+  return value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "number" && Number.isFinite(value) || (Array.isArray(value) ? value.every(json) : object2(value) && Object.values(value).every(json));
 }
 var blocks = () => /<(DVSData|DVSInputInject|DVSUpdateData)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
 var attribute = (attributes, name) => new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, "i").exec(attributes)?.slice(1).find((v) => v !== undefined);
@@ -42958,7 +43002,7 @@ function readCapsuleTag(body, kind) {
   if (encoded) {
     const decoded = encoded.replace(/&(quot|apos|amp|lt|gt|#39);/g, (_, entity) => ({ quot: '"', apos: "'", amp: "&", lt: "<", gt: ">", "#39": "'" })[entity]);
     const value = JSON.parse(decoded);
-    if (!object2(value) || !json2(value))
+    if (!object2(value) || !json(value))
       throw invalid6();
     summary = value;
   }
@@ -42973,7 +43017,7 @@ function summarizeCapsule(type, document2, definitions, previous = {}, replacedK
       continue;
     const summary = definitions.find((definition) => definition.key === key)?.controller?.summarize?.(type, record);
     if (summary !== undefined) {
-      if (!json2(summary))
+      if (!json(summary))
         throw new Error("DVS 记录摘要不是有效 JSON。");
       result[key] = summary;
     }
@@ -42981,9 +43025,9 @@ function summarizeCapsule(type, document2, definitions, previous = {}, replacedK
   return result;
 }
 function validateDocument(value) {
-  if (!object2(value) || !object2(value.records) || !json2(value.records))
+  if (!object2(value) || !object2(value.records) || !json(value.records))
     throw invalid6();
-  if (value.analyses !== undefined && (!Array.isArray(value.analyses) || value.analyses.some((item) => !object2(item) || !Array.isArray(item.extensions) || !item.extensions.every((key) => typeof key === "string") || !(typeof item.content === "string" || Array.isArray(item.content) && json2(item.content)))))
+  if (value.analyses !== undefined && (!Array.isArray(value.analyses) || value.analyses.some((item) => !object2(item) || !Array.isArray(item.extensions) || !item.extensions.every((key) => typeof key === "string") || !(typeof item.content === "string" || Array.isArray(item.content) && json(item.content)))))
     throw invalid6();
   return {
     records: value.records,
@@ -42991,7 +43035,7 @@ function validateDocument(value) {
   };
 }
 function convertLegacyCapsule(value, kind) {
-  if (!object2(value) || !json2(value))
+  if (!object2(value) || !json(value))
     throw invalid6();
   const result = { records: {} };
   const analysis = (key, extensions) => {
@@ -44953,6 +44997,10 @@ async function showDvsPopup(owner, component, props, cancelled, signal, appearan
   const { Popup, POPUP_TYPE, POPUP_RESULT } = await nativeImport("/scripts/popup.js");
   if (signal?.aborted)
     return cancelled;
+  if (appearance.beforeShow)
+    await appearance.beforeShow();
+  if (signal?.aborted)
+    return cancelled;
   const content = owner.document.createElement("div");
   let value = cancelled;
   const popup = new Popup(content, POPUP_TYPE.TEXT, "", {
@@ -44981,7 +45029,9 @@ async function showDvsPopup(owner, component, props, cancelled, signal, appearan
     });
   }
   try {
-    await popup.show();
+    const result = popup.show();
+    appearance.onShow?.(popup.dlg);
+    await result;
     return signal?.aborted ? cancelled : value;
   } finally {
     signal?.removeEventListener("abort", abort);
@@ -58720,7 +58770,7 @@ async function restoreWorldbook(source, name, decode, onProgress) {
   let succeeded = 0;
   const failures = [];
   const progress = (phase) => onProgress?.({ book: name, total: compressed.length, succeeded, phase, failures: [...failures] });
-  progress("decoding");
+  await progress("decoding");
   if (onProgress)
     await yieldProgressFrame();
   let frameStarted = performance.now();
@@ -58763,10 +58813,12 @@ function createWorldbookRestorer(port, decode, onProgress) {
       try {
         const restored = await restoreWorldbook(await port.load(name), name, decode, onProgress ? (progress) => {
           lastProgress = progress;
-          onProgress(progress);
+          return onProgress(progress);
         } : undefined);
         if (restored.changed) {
           onProgress?.({ ...lastProgress, phase: "saving" });
+          if (onProgress)
+            await yieldProgressFrame();
           try {
             await port.save(name, restored.book);
           } catch (cause) {
@@ -63907,6 +63959,97 @@ async function ensureCapsuleVisibility() {
   await script.saveSettings();
 }
 
+// src/dvs2/character-script-compression.ts
+function scripts(nodes) {
+  return nodes.flatMap((node) => node.type === "folder" ? node.scripts ?? [] : [node]);
+}
+async function restoreCharacterScripts(owner, avatar, onProgress) {
+  const helper = owner.TavernHelper;
+  const scope = { type: "character" };
+  const selected = scripts(helper.getScriptTrees(scope)).filter((node) => isCompressedScript(node.content));
+  if (!selected.length)
+    return;
+  const state = {
+    kind: "script",
+    book: avatar,
+    total: selected.length,
+    succeeded: 0,
+    phase: "decoding",
+    failures: []
+  };
+  const report = (phase) => onProgress?.({ ...state, phase, failures: [...state.failures] });
+  await report("decoding");
+  await yieldProgressFrame();
+  const changes = new Map;
+  for (const node of selected) {
+    try {
+      const before = node.content;
+      changes.set(node.id, { before, after: await decodeCompressedContent(uncommentCompressedScript(before)) });
+      state.succeeded++;
+    } catch (error) {
+      state.failures.push({
+        uid: node.id,
+        name: node.name,
+        reason: error instanceof Error ? error.message : String(error)
+      });
+    }
+    report("decoding");
+    await yieldProgressFrame();
+  }
+  if (state.failures.length) {
+    report("decode-failed");
+    throw new WorldbookRestorationError("角色脚本解压失败：" + state.failures.map((item) => item.name).join("、"), state.failures, !!onProgress);
+  }
+  report("saving");
+  if (onProgress)
+    await yieldProgressFrame();
+  try {
+    const ctx = owner.SillyTavern.getContext();
+    if (ctx.characterId == null || ctx.characters[Number(ctx.characterId)]?.avatar !== avatar || ctx.groupId != null && ctx.groupId !== "")
+      throw new Error("当前角色已切换。");
+    if (!helper.updateScriptTreesWith)
+      throw new Error("酒馆助手缺少角色脚本更新接口。");
+    helper.updateScriptTreesWith((nodes) => {
+      const indexed = new Map(scripts(nodes).map((node) => [node.id, node]));
+      for (const [id, change] of changes) {
+        const node = indexed.get(id);
+        if (!node || node.content !== change.before)
+          throw new Error("待还原脚本已变更。");
+        node.content = change.after;
+      }
+      return nodes;
+    }, scope);
+    const deadline = Date.now() + 15000;
+    let interval = 100;
+    for (;; ) {
+      const response = await (owner.fetch ?? fetch).call(owner, "/api/characters/get", {
+        method: "POST",
+        headers: ctx.getRequestHeaders(),
+        body: JSON.stringify({ avatar_url: avatar })
+      });
+      if (!response.ok)
+        throw new Error("读取角色卡失败（HTTP " + response.status + "）。");
+      const card = await response.json();
+      const field = card.data?.extensions?.tavern_helper;
+      const tree = (Array.isArray(field) ? Object.fromEntries(field) : field)?.scripts;
+      if (card.avatar === avatar && Array.isArray(tree)) {
+        const stored = new Map(scripts(tree).map((node) => [node.id, node.content]));
+        if ([...changes].every(([id, change]) => stored.get(id) === change.after))
+          break;
+      }
+      if (Date.now() >= deadline)
+        throw new Error("酒馆未确认角色脚本已保存。");
+      await new Promise((resolve) => setTimeout(resolve, interval));
+      interval = Math.min(1000, interval * 2);
+    }
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : String(error);
+    report("save-unconfirmed");
+    throw new WorldbookRestorationError("角色脚本保存未确认：" + state.error, error, !!onProgress);
+  }
+  report("saved");
+}
+
 // src/dvs2/worldbook-compression-tavern.ts
 async function createWorldbookCompressionPort(owner) {
   const nativeImport = (path) => import(path);
@@ -64005,16 +64148,35 @@ async function attachWorldbookCompression(owner, reportError, supplied, options 
       reportError(error);
     }
   };
+  const pendingScripts = new Map;
   const changed = () => {
     restorer.resetFailures();
-    prepareBooks(names()).catch(reportError);
+    const current = owner.SillyTavern.getContext();
+    const avatar = current.characterId != null && current.characterId !== "" && (current.groupId == null || current.groupId === "") ? current.characters[Number(current.characterId)]?.avatar : undefined;
+    loading(async () => {
+      await prepareBooks(names());
+      if (!avatar || pendingScripts.has(avatar))
+        return;
+      const live = owner.SillyTavern.getContext();
+      if (live.characterId == null || live.characters[Number(live.characterId)]?.avatar !== avatar)
+        return;
+      const work = restoreCharacterScripts(owner, avatar, options.onProgress);
+      pendingScripts.set(avatar, work);
+      try {
+        await work;
+      } finally {
+        pendingScripts.delete(avatar);
+      }
+    }).catch(reportError);
   };
   const updated = (name) => restorer.resetFailures(name);
   source.on(event, scan);
   source.makeFirst(event, scan);
   const chatChanged = context.eventTypes?.CHAT_CHANGED;
-  if (chatChanged)
+  if (chatChanged) {
     source.on(chatChanged, changed);
+    source.makeLast?.(chatChanged, changed);
+  }
   const worldUpdated = context.eventTypes?.WORLDINFO_UPDATED;
   if (worldUpdated)
     source.on(worldUpdated, updated);
@@ -64056,6 +64218,8 @@ var __component42 = /* @__PURE__ */ defineComponent({
       return G5;
     }, get PhCheckCircle() {
       return H10;
+    }, get PhCircleNotch() {
+      return I3;
     }, get PhWarningCircle() {
       return I19;
     }, ActionButton: ActionButton_default };
@@ -64063,11 +64227,7 @@ var __component42 = /* @__PURE__ */ defineComponent({
     return __returned__;
   }
 });
-var _hoisted_169 = {
-  role: "document",
-  "aria-label": "世界书解压",
-  class: "dvs-ui dvs:flex dvs:max-h-[80dvh] dvs:flex-col dvs:overflow-hidden dvs:rounded-xl dvs:border dvs:border-dvs-border-strong dvs:bg-dvs-solid dvs:text-left dvs:text-dvs-text"
-};
+var _hoisted_169 = ["aria-label"];
 var _hoisted_241 = {
   class: "dvs-scroll dvs:min-h-0 dvs:overflow-y-auto",
   "aria-live": "polite"
@@ -64080,13 +64240,19 @@ var _hoisted_715 = { key: 1 };
 var _hoisted_814 = ["aria-label", "aria-valuenow", "aria-valuemax"];
 var _hoisted_913 = { key: 1 };
 var _hoisted_1011 = { class: "dvs:list-disc dvs:space-y-1 dvs:ps-6 dvs:text-dvs-text" };
-var _hoisted_1118 = { class: "dvs:flex dvs:justify-end dvs:border-t dvs:border-dvs-border dvs:px-4 dvs:py-3" };
+var _hoisted_1118 = { key: 0 };
+var _hoisted_1217 = { key: 1 };
+var _hoisted_1314 = { class: "dvs:flex dvs:justify-end dvs:border-t dvs:border-dvs-border dvs:px-4 dvs:py-3" };
 function render43(_ctx, _cache, $props, $setup, $data, $options) {
-  return openBlock(), createElementBlock("div", _hoisted_169, [
+  return openBlock(), createElementBlock("div", {
+    role: "document",
+    "aria-label": [...$props.books.values()].some((book) => book.kind === "script") ? "角色卡解压" : "世界书解压",
+    class: "dvs-ui dvs:flex dvs:max-h-[80dvh] dvs:flex-col dvs:overflow-hidden dvs:rounded-xl dvs:border dvs:border-dvs-border-strong dvs:bg-dvs-solid dvs:text-left dvs:text-dvs-text"
+  }, [
     createBaseVNode("div", _hoisted_241, [
-      (openBlock(true), createElementBlock(Fragment, null, renderList($props.books, ([name, book]) => {
+      (openBlock(true), createElementBlock(Fragment, null, renderList($props.books, ([key, book]) => {
         return openBlock(), createElementBlock("section", {
-          key: name,
+          key,
           class: "dvs:space-y-3 dvs:border-b dvs:border-dvs-border dvs:p-4 dvs:last:border-0"
         }, [
           createBaseVNode("header", _hoisted_324, [
@@ -64098,20 +64264,32 @@ function render43(_ctx, _cache, $props, $setup, $data, $options) {
               key: 1,
               size: 20,
               class: "dvs:shrink-0 dvs:text-dvs-add"
-            })) : (openBlock(), createBlock($setup["PhBooks"], {
+            })) : book.phase === "saving" ? (openBlock(), createBlock($setup["PhCircleNotch"], {
               key: 2,
+              size: 20,
+              "aria-hidden": "true",
+              class: "dvs:shrink-0 dvs:animate-spin dvs:text-dvs-accent"
+            })) : (openBlock(), createBlock($setup["PhBooks"], {
+              key: 3,
               size: 20,
               class: "dvs:shrink-0 dvs:text-dvs-accent"
             })),
-            createBaseVNode("h3", _hoisted_419, toDisplayString($setup.titles[book.phase]), 1)
+            createBaseVNode("h3", _hoisted_419, [
+              book.kind === "script" && book.phase === "saving" ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
+                createTextVNode("正在将脚本写入角色卡…")
+              ], 64)) : (openBlock(), createElementBlock(Fragment, { key: 1 }, [
+                createTextVNode(toDisplayString(book.kind === "script" ? $setup.titles[book.phase].replace("世界书", "角色脚本") : $setup.titles[book.phase]), 1)
+              ], 64))
+            ])
           ]),
           createBaseVNode("div", _hoisted_519, [
             book.phase === "decoding" || book.phase === "saving" ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
-              createBaseVNode("p", null, "《" + toDisplayString(name) + "》", 1),
-              book.phase === "decoding" ? (openBlock(), createElementBlock("p", _hoisted_616, "已解压 " + toDisplayString(book.succeeded) + " / " + toDisplayString(book.total) + " 个条目", 1)) : (openBlock(), createElementBlock("p", _hoisted_715, toDisplayString(book.total) + " 个条目已全部解压，正在保存到酒馆。", 1)),
-              createBaseVNode("div", {
+              createBaseVNode("p", null, "《" + toDisplayString(book.book) + "》", 1),
+              book.phase === "decoding" ? (openBlock(), createElementBlock("p", _hoisted_616, "已解压 " + toDisplayString(book.succeeded) + " / " + toDisplayString(book.total) + " 个" + toDisplayString(book.kind === "script" ? "脚本" : "条目"), 1)) : (openBlock(), createElementBlock("p", _hoisted_715, toDisplayString(book.total) + " 个" + toDisplayString(book.kind === "script" ? "脚本" : "条目") + "已全部解压，正在等待酒馆确认保存。", 1)),
+              book.phase === "decoding" ? (openBlock(), createElementBlock("div", {
+                key: 2,
                 role: "progressbar",
-                "aria-label": name,
+                "aria-label": book.book,
                 "aria-valuemin": "0",
                 "aria-valuenow": book.succeeded,
                 "aria-valuemax": book.total,
@@ -64121,9 +64299,9 @@ function render43(_ctx, _cache, $props, $setup, $data, $options) {
                   class: "dvs:h-full dvs:rounded-full dvs:bg-dvs-accent",
                   style: normalizeStyle({ width: 100 * book.succeeded / book.total + "%" })
                 }, null, 4)
-              ], 8, _hoisted_814)
-            ], 64)) : book.phase === "saved" ? (openBlock(), createElementBlock("p", _hoisted_913, "《" + toDisplayString(name) + "》的 " + toDisplayString(book.total) + " 个条目已解压并保存。", 1)) : book.phase === "decode-failed" ? (openBlock(), createElementBlock(Fragment, { key: 2 }, [
-              createBaseVNode("p", null, "无法解压《" + toDisplayString(name) + "》中的以下条目：", 1),
+              ], 8, _hoisted_814)) : createCommentVNode("v-if", true)
+            ], 64)) : book.phase === "saved" ? (openBlock(), createElementBlock("p", _hoisted_913, "《" + toDisplayString(book.book) + "》的 " + toDisplayString(book.total) + " 个" + toDisplayString(book.kind === "script" ? "脚本" : "条目") + "已解压并保存。", 1)) : book.phase === "decode-failed" ? (openBlock(), createElementBlock(Fragment, { key: 2 }, [
+              createBaseVNode("p", null, "无法解压《" + toDisplayString(book.book) + "》中的以下" + toDisplayString(book.kind === "script" ? "脚本" : "条目") + "：", 1),
               createBaseVNode("ul", _hoisted_1011, [
                 (openBlock(true), createElementBlock(Fragment, null, renderList(book.failures, (item) => {
                   return openBlock(), createElementBlock("li", {
@@ -64131,16 +64309,16 @@ function render43(_ctx, _cache, $props, $setup, $data, $options) {
                   }, toDisplayString(item.name || `未命名条目（编号 ${item.uid}）`), 1);
                 }), 128))
               ]),
-              _cache[2] || (_cache[2] = createBaseVNode("p", null, "请删除这本世界书，然后从角色卡重新导入内嵌世界书。如果仍然失败，请尝试重新导入角色卡，或联系卡作者。", -1))
+              book.kind === "script" ? (openBlock(), createElementBlock("p", _hoisted_1118, "请从原始角色卡重新导入，或联系卡作者。")) : (openBlock(), createElementBlock("p", _hoisted_1217, "请删除这本世界书，然后从角色卡重新导入内嵌世界书。如果仍然失败，请尝试重新导入角色卡，或联系卡作者。"))
             ], 64)) : (openBlock(), createElementBlock(Fragment, { key: 3 }, [
-              createBaseVNode("p", null, "《" + toDisplayString(name) + "》", 1),
-              _cache[3] || (_cache[3] = createBaseVNode("p", null, "世界书解压完成，但保存确认失败。请检查酒馆连接，然后重新打开聊天。", -1))
+              createBaseVNode("p", null, "《" + toDisplayString(book.book) + "》", 1),
+              createBaseVNode("p", null, toDisplayString(book.kind === "script" ? "角色脚本" : "世界书") + "解压完成，但保存确认失败。请检查酒馆连接，然后重新打开聊天。", 1)
             ], 64))
           ])
         ]);
       }), 128))
     ]),
-    createBaseVNode("footer", _hoisted_1118, [
+    createBaseVNode("footer", _hoisted_1314, [
       $setup.props.canClose.value && !$setup.allSaved ? (openBlock(), createBlock($setup["ActionButton"], {
         key: 0,
         label: "关闭",
@@ -64154,29 +64332,108 @@ function render43(_ctx, _cache, $props, $setup, $data, $options) {
         onClick: _cache[1] || (_cache[1] = ($event) => $setup.emit("refresh"))
       }, null, 8, ["disabled"]))
     ])
-  ]);
+  ], 8, _hoisted_169);
 }
 __component42.render = render43;
 var WorldbookCompressionWindow_default = __component42;
 
 // src/dvs2/ui/worldbook-compression-dialog.ts
-function createWorldbookCompressionDialog(owner, reportError) {
+function createWorldbookCompressionDialog(owner, reportError, saveChoices) {
   const books = reactive(new Map);
   const loading = ref(false);
-  const canClose = computed2(() => !loading.value && [...books.values()].every((book) => book.phase !== "decoding" && book.phase !== "saving"));
+  const refreshing = ref(false);
+  let sawPrompt = false;
+  const canClose = computed2(() => !loading.value && !refreshing.value && [...books.values()].every((book) => book.phase !== "decoding" && book.phase !== "saving"));
   const lifetime = new AbortController;
-  let opened = false;
+  let opening;
+  const selector = 'dialog.popup[open], .TH-popup [role="dialog"]';
+  async function waitForPrompts() {
+    for (;; ) {
+      await yieldProgressFrame();
+      if (lifetime.signal.aborted || !owner.document.querySelector(selector))
+        break;
+      sawPrompt = true;
+      await new Promise((resolve) => {
+        const done = () => {
+          observer.disconnect();
+          lifetime.signal.removeEventListener("abort", done);
+          resolve();
+        };
+        const observer = new MutationObserver(() => {
+          if (!owner.document.querySelector(selector))
+            done();
+        });
+        observer.observe(owner.document.body, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["open"]
+        });
+        lifetime.signal.addEventListener("abort", done, { once: true });
+      });
+    }
+  }
+  async function refresh() {
+    if (!canClose.value)
+      return;
+    refreshing.value = true;
+    try {
+      if (sawPrompt || [...books.values()].some((book) => book.kind === "script"))
+        await saveChoices?.();
+      owner.location.reload();
+    } catch (error) {
+      reportError(error);
+    } finally {
+      refreshing.value = false;
+    }
+  }
+  async function present(shown) {
+    try {
+      while (!lifetime.signal.aborted) {
+        const display = new AbortController;
+        const abort = () => display.abort();
+        lifetime.signal.addEventListener("abort", abort, { once: true });
+        let observer;
+        try {
+          await showDvsPopup(owner, WorldbookCompressionWindow_default, (finish) => ({ books, canClose, onClose: finish, onRefresh: refresh }), undefined, display.signal, {
+            wider: false,
+            canClose: () => canClose.value && [...books.values()].some((book) => book.phase !== "saved"),
+            beforeShow: waitForPrompts,
+            onShow: (ownDialog) => {
+              observer = new MutationObserver(() => {
+                if ([...owner.document.querySelectorAll(selector)].some((other) => other !== ownDialog))
+                  abort();
+              });
+              observer.observe(owner.document.body, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ["open"]
+              });
+              shown();
+            }
+          });
+        } finally {
+          observer?.disconnect();
+          lifetime.signal.removeEventListener("abort", abort);
+        }
+        if (!display.signal.aborted)
+          break;
+      }
+    } finally {
+      shown();
+      sawPrompt = false;
+      books.clear();
+      opening = undefined;
+    }
+  }
   return {
     onProgress(progress) {
       if (lifetime.signal.aborted)
         return;
-      books.set(progress.book, progress);
-      if (opened)
-        return;
-      opened = true;
-      showDvsPopup(owner, WorldbookCompressionWindow_default, (finish) => ({ books, canClose, onClose: finish, onRefresh: () => owner.location.reload() }), undefined, lifetime.signal, { wider: false, canClose: () => canClose.value && [...books.values()].some((book) => book.phase !== "saved") }).catch(reportError).finally(() => {
-        books.clear();
-        opened = false;
+      books.set(JSON.stringify([progress.kind ?? "book", progress.book]), progress);
+      return opening ??= new Promise((shown) => {
+        present(shown).catch(reportError);
       });
     },
     onLoading(active) {
@@ -64229,7 +64486,22 @@ var start = async () => {
           closeButton: true
         });
     };
-    const compressionDialog = createWorldbookCompressionDialog(owner, reportWorldbookError);
+    const compressionDialog = createWorldbookCompressionDialog(owner, reportWorldbookError, async () => {
+      const path = "/script.js";
+      const script = await import(path);
+      let saved = false;
+      const confirm = () => {
+        saved = true;
+      };
+      script.eventSource.on(script.event_types.SETTINGS_UPDATED, confirm);
+      try {
+        await script.saveSettings();
+        if (!saved)
+          throw new Error("酒馆尚未确认保存启用选择。请检查连接后再次点击刷新。");
+      } finally {
+        script.eventSource.removeListener(script.event_types.SETTINGS_UPDATED, confirm);
+      }
+    });
     let compression;
     try {
       compression = await attachWorldbookCompression(owner, reportWorldbookError, undefined, compressionDialog);
