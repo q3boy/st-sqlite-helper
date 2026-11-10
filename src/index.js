@@ -2097,7 +2097,7 @@ function fileRetryable(error) {
 
 // src/protocol.ts
 var PROTOCOL_VERSION = 27;
-var BUILD_ID = "6c055b10-3b8f-4dd4-921c-c3fcf4b98681";
+var BUILD_ID = "060f8d2c-1f2c-479c-ae91-b90ea413cc75";
 var extensionEntryPath = new URL(import.meta.url).pathname;
 var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
 var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;
@@ -3678,15 +3678,12 @@ class LocalSettingsControl {
       });
     try {
       await this.repository.writePreferences(preferences);
-      const saved = (await this.repository.read()).preferences;
-      if (saved?.executionMode !== preferences.executionMode || saved.storageMode !== preferences.storageMode)
-        throw new Error("保存后读回的工作模式或存储模式与所选不同。");
     } catch (error) {
       throw new ServiceError({
         code: "SETTINGS_FAILED",
         message: "工作模式和存储模式保存失败，本次尚未生效。请查看详情后重试。",
         causeError: detail(error),
-        resultState: "unconfirmed"
+        resultState: "not-applied"
       });
     }
     this.record.preferences = { ...preferences };
@@ -16257,7 +16254,7 @@ function settingsFailureDetails(error, operation, step) {
 function modelReadFailure(error, operation, next) {
   const details = settingsFailureDetails(error, operation, "读取 DVS 模型配置");
   return {
-    message: `读取 DVS 模型配置${details.includes("超时") ? "超时" : "失败"}，${next}`,
+    message: `读取 DVS 模型配置失败，${next}`,
     details
   };
 }
@@ -16424,7 +16421,6 @@ function createConfigController(settings, facade) {
     config: structuredClone(DEFAULT_DVS_CONFIG),
     secret: { state: "unavailable", message: "尚未读取当前空间密钥状态。" },
     saving: false,
-    confirmed: false,
     storageVersion: 0
   }, alive = true, readVersion = 0;
   const copiedKeys = new WeakMap;
@@ -16470,8 +16466,7 @@ function createConfigController(settings, facade) {
       ...status,
       library: structuredClone(library),
       config: selected?.config ?? structuredClone(DEFAULT_DVS_CONFIG),
-      secret,
-      confirmed: !!selected?.config.apiUrl && !!selected?.config.model
+      secret
     };
   };
   const readSaved = async () => {
@@ -16484,8 +16479,7 @@ function createConfigController(settings, facade) {
         ...status,
         library,
         config: selected?.config ?? structuredClone(DEFAULT_DVS_CONFIG),
-        secret,
-        confirmed: !!selected?.config.apiUrl && !!selected?.config.model
+        secret
       };
       notify();
     }
@@ -16507,8 +16501,8 @@ function createConfigController(settings, facade) {
     const unconfirmed = (error) => ({
       parameters: "unconfirmed",
       secret,
-      message: `${secret === "committed" ? "当前空间密钥已更新。" : ""}暂时无法确认 ${object}是否${operation === "删除" ? "删除" : "保存"}。${operation === "保存" ? "请保留草稿，点击“重新读取已保存配置”核对。" : "请先保留正在编辑的内容，再稍后刷新页面核对。"}`,
-      details: settingsFailureDetails(error, operationName, "保存设置及读回确认")
+      message: `${secret === "committed" ? "当前空间密钥已更新。" : ""}暂时无法确认 ${object}是否${operation === "删除" ? "删除" : "保存"}。请先保留正在编辑的内容，再刷新酒馆核对。`,
+      details: settingsFailureDetails(error, operationName, "调用酒馆保存")
     });
     try {
       let saved;
@@ -16555,9 +16549,9 @@ function createConfigController(settings, facade) {
       }
       await applyLibrary(library);
       return {
-        parameters: "confirmed",
+        parameters: "applied",
         secret,
-        message: secret === "committed" ? "模型配置已保存，当前空间密钥已更新。" : "模型配置及选择已保存。"
+        message: secret === "committed" ? "模型配置已应用，当前空间密钥已更新。" : "模型配置及选择已应用。"
       };
     } finally {
       readVersion++;
@@ -16764,339 +16758,153 @@ function resolveDvsScheme(mode, detected, system) {
 }
 
 // src/tavern/enable-settings.ts
-var ENABLE_SETTINGS_POLL_MS = 1e4;
-var record2 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
-var failed3 = (message, cause) => new ServiceError({ code: "SETTINGS_FAILED", message, ...cause === undefined ? {} : { causeError: detail(cause) } });
-var hostFields = ["enabled", "businessDebugEnabled"];
 var fieldNames = {
   enabled: "SQLite 服务启用设置",
-  businessDebugEnabled: "业务调试记录"
+  businessDebugEnabled: "业务调试记录",
+  dvsModelConfigs: "DVS 模型配置",
+  dvsThemeMode: "DVS 配色设置",
+  dvsFloorDataEnabled: "楼层数据显示设置"
 };
-var parsingFailure = (message) => failed3("读取酒馆设置失败。", new SyntaxError(message));
-var settingCause = (error) => error instanceof ServiceError ? error.data.causeError ?? detail(error) : detail(error);
-var operationFailure = (object, step, error, unconfirmed = false) => {
-  const cause = settingCause(error);
-  return new ServiceError({
-    code: "SETTINGS_FAILED",
-    message: unconfirmed ? `暂时无法确认${object}是否保存，请稍后刷新页面核对。` : `${step}${object}${cause.message.includes("超时") ? "超时" : "失败"}。${step === "保存" ? "本次尚未保存。" : ""}`,
-    causeError: { ...cause, message: `${step}${object}：${cause.message}` },
-    resultState: unconfirmed ? "unconfirmed" : "not-applied"
-  });
+var record2 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+var failed3 = (message, cause) => new ServiceError({ code: "SETTINGS_FAILED", message, ...cause === undefined ? {} : { causeError: detail(cause) } });
+var saveNativeSettings = async () => {
+  const path = "/script.js";
+  const script = await import(path);
+  await script.saveSettings();
 };
 
 class TavernEnableSettings {
   owner;
-  request;
-  now;
-  wait;
-  saveTimeoutMs;
-  requestTimeoutMs;
-  confirmationIntervalMs;
-  saving = false;
-  saveVersion = 0;
+  saveNative;
   pending = Promise.resolve();
-  listeners = new Set;
-  subscribe(listener) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-  observe(settings) {
-    for (const listener of this.listeners) {
-      try {
-        listener(settings);
-      } catch {}
-    }
-  }
-  constructor(owner, options = {}) {
+  debugListeners = new Set;
+  constructor(owner, saveNative = saveNativeSettings) {
     this.owner = owner;
-    this.request = options.request ?? fetch.bind(globalThis);
-    this.now = options.now ?? Date.now;
-    this.wait = options.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-    this.saveTimeoutMs = options.saveTimeoutMs ?? 15000;
-    this.requestTimeoutMs = options.requestTimeoutMs ?? 5000;
-    this.confirmationIntervalMs = options.confirmationIntervalMs ?? 1000;
+    this.saveNative = saveNative;
   }
-  context() {
-    const context = this.owner.SillyTavern?.getContext();
-    if (!context || !record2(context.extensionSettings))
+  subscribeBusinessDebug(listener) {
+    this.debugListeners.add(listener);
+    return () => this.debugListeners.delete(listener);
+  }
+  notifyBusinessDebug(enabled) {
+    for (const listener of this.debugListeners)
+      listener(enabled);
+  }
+  settings() {
+    const settings = this.owner.SillyTavern?.getContext().extensionSettings;
+    if (!record2(settings))
       throw failed3("无法取得酒馆扩展设置接口。");
-    return context;
+    return settings;
   }
-  sync(fields) {
-    const settings = this.context().extensionSettings;
+  fields(settings = this.settings()) {
     const own = settings.sqlite_helper;
-    if (own !== undefined && !record2(own))
-      throw failed3("SQLite Helper 的扩展设置不是有效对象。");
-    settings.sqlite_helper = { ...own, ...fields };
-  }
-  ownFields(value) {
-    if (value === undefined)
+    if (own === undefined)
       return {};
-    if (!record2(value))
+    if (!record2(own))
       throw failed3("SQLite Helper 的扩展设置不是有效对象。");
-    return value;
+    return own;
   }
-  readHostFields(own) {
-    const fields = {};
-    for (const key of hostFields) {
-      const value = own[key];
-      if (value === undefined)
-        continue;
-      const valid = typeof value === "boolean";
-      if (!valid)
-        throw failed3(`「${fieldNames[key]}」设置格式有误。请在扩展设置中重新设置该项，保存确认后刷新页面。`, new Error(`${fieldNames[key]}（${key}）设置无效。`));
-      Object.assign(fields, { [key]: value });
-    }
-    return fields;
+  flag(fields, key, fallback) {
+    const value = fields[key];
+    if (value === undefined)
+      return fallback;
+    if (typeof value !== "boolean")
+      throw failed3(`「${fieldNames[key]}」设置格式有误。请在扩展设置中重新设置该项，然后刷新页面。`, new Error(`${fieldNames[key]}（${key}）设置无效。`));
+    return value;
   }
   readLoaded() {
     try {
-      const settings = this.defaults(this.readHostFields(this.ownFields(this.context().extensionSettings.sqlite_helper)));
-      this.observe(settings);
-      return settings.enabled;
+      const fields = this.fields();
+      const enabled = this.flag(fields, "enabled", true);
+      this.notifyBusinessDebug(this.flag(fields, "businessDebugEnabled", DEFAULT_BUSINESS_DEBUG));
+      return enabled;
     } catch (error) {
+      const cause = error instanceof ServiceError ? error.data.causeError ?? detail(error) : detail(error);
       throw new ServiceError({
         code: "SETTINGS_FAILED",
         message: error instanceof ServiceError && error.data.message.includes("重新设置该项") ? `SQLite 服务未启动：${error.data.message}` : "SQLite 服务未启动：无法读取有效的插件启动设置。请展开详情，并将原因提供给插件维护者排查。",
-        causeError: { ...settingCause(error), message: `读取插件启动设置：${settingCause(error).message}` }
+        causeError: { ...cause, message: `读取插件启动设置：${cause.message}` }
       });
     }
   }
-  async readFields(timeoutMs = this.requestTimeoutMs) {
-    const context = this.context();
-    if (typeof context.getRequestHeaders !== "function")
-      throw failed3("酒馆未提供设置读取请求头接口。");
-    const controller = new AbortController;
-    let timer;
+  async readLegacyDvs() {
     try {
-      const reading = (async () => {
-        const response = await this.request("/api/settings/get", {
-          method: "POST",
-          headers: context.getRequestHeaders(),
-          body: "{}",
-          cache: "no-store",
-          signal: controller.signal
-        });
-        if (!response.ok)
-          throw failed3(`读取酒馆设置失败：HTTP ${response.status}。`);
-        let payload;
-        try {
-          payload = await response.json();
-        } catch {
-          throw parsingFailure("酒馆设置响应不是有效 JSON。");
-        }
-        if (!record2(payload) || typeof payload.settings !== "string")
-          throw failed3("酒馆设置响应缺少 settings JSON 文本。");
-        let settings;
-        try {
-          settings = JSON.parse(payload.settings);
-        } catch {
-          throw parsingFailure("酒馆 settings 文本不是有效 JSON。");
-        }
-        if (!record2(settings) || !record2(settings.extension_settings))
-          throw failed3("酒馆已保存的 extension_settings 不是有效对象。");
-        return this.ownFields(settings.extension_settings.sqlite_helper);
-      })();
-      return await Promise.race([
-        reading,
-        new Promise((_, reject) => {
-          timer = setTimeout(() => {
-            controller.abort();
-            reject(failed3(`读取酒馆设置超时（本次等待上限 ${timeoutMs} 毫秒）。`));
-          }, timeoutMs);
-        })
-      ]);
+      const value = this.fields().dvs;
+      return value === undefined ? undefined : readConfig(value);
     } catch (error) {
-      if (error instanceof ServiceError)
-        throw error;
-      throw failed3("读取酒馆设置失败。", error);
-    } finally {
-      if (timer !== undefined)
-        clearTimeout(timer);
+      throw failed3("读取 DVS 旧版模型配置失败。", error);
     }
   }
-  async readSaved() {
+  async readModelConfigs() {
     try {
-      return await this.readSavedHost();
+      const value = this.fields().dvsModelConfigs;
+      return value === undefined ? undefined : readModelConfigLibrary(value);
     } catch (error) {
-      throw operationFailure("SQLite Helper 设置", "同步", error);
+      throw failed3("读取 DVS 模型配置失败。", error);
     }
   }
-  async readSavedHost() {
-    const version = this.saveVersion;
-    const fields = this.readHostFields(await this.readFields());
-    const settings = this.defaults(fields);
-    if (!this.saving && version === this.saveVersion) {
-      this.sync({ enabled: settings.enabled, ...fields });
-      if (fields.businessDebugEnabled === undefined)
-        delete this.context().extensionSettings.sqlite_helper.businessDebugEnabled;
-      this.observe(settings);
-    }
-    return settings.enabled;
+  readDvsThemeMode() {
+    const value = this.fields().dvsThemeMode;
+    return isDvsThemeMode(value) ? value : DEFAULT_DVS_THEME_MODE;
+  }
+  readDvsFloorData() {
+    const value = this.fields().dvsFloorDataEnabled;
+    return typeof value === "boolean" ? value : DEFAULT_DVS_FLOOR_DATA;
   }
   async save(enabled) {
     if (typeof enabled !== "boolean")
       throw failed3("SQLite 服务启用设置无效，本次尚未保存。");
-    return this.enqueue({ enabled }, "SQLite 服务启用设置");
+    await this.write("enabled", enabled);
   }
-  async saveBusinessDebug(businessDebugEnabled) {
-    if (typeof businessDebugEnabled !== "boolean")
+  async saveBusinessDebug(enabled) {
+    if (typeof enabled !== "boolean")
       throw failed3("业务调试记录设置无效，本次尚未保存。");
-    return this.enqueue({ businessDebugEnabled }, "业务调试记录设置");
-  }
-  async readSetting(object, work) {
-    try {
-      return await work();
-    } catch (error) {
-      throw operationFailure(object, "读取", error);
-    }
-  }
-  async readLegacyDvs() {
-    return this.readSetting("DVS 旧版模型配置", async () => {
-      const fields = await this.readFields();
-      return fields.dvs === undefined ? undefined : readConfig(fields.dvs);
-    });
-  }
-  async readModelConfigs() {
-    return this.readSetting("DVS 模型配置", () => this.readModelConfigsFields());
-  }
-  async readModelConfigsFields() {
-    const version = this.saveVersion;
-    const fields = await this.readFields();
-    const library = fields.dvsModelConfigs === undefined ? undefined : readModelConfigLibrary(fields.dvsModelConfigs);
-    if (!this.saving && version === this.saveVersion) {
-      if (library === undefined)
-        delete this.context().extensionSettings.sqlite_helper?.dvsModelConfigs;
-      else
-        this.sync({ dvsModelConfigs: library });
-    }
-    return library;
+    await this.write("businessDebugEnabled", enabled);
+    this.notifyBusinessDebug(enabled);
   }
   async saveModelConfigs(library) {
     let valid;
     try {
       valid = readModelConfigLibrary(library);
     } catch (error) {
-      throw operationFailure("DVS 模型配置", "保存", error);
+      throw failed3("DVS 模型配置无效，本次尚未保存。", error);
     }
-    return this.enqueue({ dvsModelConfigs: valid }, "DVS 模型配置");
-  }
-  peekDvsThemeMode() {
-    try {
-      const own = this.context().extensionSettings.sqlite_helper;
-      return record2(own) && isDvsThemeMode(own.dvsThemeMode) ? own.dvsThemeMode : undefined;
-    } catch {
-      return;
-    }
-  }
-  async readDvsThemeMode() {
-    return this.readSetting("DVS 配色设置", () => this.readDvsThemeModeField());
-  }
-  async readDvsThemeModeField() {
-    const version = this.saveVersion;
-    const fields = await this.readFields();
-    const mode = isDvsThemeMode(fields.dvsThemeMode) ? fields.dvsThemeMode : undefined;
-    if (!this.saving && version === this.saveVersion) {
-      if (mode === undefined)
-        delete this.context().extensionSettings.sqlite_helper?.dvsThemeMode;
-      else
-        this.sync({ dvsThemeMode: mode });
-    }
-    return mode ?? DEFAULT_DVS_THEME_MODE;
+    await this.write("dvsModelConfigs", valid);
   }
   async saveDvsThemeMode(mode) {
     if (!isDvsThemeMode(mode))
       throw failed3("DVS 配色设置无效，本次尚未保存。");
-    return this.enqueue({ dvsThemeMode: mode }, "DVS 配色设置");
-  }
-  peekDvsFloorData() {
-    try {
-      const own = this.context().extensionSettings.sqlite_helper;
-      return record2(own) && typeof own.dvsFloorDataEnabled === "boolean" ? own.dvsFloorDataEnabled : undefined;
-    } catch {
-      return;
-    }
-  }
-  async readDvsFloorData() {
-    return this.readSetting("楼层数据显示设置", () => this.readDvsFloorDataField());
-  }
-  async readDvsFloorDataField() {
-    const version = this.saveVersion;
-    const fields = await this.readFields();
-    const enabled = typeof fields.dvsFloorDataEnabled === "boolean" ? fields.dvsFloorDataEnabled : undefined;
-    if (!this.saving && version === this.saveVersion) {
-      if (enabled === undefined)
-        delete this.context().extensionSettings.sqlite_helper?.dvsFloorDataEnabled;
-      else
-        this.sync({ dvsFloorDataEnabled: enabled });
-    }
-    return enabled ?? DEFAULT_DVS_FLOOR_DATA;
+    await this.write("dvsThemeMode", mode);
   }
   async saveDvsFloorData(enabled) {
     if (typeof enabled !== "boolean")
       throw failed3("楼层数据显示设置无效，本次尚未保存。");
-    return this.enqueue({ dvsFloorDataEnabled: enabled }, "楼层数据显示设置");
+    await this.write("dvsFloorDataEnabled", enabled);
   }
-  defaults(fields) {
-    return {
-      enabled: fields.enabled ?? true,
-      businessDebugEnabled: fields.businessDebugEnabled ?? DEFAULT_BUSINESS_DEBUG
-    };
-  }
-  enqueue(fields, object) {
-    const work = this.pending.then(() => this.saveFields(fields, object));
+  write(key, value) {
+    const work = this.pending.then(async () => {
+      const settings = this.settings();
+      const own = this.fields(settings);
+      const previous = own[key];
+      settings.sqlite_helper = own;
+      own[key] = value;
+      try {
+        await this.saveNative();
+      } catch (error) {
+        if (previous === undefined)
+          delete own[key];
+        else
+          own[key] = previous;
+        throw new ServiceError({
+          code: "SETTINGS_FAILED",
+          message: `调用酒馆保存${fieldNames[key]}失败。请稍后刷新页面核对。`,
+          causeError: detail(error),
+          resultState: "unconfirmed"
+        });
+      }
+    });
     this.pending = work.catch(() => {});
     return work;
-  }
-  async saveFields(fields, object) {
-    let attempted = false;
-    let step = "准备保存";
-    this.saving = true;
-    this.saveVersion++;
-    try {
-      const context = this.context();
-      if (typeof context.saveSettingsDebounced !== "function")
-        throw failed3("酒馆未提供扩展设置保存入口。");
-      this.sync(fields);
-      const own = this.context().extensionSettings.sqlite_helper;
-      const expected = {
-        ...typeof own.enabled === "boolean" ? { enabled: own.enabled } : {},
-        ...typeof own.businessDebugEnabled === "boolean" ? { businessDebugEnabled: own.businessDebugEnabled } : {},
-        ...own.dvs !== undefined ? { dvs: own.dvs } : {},
-        ...own.dvsModelConfigs !== undefined ? { dvsModelConfigs: own.dvsModelConfigs } : {},
-        ...own.dvsThemeMode !== undefined ? { dvsThemeMode: own.dvsThemeMode } : {},
-        ...own.dvsFloorDataEnabled !== undefined ? { dvsFloorDataEnabled: own.dvsFloorDataEnabled } : {}
-      };
-      step = "调用原生保存";
-      attempted = true;
-      const scheduled = context.saveSettingsDebounced();
-      if (scheduled instanceof Promise)
-        scheduled.catch(() => {});
-      const deadline = this.now() + this.saveTimeoutMs;
-      step = "保存后读回";
-      while (this.now() < deadline) {
-        await this.wait(Math.min(this.confirmationIntervalMs, deadline - this.now()));
-        const remaining = deadline - this.now();
-        if (remaining <= 0)
-          break;
-        const saved = await this.readFields(Math.min(this.requestTimeoutMs, remaining));
-        if (fields.dvsModelConfigs !== undefined)
-          readModelConfigLibrary(saved.dvsModelConfigs);
-        if (Object.entries(expected).every(([key, value]) => key === "dvs" || key === "dvsModelConfigs" ? stableConfigJson(saved[key]) === stableConfigJson(value) : saved[key] === value)) {
-          if (hostFields.some((key) => (key in fields)))
-            this.observe(this.defaults(this.readHostFields(saved)));
-          return;
-        }
-      }
-      throw failed3(`保存后未在总期限 ${this.saveTimeoutMs} 毫秒内读回相同值。`);
-    } catch (error) {
-      const failure = operationFailure(object, "保存", error, attempted);
-      failure.data.causeError.message = `${step}${object}：${settingCause(error).message}`;
-      throw failure;
-    } finally {
-      this.saveVersion++;
-      this.saving = false;
-    }
   }
 }
 
@@ -17218,9 +17026,9 @@ class BusinessDebugControl {
   constructor(settings, apply) {
     this.settings = settings;
     apply(this.status.enabled);
-    settings.subscribe((value) => {
-      this.status = { enabled: value.businessDebugEnabled, savedEnabled: value.businessDebugEnabled };
-      apply(value.businessDebugEnabled);
+    settings.subscribeBusinessDebug((enabled) => {
+      this.status = { enabled };
+      apply(enabled);
       this.notify();
     });
   }
@@ -17262,7 +17070,6 @@ class ExtensionEnablement {
   ready;
   status = { pageActive: false, state: "loading" };
   listeners = new Set;
-  polling = false;
   changing = false;
   unconfigured = false;
   constructor(settings, start, disable, stop2, configured = () => true) {
@@ -17277,7 +17084,7 @@ class ExtensionEnablement {
         this.unconfigured = !configured();
         const active = enabled && !this.unconfigured;
         this.status = {
-          savedEnabled: enabled,
+          enabled,
           pageActive: active,
           state: active ? "active" : enabled ? "unconfigured" : "disabled"
         };
@@ -17328,7 +17135,7 @@ class ExtensionEnablement {
     if (!this.status.pageActive)
       throw new ServiceError({
         code: "SERVICE_DISABLED",
-        message: this.status.savedEnabled ? "设置已开启，请刷新本页面后使用 SQLite 服务。" : "SQLite 服务已停用。",
+        message: this.status.enabled ? "设置已开启，请刷新本页面后使用 SQLite 服务。" : "SQLite 服务已停用。",
         resultState: "not-applied",
         retryable: false
       });
@@ -17337,41 +17144,12 @@ class ExtensionEnablement {
     this.disable();
     this.status = {
       ...this.status,
-      savedEnabled: false,
+      enabled: false,
       pageActive: false,
       state: phase === "exit" ? "stopped" : phase === "cancel" ? "stop-blocked" : "stopping",
       ...error ? { error } : {}
     };
     this.notify();
-  }
-  async poll() {
-    if (this.polling || this.changing)
-      return;
-    this.polling = true;
-    try {
-      await this.ready.catch(() => {});
-      const enabled = await this.settings.readSaved();
-      if (this.changing)
-        return;
-      if (!enabled && this.status.pageActive) {
-        this.disable();
-        this.status = { savedEnabled: false, pageActive: false, state: "disabled" };
-      } else {
-        this.status.savedEnabled = enabled;
-        if (this.status.startupError)
-          this.status.state = "settings-error";
-        else if (enabled && !this.status.pageActive)
-          this.status.state = this.unconfigured ? "unconfigured" : "refresh-required";
-        else if (!enabled && ["refresh-required", "settings-error", "unconfigured"].includes(this.status.state))
-          this.status.state = "disabled";
-      }
-      delete this.status.syncError;
-    } catch (error) {
-      this.status.syncError = errorData(error);
-    } finally {
-      this.polling = false;
-      this.notify();
-    }
   }
   async setEnabled(enabled) {
     if (this.changing)
@@ -17383,7 +17161,7 @@ class ExtensionEnablement {
     try {
       await this.ready.catch(() => {});
       await this.settings.save(enabled);
-      this.status.savedEnabled = enabled;
+      this.status.enabled = enabled;
       delete this.status.error;
       if (enabled) {
         if (!this.status.pageActive && !this.status.startupError)
@@ -17395,7 +17173,7 @@ class ExtensionEnablement {
       this.disable();
       this.status.pageActive = false;
       if (!wasActive) {
-        if (!this.status.startupError && ["refresh-required", "settings-error", "unconfigured"].includes(this.status.state))
+        if (!this.status.startupError && ["refresh-required", "unconfigured"].includes(this.status.state))
           this.status.state = "disabled";
         this.notify();
         return;
@@ -17473,7 +17251,6 @@ function startExtension(owner = window) {
       await localSettings.ready;
       return settings.readLoaded();
     },
-    readSaved: () => settings.readSaved(),
     save: (enabled) => settings.save(enabled)
   }, () => {
     const selected = localSettings.execution();
@@ -17500,10 +17277,6 @@ function startExtension(owner = window) {
       extensionHost.enablement.observeStop(event.phase, event.error);
     return previousRestart?.(event);
   };
-  const timer = owner.setInterval(() => {
-    extensionHost.enablement.poll();
-  }, ENABLE_SETTINGS_POLL_MS);
-  owner.addEventListener("pagehide", () => owner.clearInterval(timer), { once: true });
   return extensionHost;
 }
 function coordinateVersion(host) {
@@ -34760,9 +34533,7 @@ var serviceTexts = {
   startupSettings: "SQLite 服务未启动：插件启动设置无效。请查看下方详情中的设置名称和处理方法。",
   startupFailed: "SQLite 服务启动失败。请查看下方详情，处理后刷新页面。",
   unsaved: "有修改还没写入存储，现在关闭服务或刷新页面可能丢失",
-  syncActive: "暂时无法同步 SQLite Helper 设置，当前服务仍在运行。",
-  syncInactive: "暂时无法同步 SQLite Helper 设置，当前页面服务未启动。",
-  details: "查看启动与设置同步详情"
+  details: "查看启动失败详情"
 };
 var modeTexts = {
   autoSetup: "自动设置",
@@ -35308,28 +35079,18 @@ var __component7 = /* @__PURE__ */ defineComponent({
       { value: "off", label: "关闭" }
     ];
     const requestedEnabled = ref();
-    const enabledValue = computed2(() => view.value.enableBusy && requestedEnabled.value !== undefined ? requestedEnabled.value : view.value.enablement.savedEnabled === true);
+    const enabledValue = computed2(() => view.value.enableBusy && requestedEnabled.value !== undefined ? requestedEnabled.value : view.value.enablement.enabled === true);
     function setEnabled(value) {
       requestedEnabled.value = value === "on";
       actions.setEnabled(value === "on");
     }
     const status = computed2(() => serviceStatus(view.value));
     const startupDetails = computed2(() => {
-      const state = view.value.enablement;
-      return [
-        state.startupError ? `本页启动失败
-${settingsErrorDetails(state.startupError)}` : "",
-        state.syncError ? `后台设置同步失败
-${settingsErrorDetails(state.syncError)}` : ""
-      ].filter(Boolean).join(`
-
-`);
+      const error = view.value.enablement.startupError;
+      return error ? `本页启动失败
+${settingsErrorDetails(error)}` : "";
     });
     const storageErrorDetails = computed2(() => view.value.enablement.pageActive && view.value.storage?.error ? JSON.stringify(view.value.storage.error, null, 2) : "");
-    const syncStatus = computed2(() => {
-      const state = view.value.enablement;
-      return state.syncError && !state.startupError ? state.pageActive ? serviceTexts.syncActive : serviceTexts.syncInactive : "";
-    });
     const unsaved = computed2(() => view.value.enablement.pageActive && view.value.storage?.unsavedChanges === true);
     const draft = reactive({ touched: false });
     const execution = computed2(() => draft.touched ? draft.execution : saved.value?.executionMode);
@@ -35422,12 +35183,12 @@ ${settingsErrorDetails(state.syncError)}` : ""
     }
     const reloadTarget = ref("global");
     const requestedDebug = ref();
-    const debugValue = computed2(() => view.value.debugBusy && requestedDebug.value !== undefined ? requestedDebug.value : view.value.debug.savedEnabled ?? view.value.debug.enabled);
+    const debugValue = computed2(() => view.value.debugBusy && requestedDebug.value !== undefined ? requestedDebug.value : view.value.debug.enabled);
     function setDebug(value) {
       requestedDebug.value = value === "on";
       actions.setBusinessDebug(value === "on");
     }
-    const __returned__ = { props, look, actions, view, local, capabilities, saved, sectionTitle, row, line, onOff, requestedEnabled, enabledValue, setEnabled, status, startupDetails, storageErrorDetails, syncStatus, unsaved, draft, execution, storage, saving, saveError, choose, executionReason, storageReason, storageAvailable, executionOptions, storageOptions, unavailableNotes, changed, combinationOk, canSave, modeHint, actualDirectory, save, dialog, useRecommended, reloadTarget, requestedDebug, debugValue, setDebug, get PhCaretDown() {
+    const __returned__ = { props, look, actions, view, local, capabilities, saved, sectionTitle, row, line, onOff, requestedEnabled, enabledValue, setEnabled, status, startupDetails, storageErrorDetails, unsaved, draft, execution, storage, saving, saveError, choose, executionReason, storageReason, storageAvailable, executionOptions, storageOptions, unavailableNotes, changed, combinationOk, canSave, modeHint, actualDirectory, save, dialog, useRecommended, reloadTarget, requestedDebug, debugValue, setDebug, get PhCaretDown() {
       return G6;
     }, ConfigButton: ConfigButton_default, ConfigNotice: ConfigNotice_default, ConfigSegmented: ConfigSegmented_default, AutoSetupDialog: AutoSetupDialog_default, CapabilityGrid: CapabilityGrid_default, ModalDialog: ModalDialog_default, get settingsErrorDetails() {
       return settingsErrorDetails;
@@ -35454,7 +35215,7 @@ ${settingsErrorDetails(state.syncError)}` : ""
 });
 var _hoisted_17 = { "aria-label": "SQLite 服务" };
 var _hoisted_26 = {
-  key: 1,
+  key: 0,
   class: "dvs:text-[0.9em]",
   "data-enable-details": ""
 };
@@ -35463,7 +35224,7 @@ var _hoisted_34 = {
   "data-enable-error-detail": ""
 };
 var _hoisted_43 = {
-  key: 2,
+  key: 1,
   class: "dvs:text-[0.9em]",
   "data-storage-error-details": ""
 };
@@ -35574,11 +35335,6 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
             "data-enable-status": "",
             role: "status"
           }, toDisplayString($setup.status), 3),
-          $setup.syncStatus ? (openBlock(), createElementBlock("p", {
-            key: 0,
-            class: normalizeClass(["dvs:text-[0.92em]", $setup.look.delta]),
-            "data-settings-sync-status": ""
-          }, toDisplayString($setup.syncStatus), 3)) : createCommentVNode("v-if", true),
           $setup.startupDetails ? (openBlock(), createElementBlock("details", _hoisted_26, [
             createBaseVNode("summary", {
               class: normalizeClass(["dvs:cursor-pointer", $setup.look.muted])
@@ -35591,7 +35347,7 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
             createBaseVNode("pre", _hoisted_53, toDisplayString($setup.storageErrorDetails), 1)
           ])) : createCommentVNode("v-if", true),
           $setup.unsaved ? (openBlock(), createBlock($setup["ConfigNotice"], {
-            key: 3,
+            key: 2,
             kind: "error",
             text: $setup.serviceTexts.unsaved,
             "data-unsaved-notice": ""
@@ -59078,14 +58834,13 @@ function sameWorldbook(left, right) {
   return a.length === b.length && a.every((key) => Object.hasOwn(right, key) && sameWorldbook(left[key], right[key]));
 }
 async function checkLorebookVersion(port, options, now = () => new Date) {
-  let target, backup = "", newName = "", preserved = false, removed = false, imported = false;
+  let savingBackup = false;
+  let savedBackup = "";
   try {
     if (!options || !["WARNING_MESSAGE", "AUTO_UPDATE"].includes(options.onExpired))
       throw new Error("请显式指定 onExpired 为 WARNING_MESSAGE 或 AUTO_UPDATE。");
-    target = port.capture();
-    const fixed = target;
-    let expectedPrimary = fixed.primary;
-    const assert = () => port.assertCurrent(fixed, expectedPrimary);
+    const fixed = port.capture();
+    const assert = () => port.assertCurrent(fixed);
     assert();
     const cardVersion = version2(fixed.version, "角色卡版本");
     const original = (await restoreWorldbook(await port.load(fixed.primary), fixed.primary)).book;
@@ -59097,46 +58852,36 @@ async function checkLorebookVersion(port, options, now = () => new Date) {
       port.notify("warning", `主世界书“${fixed.primary}”的版本 ${oldVersion.raw} 低于角色卡版本 ${cardVersion.raw}。请先保留当前世界书及本地修改，再从角色卡重新导入世界书并设为本卡主世界书。`);
       return;
     }
-    if (!await port.confirmUpdate(`主世界书“${fixed.primary}”的版本 ${oldVersion.raw} 低于角色卡版本 ${cardVersion.raw}。确认后会先另名保留旧书及全部本地修改，再从当前角色卡内嵌世界书导入新版并重新关联。是否备份并更新？`))
+    if (!await port.confirmUpdate(`主世界书“${fixed.primary}”的版本 ${oldVersion.raw} 低于角色卡版本 ${cardVersion.raw}。确认后会先备份原书及全部本地修改，再用卡内世界书覆盖“${fixed.primary}”。是否备份并更新？`))
       return;
     assert();
     const source = (await restoreWorldbook(await port.embedded(fixed), fixed.primary)).book;
     assert();
+    savingBackup = true;
     const raw = await port.read(fixed.primary);
     assert();
-    backup = await port.availableName(`${fixed.primary}（更新前 ${oldVersion.raw}，${localTime(now())}）`);
+    const backup = await port.availableName(`${fixed.primary}（更新前 ${oldVersion.raw}，${localTime(now())}）`);
     assert();
-    await port.save(backup, raw);
+    await port.saveBackup(backup, raw);
+    savedBackup = backup;
+    savingBackup = false;
     assert();
-    if (!sameWorldbook(raw, await port.read(backup)))
-      throw new Error("另名旧书的后端内容与原书不一致，未删除原书。");
-    preserved = true;
+    await port.overwrite(fixed.primary, source);
     assert();
-    await port.remove(fixed.primary);
-    removed = true;
+    const updated = await port.read(fixed.primary);
     assert();
-    newName = await port.availableName(fixed.primary);
-    assert();
-    await port.save(newName, source);
-    assert();
-    if (!sameWorldbook(source, await port.read(newName)))
+    if (!sameWorldbook(source, updated))
       throw new Error("新版世界书的后端内容与卡内来源不一致。");
-    imported = true;
+    await port.confirmAssociation(fixed);
     assert();
-    await port.associate(fixed, newName);
-    expectedPrimary = newName;
-    assert();
-    await port.confirmAssociation(fixed, newName);
-    assert();
-    const currentVersion = worldbookVersion(await port.read(newName), newName);
-    assert();
+    const currentVersion = worldbookVersion(updated, fixed.primary);
     if (import_semver3.lt(currentVersion, cardVersion))
       throw new Error(`导入后主世界书版本仍为 ${currentVersion.raw}，低于角色卡 ${cardVersion.raw}。请作者修正卡内世界书后重新导入。`);
-    await port.complete(`主世界书已更新为“${newName}”（${currentVersion.raw}）。原书及全部本地修改保留在“${backup}”，可自行查看并取回修改。`, assert);
+    await port.complete(`主世界书“${fixed.primary}”已更新至 ${currentVersion.raw}。原书及全部本地修改保留在“${backup}”，可自行查看并取回修改。`, assert);
   } catch (cause) {
     const reason = cause instanceof Error ? cause.message : String(cause);
-    const progress = backup ? ` 旧书“${backup}”：${preserved ? "已从后端确认完整保留" : "尚未确认保存完整"}；原名“${target.primary}”：${removed ? "已删除" : "未确认删除"}。${newName ? ` 新书“${newName}”：${imported ? "已从后端确认导入" : "尚未确认导入完整"}。` : ""} 请在世界书列表核对这些名称，并在角色卡中检查主世界书关联；可将保留的旧书重新关联。` : "";
-    const error = new Error(`主世界书版本检查未完成：${reason}${progress}`, { cause });
+    const message = savingBackup ? "原世界书备份失败，请手动备份后重新导入卡内世界书" : `主世界书版本检查未完成：${reason}${savedBackup ? ` 原世界书已备份为“${savedBackup}”。请刷新页面后检查主世界书。` : ""}`;
+    const error = new Error(message, { cause });
     port.notify("error", error.message);
     throw error;
   }
@@ -59176,17 +58921,16 @@ function notifyLorebookVersion(owner, kind, message) {
 async function createLorebookVersionPort(owner, assertAlive, prepareWorldbook) {
   const initial = captureTarget(owner, assertAlive);
   const nativeImport = (path) => import(path);
-  const [world, script, utils, popup] = await Promise.all([
+  const [world, utils, popup] = await Promise.all([
     nativeImport("/scripts/world-info.js"),
-    nativeImport("/script.js"),
     nativeImport("/scripts/utils.js"),
     nativeImport("/scripts/popup.js")
   ]);
   for (const method of ["loadWorldInfo", "saveWorldInfo", "updateWorldInfoList", "convertCharacterBook"])
     if (typeof world[method] !== "function")
       throw new Error(`当前酒馆缺少主世界书操作接口 ${method}，请更新后刷新页面。`);
-  if (!world.worldInfoCache?.delete || typeof utils.getSanitizedFilename !== "function" || typeof script.getOneCharacter !== "function" || typeof script.select_selected_character !== "function")
-    throw new Error("当前酒馆缺少主世界书缓存或角色关联刷新接口，请更新后刷新页面。");
+  if (typeof utils.getSanitizedFilename !== "function")
+    throw new Error("当前酒馆缺少世界书文件名处理接口，请更新后刷新页面。");
   if (!popup.Popup?.show?.confirm || !popup.Popup?.show?.text || popup.POPUP_RESULT?.AFFIRMATIVE === undefined)
     throw new Error("当前酒馆缺少更新确认弹窗接口，请更新后刷新页面。");
   const popupText = (text) => {
@@ -59214,26 +58958,26 @@ async function createLorebookVersionPort(owner, assertAlive, prepareWorldbook) {
       throw new Error("无法读取角色卡关联的主世界书和附加世界书列表。");
     return names;
   };
-  const assertCurrent = (target, primary) => {
-    if (character().avatar !== target.avatar || books(target.avatar).primary !== primary)
+  const assertCurrent = (target) => {
+    if (character().avatar !== target.avatar || books(target.avatar).primary !== target.primary)
       throw new Error("当前角色或主世界书关联已改变，本次检查已停止。请回到原角色卡后重新检查。");
     if (JSON.stringify(books(target.avatar).additional) !== JSON.stringify(target.additional))
       throw new Error("角色卡的附加世界书列表已改变，本次更新已停止，请重新检查。");
   };
-  const post = async (path, body) => {
+  const post = async (path, body, signal) => {
     assertAlive();
     const response = await (owner.fetch ?? fetch).call(owner, path, {
       method: "POST",
       headers: context().getRequestHeaders(),
       body: JSON.stringify(body),
-      cache: "no-store"
+      cache: "no-store",
+      signal
     });
     if (!response.ok) {
       const operation = {
         "/api/characters/get": "读取角色卡",
-        "/api/characters/merge-attributes": "保存角色卡的主世界书关联",
         "/api/worldinfo/get": "读取世界书",
-        "/api/worldinfo/delete": "删除原名世界书",
+        "/api/worldinfo/edit": "保存世界书备份",
         "/api/settings/get": "读取世界书列表"
       };
       throw new Error(`${operation[path] ?? "酒馆操作"}失败（HTTP ${response.status}）。`);
@@ -59246,12 +58990,7 @@ async function createLorebookVersionPort(owner, assertAlive, prepareWorldbook) {
       throw new Error("酒馆后端没有返回目标角色卡的完整数据。");
     return card;
   };
-  const refresh = async (name, present) => {
-    await world.updateWorldInfoList();
-    if (!Array.isArray(world.world_names) || world.world_names.includes(name) !== present)
-      throw new Error(`世界书列表未确认${present ? "加入" : "移除"}“${name}”，请刷新页面后检查。`);
-  };
-  assertCurrent(initial, initial.primary);
+  assertCurrent(initial);
   return {
     capture: () => initial,
     assertCurrent,
@@ -59276,7 +59015,7 @@ async function createLorebookVersionPort(owner, assertAlive, prepareWorldbook) {
     },
     async embedded(target) {
       const card = await readCard(target);
-      assertCurrent(target, target.primary);
+      assertCurrent(target);
       if (!Array.isArray(card.data.character_book?.entries))
         throw new Error("当前角色卡没有可导入的内嵌世界书，原书保持不变。");
       const source = world.convertCharacterBook(structuredClone(card.data.character_book));
@@ -59306,29 +59045,22 @@ async function createLorebookVersionPort(owner, assertAlive, prepareWorldbook) {
       }
       throw new Error("无法生成未被占用的世界书名称。");
     },
-    async save(name, book) {
+    async saveBackup(name, book) {
+      const response = await post("/api/worldinfo/edit", { name, data: book }, AbortSignal.timeout(120000));
+      if ((await response.json())?.ok !== true)
+        throw new Error("酒馆未确认备份写入。");
+    },
+    async overwrite(name, book) {
       await world.saveWorldInfo(name, structuredClone(book), true);
-      await refresh(name, true);
+      await world.updateWorldInfoList();
+      const editor = owner.document.querySelector("#world_editor_select");
+      if (editor?.selectedOptions[0]?.text === name)
+        editor.dispatchEvent(new Event("change", { bubbles: true }));
     },
-    async remove(name) {
-      await post("/api/worldinfo/delete", { name });
-      world.worldInfoCache.delete(name);
-      await refresh(name, false);
-      owner.document.querySelector("#world_editor_select")?.dispatchEvent(new Event("change", { bubbles: true }));
-    },
-    async associate(target, name) {
-      assertCurrent(target, target.primary);
-      await post("/api/characters/merge-attributes", { avatar: target.avatar, data: { extensions: { world: name } } });
-      assertCurrent(target, target.primary);
-      await script.getOneCharacter(target.avatar);
-      assertCurrent(target, name);
-      script.select_selected_character(context().characterId, { switchMenu: false });
-    },
-    async confirmAssociation(target, name) {
+    async confirmAssociation(target) {
       const card = await readCard(target);
-      if (card.data.extensions?.world !== name)
-        throw new Error(`后端未确认角色卡已关联“${name}”，请手工检查角色卡的主世界书。`);
-      assertCurrent(target, name);
+      if (card.data.extensions?.world !== target.primary)
+        throw new Error(`角色卡当前关联的主世界书不是“${target.primary}”，请检查角色卡的主世界书。`);
     },
     notify: (kind, message) => notifyLorebookVersion(owner, kind, message)
   };
@@ -62122,7 +61854,6 @@ var __component39 = /* @__PURE__ */ defineComponent({
       if (kind === "success")
         feedbackTimer = setTimeout(() => feedback.value = undefined, 4000);
     }
-    const needReload = ref(false);
     const secrets = reactive({});
     let secretRound = 0;
     async function refreshSecrets() {
@@ -62192,7 +61923,7 @@ var __component39 = /* @__PURE__ */ defineComponent({
         const result = await props.controller.saveSelections({ [field]: next });
         if (!alive)
           return;
-        if (result.parameters !== "confirmed")
+        if (result.parameters !== "applied")
           return selectionFailed(purpose, result.message, result.details);
         selecting[purpose] = "saved";
         clearTimeout(savedTimers[purpose]);
@@ -62208,7 +61939,6 @@ var __component39 = /* @__PURE__ */ defineComponent({
     const editorDirty = ref(false);
     const expanded = ref();
     const conflict = ref(false);
-    let attempt;
     const pendingStart = shallowRef();
     let pendingTimer;
     function askDiscard(next) {
@@ -62234,8 +61964,6 @@ var __component39 = /* @__PURE__ */ defineComponent({
       cancelDelete();
       feedback.value = undefined;
       conflict.value = false;
-      needReload.value = false;
-      attempt = undefined;
       editorKey.value++;
     }
     function request(next) {
@@ -62249,8 +61977,6 @@ var __component39 = /* @__PURE__ */ defineComponent({
       editing.value = undefined;
       editorDirty.value = false;
       conflict.value = false;
-      needReload.value = false;
-      attempt = undefined;
     }
     function editingFor(configId) {
       const saved = configs.value.find((item) => item.id === configId);
@@ -62314,19 +62040,12 @@ var __component39 = /* @__PURE__ */ defineComponent({
         return;
       ownSaving = true;
       saveBusy.value = true;
-      needReload.value = false;
       feedback.value = undefined;
-      try {
-        attempt = { id: value.id, signature: configSignature({ name: value.name, config: validateConfig(value.config) }) };
-      } catch {
-        attempt = undefined;
-      }
       try {
         const result = await props.controller.saveModel(value);
         if (!alive)
           return;
-        if (result.parameters !== "confirmed") {
-          needReload.value = result.parameters === "unconfirmed";
+        if (result.parameters !== "applied") {
           say("error", result.message, result.details);
           return;
         }
@@ -62342,44 +62061,18 @@ var __component39 = /* @__PURE__ */ defineComponent({
           }));
           if (!alive)
             return;
-          if (follow.parameters === "confirmed")
-            say("success", `已保存「${value.name}」，并自动用于变量更新。${secretNote}`);
+          if (follow.parameters === "applied")
+            say("success", `已应用「${value.name}」，并自动用于变量更新。${secretNote}`);
           else
-            say("error", `已保存「${value.name}」。${follow.message}`, follow.details);
+            say("error", `已应用「${value.name}」。${follow.message}`, follow.details);
         } else
-          say("success", `已保存「${value.name}」。${secretNote}`);
+          say("success", `已应用「${value.name}」。${secretNote}`);
       } catch (error) {
         if (alive)
           say("error", `DVS 模型配置尚未保存：${errorText(error)}`);
       } finally {
         ownSaving = false;
         saveBusy.value = false;
-      }
-    }
-    async function reloadSaved() {
-      const current = editing.value;
-      if (!current)
-        return;
-      try {
-        await props.controller.readSaved();
-      } catch (error) {
-        if (alive) {
-          const failure = modelReadFailure(error, "重新读取已保存 DVS 模型配置", "草稿已保留，请稍后再次点击“重新读取已保存配置”。");
-          say("error", failure.message, failure.details);
-        }
-        return;
-      }
-      if (!alive)
-        return;
-      status.value = props.controller.getStatus();
-      const saved = configs.value.find((item) => item.id === current.draft.id);
-      if (saved && attempt?.id === saved.id && attempt.signature === configSignature(saved)) {
-        closeEditor();
-        expanded.value = saved.id;
-        say("success", `已确认「${saved.name}」保存成功。`);
-      } else {
-        needReload.value = false;
-        say("info", saved ? "已重新读取：这次修改没有生效，草稿仍保留；再次保存会覆盖已保存的内容。" : "已重新读取：这份配置还没有保存，草稿仍保留，可以再次保存。");
       }
     }
     const confirmDelete = ref();
@@ -62400,7 +62093,7 @@ var __component39 = /* @__PURE__ */ defineComponent({
         if (!alive)
           return;
         cancelDelete();
-        if (result.parameters === "confirmed") {
+        if (result.parameters === "applied") {
           expanded.value = undefined;
           say("success", `已删除「${name}」。`);
         } else
@@ -62537,15 +62230,11 @@ var __component39 = /* @__PURE__ */ defineComponent({
       return feedbackTimer;
     }, set feedbackTimer(v) {
       feedbackTimer = v;
-    }, say, needReload, secrets, get secretRound() {
+    }, say, secrets, get secretRound() {
       return secretRound;
     }, set secretRound(v) {
       secretRound = v;
-    }, refreshSecrets, secretLook, secretOf, selecting, selectKey, selectionError, selectionDetails, savedTimers, nameOf, followName, selectionRows, selectionFailed, choose, editing, editorRef, editorKey, editorDirty, expanded, conflict, get attempt() {
-      return attempt;
-    }, set attempt(v) {
-      attempt = v;
-    }, pendingStart, get pendingTimer() {
+    }, refreshSecrets, secretLook, secretOf, selecting, selectKey, selectionError, selectionDetails, savedTimers, nameOf, followName, selectionRows, selectionFailed, choose, editing, editorRef, editorKey, editorDirty, expanded, conflict, pendingStart, get pendingTimer() {
       return pendingTimer;
     }, set pendingTimer(v) {
       pendingTimer = v;
@@ -62553,7 +62242,7 @@ var __component39 = /* @__PURE__ */ defineComponent({
       return copying;
     }, set copying(v) {
       copying = v;
-    }, startCopy, toggle, cancelEdit, reloadLatest, save, reloadSaved, confirmDelete, get deleteTimer() {
+    }, startCopy, toggle, cancelEdit, reloadLatest, save, confirmDelete, get deleteTimer() {
       return deleteTimer;
     }, set deleteTimer(v) {
       deleteTimer = v;
@@ -62824,7 +62513,7 @@ function render40(_ctx, _cache, $props, $setup, $data, $options) {
                       weight: "bold",
                       class: normalizeClass($setup.look.add),
                       role: "img",
-                      "aria-label": "已保存"
+                      "aria-label": "已应用"
                     }, null, 8, ["class"])) : createCommentVNode("v-if", true)
                   ])
                 ])
@@ -62981,12 +62670,7 @@ function render40(_ctx, _cache, $props, $setup, $data, $options) {
                       kind: $setup.feedback.kind,
                       text: $setup.feedback.text,
                       details: $setup.feedback.details
-                    }, null, 8, ["kind", "text", "details"]),
-                    $setup.needReload ? (openBlock(), createBlock($setup["ConfigButton"], {
-                      key: 0,
-                      label: "重新读取已保存配置",
-                      onClick: $setup.reloadSaved
-                    })) : createCommentVNode("v-if", true)
+                    }, null, 8, ["kind", "text", "details"])
                   ])) : createCommentVNode("v-if", true)
                 ], 2)) : $setup.expanded === config.id ? (openBlock(), createElementBlock(Fragment, { key: 1 }, [
                   createCommentVNode(" 详情 "),
@@ -63149,12 +62833,7 @@ function render40(_ctx, _cache, $props, $setup, $data, $options) {
                     kind: $setup.feedback.kind,
                     text: $setup.feedback.text,
                     details: $setup.feedback.details
-                  }, null, 8, ["kind", "text", "details"]),
-                  $setup.needReload ? (openBlock(), createBlock($setup["ConfigButton"], {
-                    key: 0,
-                    label: "重新读取已保存配置",
-                    onClick: $setup.reloadSaved
-                  })) : createCommentVNode("v-if", true)
+                  }, null, 8, ["kind", "text", "details"])
                 ])) : createCommentVNode("v-if", true)
               ])
             ], 2)) : createCommentVNode("v-if", true)
@@ -63374,11 +63053,15 @@ function installDvsTheme(owner, port) {
   const root = doc.documentElement;
   const systemQuery = owner.matchMedia("(prefers-color-scheme: dark)");
   const state = reactive({
-    mode: port.peekDvsThemeMode?.() ?? DEFAULT_DVS_THEME_MODE,
+    mode: DEFAULT_DVS_THEME_MODE,
     scheme: "dark"
   });
   let disposed = false;
-  let saved = false;
+  try {
+    state.mode = port.readDvsThemeMode();
+  } catch (error) {
+    owner.console?.warn(settingsFailureDetails(error, "读取 DVS 配色设置", "读取本页酒馆设置"));
+  }
   const resolveColor = (value) => {
     const text = value.trim();
     if (!text)
@@ -63413,13 +63096,6 @@ function installDvsTheme(owner, port) {
   observer.observe(root, { attributes: true, attributeFilter: ["style", "class"] });
   systemQuery.addEventListener("change", apply);
   apply();
-  port.readDvsThemeMode().then((mode) => {
-    if (disposed || saved || mode === state.mode)
-      return;
-    state.mode = mode;
-    apply();
-  }, (error) => owner.console?.warn(`读取 DVS 配色设置失败，沿用当前配色。请稍后刷新页面核对。
-${settingsFailureDetails(error, "读取 DVS 配色设置", "读取设置")}`));
   const control = {
     get mode() {
       return state.mode;
@@ -63430,11 +63106,10 @@ ${settingsFailureDetails(error, "读取 DVS 配色设置", "读取设置")}`));
     save(mode) {
       if (!isDvsThemeMode(mode) || mode === state.mode)
         return;
-      saved = true;
       state.mode = mode;
       apply();
       port.saveDvsThemeMode(mode).catch((error) => owner.console?.warn(`${settingsResultState(error) === "not-applied" ? "DVS 配色设置尚未保存。" : "暂时无法确认 DVS 配色设置是否保存。"}请稍后刷新页面核对。
-${settingsFailureDetails(error, "保存 DVS 配色设置", "保存设置及读回确认")}`));
+${settingsFailureDetails(error, "保存 DVS 配色设置", "调用酒馆保存")}`));
     }
   };
   return {
@@ -63457,23 +63132,23 @@ function mountDvsConfig(owner, runtime, options) {
   const { settings, service } = options;
   const controller = createConfigController(settings, service);
   const theme = installDvsTheme(owner, settings);
-  const floorState = reactive({ enabled: true });
-  let disposed = false, savedFloor = false;
+  const floorState = reactive({ enabled: DEFAULT_DVS_FLOOR_DATA });
+  try {
+    floorState.enabled = settings.readDvsFloorData();
+  } catch (error) {
+    runtime.reportError(error);
+  }
+  let disposed = false;
   const floorData = {
     get enabled() {
       return floorState.enabled;
     },
     save(enabled) {
-      savedFloor = true;
       floorState.enabled = enabled;
       settings.saveDvsFloorData(enabled).catch(runtime.reportError);
     }
   };
   floorControls.set(runtime, floorData);
-  settings.readDvsFloorData().then((value) => {
-    if (!disposed && !savedFloor)
-      floorState.enabled = value;
-  }, runtime.reportError);
   const requestOptions = {
     fetch: owner.fetch.bind(owner),
     getRequestHeaders: () => runtime.adapter.context().getRequestHeaders()

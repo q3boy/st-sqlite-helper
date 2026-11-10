@@ -1,7 +1,7 @@
 {
-  "buildId": "6c055b10-3b8f-4dd4-921c-c3fcf4b98681",
+  "buildId": "060f8d2c-1f2c-479c-ae91-b90ea413cc75",
   "buildMode": "release",
   "extensionName": "st-sqlite-helper",
-  "sourceCommit": "812db36b2be42fd313aa31ad81dcbce5dfde4108",
-  "releaseVersion": "0.6.3"
+  "sourceCommit": "238fd1a11b790fd0ee4fc7f9b1a8a19af2b9c645",
+  "releaseVersion": "0.6.4"
 }
