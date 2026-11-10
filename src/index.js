@@ -2097,7 +2097,7 @@ function fileRetryable(error) {
 
 // src/protocol.ts
 var PROTOCOL_VERSION = 27;
-var BUILD_ID = "0537afdc-fc78-408d-90a4-03b63ff09274";
+var BUILD_ID = "6c055b10-3b8f-4dd4-921c-c3fcf4b98681";
 var extensionEntryPath = new URL(import.meta.url).pathname;
 var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
 var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;
@@ -3927,9 +3927,11 @@ function validateCheckedCommands(input) {
     const kind = fields.kind?.value, sql = fields.sql?.value;
     if (kind !== "check" && kind !== "write")
       return invalid2("检查事务命令类型无效。");
-    const allowed = kind === "check" ? ["kind", "sql", "binds"] : ["kind", "sql", "binds", "expectChanges"];
+    const allowed = kind === "check" ? ["kind", "sql", "binds", "statementGroup"] : ["kind", "sql", "binds", "expectChanges", "statementGroup"];
     if (Object.keys(fields).some((key) => !allowed.includes(key)))
       return invalid2("检查事务命令包含未知字段。");
+    if (fields.statementGroup && (typeof fields.statementGroup.value !== "string" || !fields.statementGroup.value.length))
+      return invalid2("statementGroup 必须是非空字符串。");
     checkPrefix(sql, kind === "check" ? "query" : "transaction");
     if (fields.expectChanges) {
       const count = fields.expectChanges.value;
@@ -5685,8 +5687,7 @@ class SingleDatabase {
         phase = "identity";
         this.storeInitialization(db, initialization);
         phase = "command";
-        for (const command of snapshot)
-          this.executeCommand(db, command);
+        this.executeTransactionCommands(db, snapshot);
         phase = "commit";
         db.run("COMMIT");
       } catch (sqlError) {
@@ -5769,7 +5770,39 @@ class SingleDatabase {
       return { committed: true, persisted: false };
     });
   }
-  executeCommand(db, command) {
+  executeTransactionCommands(db, commands) {
+    const statements = new Map;
+    let group;
+    let failed = false;
+    const release = () => {
+      try {
+        for (const stmt of statements.values())
+          stmt.free();
+      } finally {
+        statements.clear();
+      }
+    };
+    try {
+      for (const command of commands) {
+        if (command.statementGroup !== group) {
+          release();
+          group = command.statementGroup;
+        }
+        this.executeCommand(db, command, group === undefined ? undefined : statements);
+      }
+    } catch (error) {
+      failed = true;
+      throw error;
+    } finally {
+      try {
+        release();
+      } catch (error) {
+        if (!failed)
+          throw error;
+      }
+    }
+  }
+  executeCommand(db, command, statements) {
     if (command.mode === "runSql") {
       db.run(command.sql);
       return;
@@ -5807,7 +5840,11 @@ class SingleDatabase {
         });
       checkPrefix(command.sql, "update");
     }
-    const stmt = command.kind === "check" ? prepareQuery(db, command.sql) : command.kind === "write" ? prepareSingle(db, command.sql, "transaction") : command.mode ? prepareSingle(db, command.sql, command.mode) : db.prepare(command.sql);
+    const reusable = command.kind === "write" ? statements : undefined;
+    const cached = reusable?.get(command.sql);
+    const stmt = cached ?? (command.kind === "check" ? prepareQuery(db, command.sql) : command.kind === "write" ? prepareSingle(db, command.sql, "transaction") : command.mode ? prepareSingle(db, command.sql, command.mode) : db.prepare(command.sql));
+    if (reusable && !cached)
+      reusable.set(command.sql, stmt);
     let failed = false;
     try {
       if (command.binds) {
@@ -5843,7 +5880,10 @@ class SingleDatabase {
       throw error;
     } finally {
       try {
-        stmt.free();
+        if (!reusable)
+          stmt.free();
+        else
+          stmt.reset();
       } catch (error) {
         if (!failed)
           throw error;
@@ -11233,6 +11273,7 @@ function writeCommands(operation) {
     return operation.commands.map((input) => ({
       kind: input.kind,
       sql: input.sql,
+      ...input.statementGroup === undefined ? {} : { statementGroup: input.statementGroup },
       binds: validateSerializedBinds(input.binds),
       ...input.kind === "write" ? {
         mode: "transaction",
@@ -16026,11 +16067,43 @@ var DEFAULT_DVS_CONFIG = {
   presencePenalty: 0,
   topP: 1,
   topK: 0,
+  aiMinimumLength: 0,
   maxAttempts: 3,
   retryIntervalMs: 1000,
   requestTimeoutSeconds: 300,
+  excludeBody: "",
+  extraHeaders: "",
   extraBody: {}
 };
+function parseExtraHeaders(text) {
+  if (typeof text !== "string")
+    throw new Error("附加请求头必须是文本。");
+  const headers = new Headers;
+  for (const [index, line] of text.split(`
+`).entries()) {
+    if (!line.trim())
+      continue;
+    const separator = line.indexOf(":");
+    if (separator < 1)
+      throw new Error(`附加请求头第 ${index + 1} 行须按 Header: Value 填写。`);
+    const name = line.slice(0, separator).trim();
+    if (name.toLowerCase() === "authorization")
+      throw new Error("Authorization 由 API Key 生成，请使用密钥输入框。");
+    try {
+      headers.set(name, line.slice(separator + 1).trim());
+    } catch {
+      throw new Error(`附加请求头第 ${index + 1} 行的名称或值无效。`);
+    }
+  }
+  return Object.fromEntries(headers.entries());
+}
+function excludedFields(text) {
+  if (typeof text !== "string")
+    throw new Error("排除参数必须是文本。");
+  return [
+    ...new Set(text.split(/[,\n]/).map((name) => name.trim()).filter(Boolean))
+  ];
+}
 function readModelConfig(value) {
   const config = { ...structuredClone(DEFAULT_DVS_CONFIG), ...structuredClone(value) };
   const url = new URL(config.apiUrl);
@@ -16307,6 +16380,7 @@ function validateConfig(value, allowIncomplete = false) {
     ["presencePenalty", "存在惩罚", -2, 2, false],
     ["topP", "top p", 0, 1, false],
     ["topK", "top k", 0, Infinity, true],
+    ["aiMinimumLength", "最小正文字符数", 0, Infinity, true],
     ["maxAttempts", "最多请求次数", 1, Infinity, true],
     ["retryIntervalMs", "重试间隔", 0, Infinity, false],
     ["requestTimeoutSeconds", "单次请求超时", Number.MIN_VALUE, Infinity, false]
@@ -16316,6 +16390,8 @@ function validateConfig(value, allowIncomplete = false) {
     if (typeof number !== "number" || !Number.isFinite(number) || number < min || number > max || integer && !Number.isSafeInteger(number))
       throw new Error(`${label}须为范围内的${integer ? "整数" : "有限数值"}。`);
   }
+  excludedFields(config.excludeBody);
+  parseExtraHeaders(config.extraHeaders);
   config.extraBody = parseExtraBody(config.extraBody);
   return config;
 }
@@ -40607,7 +40683,11 @@ function object(value) {
 function redactModelError(message, key) {
   return key ? message.split(key).join("[密钥已隐藏]") : message;
 }
+function upstreamHeaders(config, key) {
+  return JSON.stringify({ ...parseExtraHeaders(config.extraHeaders), Authorization: key ? `Bearer ${key}` : "" });
+}
 function buildModelBody(config, key, messages, protocol) {
+  const excluded = excludedFields(config.excludeBody);
   const extra = { ...config.extraBody };
   delete extra.response_format;
   if (config.outputFormat === "json_object")
@@ -40617,11 +40697,13 @@ function buildModelBody(config, key, messages, protocol) {
     custom_url: config.apiUrl,
     model: config.model,
     messages: messages.map((message) => ({ ...message })),
-    stream: config.stream,
+    stream: config.stream && !excluded.includes("stream"),
     max_tokens: config.maxTokens,
-    custom_include_headers: JSON.stringify({ Authorization: key ? `Bearer ${key}` : "" }),
+    custom_include_headers: upstreamHeaders(config, key),
     custom_include_body: JSON.stringify(extra)
   };
+  if (excluded.length)
+    body.custom_exclude_body = JSON.stringify(excluded);
   if (config.temperature !== 1)
     body.temperature = config.temperature;
   if (config.frequencyPenalty !== 0)
@@ -40657,7 +40739,7 @@ async function nativeRequest(snapshot, path, body, signal, options = {}, stream 
     try {
       await snapshot.assertCurrent();
     } catch {
-      throw new ModelRequestError("stale", options.purpose === "test" ? "存储空间或设置面板已改变，请重新测试。" : "本次变量更新的目标或存储空间已改变，请重新更新变量。");
+      throw new ModelRequestError("stale", options.purpose === "test" ? "存储空间或设置面板已改变，请重新测试。" : options.purpose === "llm" ? "模型配置已失效，请重新调用 DVS.llm。" : "本次变量更新的目标或存储空间已改变，请重新更新变量。");
     }
     if (controller.signal.aborted)
       throw new ModelRequestError(timedOut ? "timeout" : "cancelled", timedOut ? "等待模型回复超时，请检查服务状态后重试。" : "本次模型请求已取消。");
@@ -40714,7 +40796,7 @@ async function nativeRequest(snapshot, path, body, signal, options = {}, stream 
     if (error instanceof ModelRequestError)
       throw error;
     await current();
-    throw new ModelRequestError("network", options.purpose === "test" ? "模型请求未完成，请检查连接后重新测试。" : "变量模型请求未完成，请检查连接后重新更新变量。");
+    throw new ModelRequestError("network", options.purpose === "test" ? "模型请求未完成，请检查连接后重新测试。" : options.purpose === "llm" ? "模型请求未完成，请检查连接。" : "变量模型请求未完成，请检查连接后重新更新变量。");
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", abort);
@@ -40733,12 +40815,12 @@ function checkServiceError(data, key) {
   throw new ModelRequestError("service", `酒馆模型接口返回错误：${safe}`, undefined, safe);
 }
 function invalidReply(options) {
-  return new ModelRequestError("response", options?.purpose === "test" ? "模型没有返回完整的非空正文，或拒绝了本次请求。" : "变量模型没有返回完整的非空内容，或拒绝了本次更新请求。");
+  return new ModelRequestError("response", options?.purpose === "test" || options?.purpose === "llm" ? "模型没有返回完整的非空正文，或拒绝了本次请求。" : "变量模型没有返回完整的非空内容，或拒绝了本次更新请求。");
 }
 function checkFinishReason(reason, options) {
   if (reason !== "length")
     return;
-  throw new ModelRequestError("response", options?.purpose === "test" ? "模型输出达到 token 上限，内容已截断，请增加最大 token 后重新测试。" : "变量模型输出达到 token 上限，内容已截断，请增加最大 token 后重新更新变量。");
+  throw new ModelRequestError("response", options?.purpose === "test" ? "模型输出达到 token 上限，内容已截断，请增加最大 token 后重新测试。" : options?.purpose === "llm" ? "模型输出达到 token 上限，内容已截断。" : "变量模型输出达到 token 上限，内容已截断，请增加最大 token 后重新更新变量。");
 }
 async function readStream(response, key, options, current) {
   if (!response.body)
@@ -40746,17 +40828,19 @@ async function readStream(response, key, options, current) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder;
   const parser = new ModelSseParser;
-  let raw = "";
+  let fallbackBody;
   let content = "";
   let finishReason = null;
   let done = false;
   let eof = false;
   const incomplete = () => new ModelRequestError("network", "模型回复未完整接收，请检查连接后重试。");
   const accept = (text) => {
-    raw += text;
-    if (options.trace)
-      options.trace.response.body = raw;
-    for (const event of parser.push(text)) {
+    const events = parser.push(text);
+    if (parser.hasData)
+      fallbackBody = undefined;
+    else if (text)
+      fallbackBody = (fallbackBody ?? "") + text;
+    for (const event of events) {
       if (!event)
         continue;
       if (event === "[DONE]") {
@@ -40787,15 +40871,12 @@ async function readStream(response, key, options, current) {
         if (options.trace)
           options.trace.response.finishReason = finishReason;
       }
-      checkFinishReason(finishReason, options);
-      if (delta?.refusal || message?.refusal)
-        throw invalidReply(options);
       const part = delta?.content ?? message?.content ?? choice.text;
-      if (part === null || part === undefined)
-        continue;
-      if (typeof part !== "string")
+      if (typeof part === "string")
+        content += part;
+      checkFinishReason(finishReason, options);
+      if (delta?.refusal || message?.refusal || part != null && typeof part !== "string")
         throw invalidReply(options);
-      content += part;
     }
   };
   try {
@@ -40822,7 +40903,7 @@ async function readStream(response, key, options, current) {
     if (!done && !parser.hasData) {
       let data;
       try {
-        data = JSON.parse(raw);
+        data = JSON.parse(fallbackBody ?? "");
       } catch {
         throw invalidReply(options);
       }
@@ -40833,13 +40914,19 @@ async function readStream(response, key, options, current) {
       throw incomplete();
     return { choices: [{ message: { content }, finish_reason: finishReason }] };
   } finally {
+    if (options.trace)
+      options.trace.response.body = parser.hasData || parser.incomplete ? content : fallbackBody;
     if (!eof)
       await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }
 async function listModels(snapshot, signal, options) {
-  const data = await nativeRequest(snapshot, "/api/backends/chat-completions/status", { chat_completion_source: "openai", reverse_proxy: snapshot.config.apiUrl, proxy_password: snapshot.key }, signal, { ...options, purpose: "test" });
+  const data = await nativeRequest(snapshot, "/api/backends/chat-completions/status", snapshot.config.extraHeaders.trim() ? {
+    chat_completion_source: "custom",
+    custom_url: snapshot.config.apiUrl,
+    custom_include_headers: upstreamHeaders(snapshot.config, snapshot.key)
+  } : { chat_completion_source: "openai", reverse_proxy: snapshot.config.apiUrl, proxy_password: snapshot.key }, signal, { ...options, purpose: "test" });
   if (!object(data) || !Array.isArray(data.data))
     throw new ModelRequestError("response", "服务未返回可用模型列表，请直接填写模型名或稍后重试。");
   return [
@@ -40852,7 +40939,8 @@ async function listModels(snapshot, signal, options) {
   ].sort();
 }
 async function requestModel(snapshot, messages, signal, options) {
-  const data = await nativeRequest(snapshot, "/api/backends/chat-completions/generate", buildModelBody(snapshot.config, snapshot.key, messages, options?.protocol), signal, options, snapshot.config.stream);
+  const body = buildModelBody(snapshot.config, snapshot.key, messages, options?.protocol);
+  const data = await nativeRequest(snapshot, "/api/backends/chat-completions/generate", body, signal, options, body.stream === true);
   const choice = object(data) && Array.isArray(data.choices) ? data.choices[0] : undefined;
   const message = object(choice) && object(choice.message) ? choice.message : undefined;
   const finishReason = object(choice) && typeof choice.finish_reason === "string" ? choice.finish_reason : null;
@@ -42922,9 +43010,6 @@ function address(value, where) {
   if (typeof value.reason !== "string" || typeof value.table !== "string" || !value.table.length || !record3(value.keys) || Object.entries(value.keys).some(([key, v]) => !key.length || !(typeof v === "string" || typeof v === "number" && Number.isFinite(v) && (!Number.isInteger(v) || Number.isSafeInteger(v)))) || Object.hasOwn(value, "field") && (typeof value.field !== "string" || !value.field.length))
     throw new Error(`${where} 需要 reason、非空 table、完整 keys 对象及有效的 field。`);
 }
-function sameAddressKeys(left, right) {
-  return Object.keys(left).length === Object.keys(right).length && Object.entries(left).every(([key, value]) => Object.hasOwn(right, key) && value === right[key]);
-}
 function jsonValue(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean")
     return true;
@@ -42940,13 +43025,7 @@ function validatePatch(value) {
   fields(value, ["Analysis", "UpdateCommands"], "顶层", ["cot"]);
   if (!Array.isArray(value.Analysis) || !Array.isArray(value.UpdateCommands))
     throw new Error("Analysis 和 UpdateCommands 必须是数组。");
-  const analyses = value.Analysis.map((item, i) => {
-    if (!record3(item))
-      throw new Error(`Analysis[${i}] 必须是对象。`);
-    fields(item, ["reason", "table", "keys"], `Analysis[${i}]`, ["field"]);
-    address(item, `Analysis[${i}]`);
-    return item;
-  });
+  const analyses = value.Analysis.filter((item) => record3(item) && typeof item.reason === "string" && typeof item.table === "string" && record3(item.keys) && Object.values(item.keys).every((key) => typeof key === "string" || typeof key === "number") && (item.field === undefined || typeof item.field === "string"));
   value.UpdateCommands.forEach((item, i) => {
     const where = `UpdateCommands[${i}]`;
     if (!record3(item) || typeof item.op !== "string" || !["delta", "replace", "add", "remove"].includes(item.op))
@@ -42960,8 +43039,6 @@ function validatePatch(value) {
       ...item.op === "remove" ? [] : ["value"]
     ], where);
     address(item, where);
-    if (!analyses.some((analysis) => analysis.table === item.table && sameAddressKeys(analysis.keys, item.keys) && (analysis.field === undefined || analysis.field === item.field)))
-      throw new Error(`${where} 的定位没有对应 Analysis。`);
     if (item.op === "delta" && (typeof item.value !== "number" || !Number.isFinite(item.value)))
       throw new Error(`${where} 的增量必须是有限数值。`);
     if (item.op === "add" && !record3(item.value))
@@ -42969,7 +43046,7 @@ function validatePatch(value) {
     if (item.op !== "remove" && !jsonValue(item.value))
       throw new Error(`${where} 的值必须是有限 JSON 值。`);
   });
-  return value;
+  return { ...value, Analysis: analyses };
 }
 
 // src/dvs2/compat/capsule.ts
@@ -43255,7 +43332,29 @@ function createTavernAdapter(owner, prepareWorldbook) {
     getWorldbook: (book) => owner.TavernHelper.getWorldbook(book),
     prepareWorldbook
   };
-  return { context, avatar, capture, latest, helper: owner.TavernHelper, worldbooks, variableWorldbookScan: false };
+  const readReferences = () => {
+    const references = [];
+    for (const message of context().chat) {
+      if (message.is_user)
+        continue;
+      for (let i = 0;i < (message.swipes?.length ?? 1); i++) {
+        const fid = message.variables?.[i]?.dvs?.fid;
+        if (typeof fid === "string")
+          references.push(fid);
+      }
+    }
+    return references;
+  };
+  return {
+    context,
+    avatar,
+    capture,
+    latest,
+    readReferences,
+    helper: owner.TavernHelper,
+    worldbooks,
+    variableWorldbookScan: false
+  };
 }
 
 // src/dvs2/compat/script-config.ts
@@ -43369,8 +43468,30 @@ function createScriptConfigApi(port) {
 function cloneTables(tables) {
   return Object.fromEntries(Object.entries(tables).map(([name, rows]) => [name, rows.map((row) => copyValues(row))]));
 }
-function sameKeys(schema, left, right) {
-  return schema.keys.every((key) => sameValue(left[key], right[key]));
+function businessKey(keys, row) {
+  if (keys.length === 1) {
+    const value = row[keys[0]];
+    if (typeof value === "string")
+      return "s" + value;
+    if (typeof value === "number")
+      return "n" + value;
+  }
+  return JSON.stringify(keys.map((key) => {
+    const value = row[key];
+    return value instanceof Uint8Array ? ["blob", Array.from(value)] : [typeof value, value];
+  }));
+}
+function indexBusinessRows(keys, rows) {
+  const index = new Map;
+  rows.forEach((row, position) => {
+    const key = businessKey(keys, row);
+    const matches = index.get(key);
+    if (matches)
+      matches.push(position);
+    else
+      index.set(key, [position]);
+  });
+  return index;
 }
 function checkedValue(value) {
   if (typeof value === "number" && (!Number.isFinite(value) || Number.isInteger(value) && !Number.isSafeInteger(value)))
@@ -43408,7 +43529,6 @@ function applyPatch(oldTables, schemas, patch) {
   for (const schema of Object.values(schemas))
     if (schema.virtual)
       tables[schema.name] = [];
-  patch.Analysis.forEach((analysis, i) => locate(schemas, analysis, `Analysis[${i}]`));
   patch.UpdateCommands.forEach((operation, i) => {
     const schema = locate(schemas, operation, `UpdateCommands[${i}]`);
     if (operation.op === "delta" || operation.op === "replace")
@@ -43416,13 +43536,26 @@ function applyPatch(oldTables, schemas, patch) {
     if (operation.op === "add")
       Object.keys(operation.value).forEach((name) => writable(schema, name));
   });
+  const indexes = new Map;
   for (const [i, operation] of patch.UpdateCommands.entries()) {
     const schema = schemas[operation.table];
     const rows = tables[schema.name];
-    const matches = rows.filter((row) => schema.keys.every((key) => sameValue(row[key], operation.keys[key])));
-    if (matches.length > 1)
+    let index = indexes.get(schema.name);
+    if (!index) {
+      index = new Map;
+      for (const existing of rows) {
+        const key = businessKey(schema.keys, existing);
+        if (!index.has(key))
+          index.set(key, new Set);
+        index.get(key).add(existing);
+      }
+      indexes.set(schema.name, index);
+    }
+    const addressKey = businessKey(schema.keys, operation.keys);
+    const matches = index.get(addressKey);
+    if (matches && matches.size > 1)
       throw new Error(`UpdateCommands[${i}] 的业务键对应多行，无法确定目标。`);
-    const row = matches[0];
+    const row = matches?.values().next().value;
     if (operation.op === "add") {
       if (row)
         throw new Error(`UpdateCommands[${i}] 的新增业务键已经存在。`);
@@ -43440,13 +43573,15 @@ function applyPatch(oldTables, schemas, patch) {
         }
       });
       rows.push(fresh);
+      index.set(addressKey, new Set([fresh]));
       added.add(fresh);
     } else {
       if (!row)
         throw new Error(`UpdateCommands[${i}] 的目标行不存在。`);
-      if (operation.op === "remove")
+      if (operation.op === "remove") {
         rows.splice(rows.indexOf(row), 1);
-      else {
+        index.delete(addressKey);
+      } else {
         const column = operation.field;
         if (operation.op === "replace")
           row[column] = schema.virtual ? virtualValue(schema, column, operation.value) : checkedValue(operation.value);
@@ -43460,15 +43595,24 @@ function applyPatch(oldTables, schemas, patch) {
             virtualValue(schema, column, current + operation.value);
           row[column] = checkedValue(current + operation.value);
         }
+        if (schema.keys.includes(column)) {
+          matches.delete(row);
+          const changedKey = businessKey(schema.keys, row);
+          if (!index.has(changedKey))
+            index.set(changedKey, new Set);
+          index.get(changedKey).add(row);
+        }
       }
     }
   }
+  for (const row of added)
+    Object.setPrototypeOf(row, Object.prototype);
   for (const schema of Object.values(schemas))
     if (!schema.virtual)
       newKeys[schema.name] = tables[schema.name].filter((row) => added.has(row)).map((row) => schema.keys.map((key) => row[key]));
   return { tables, newKeys };
 }
-function captureFinalTables(oldTables, schemas, input, newKeys = {}) {
+function captureFinalTables(oldTables, schemas, input, newKeys = {}, matches) {
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== Object.keys(schemas).length || Object.keys(input).some((name) => !Object.hasOwn(schemas, name)))
     throw new Error("preUpdate 必须返回恰好全部注册表（真实业务表）；请删除虚拟表或未知表。");
   const result = Object.create(null);
@@ -43476,25 +43620,40 @@ function captureFinalTables(oldTables, schemas, input, newKeys = {}) {
     const rows = input[schema.name];
     if (!Array.isArray(rows))
       throw new Error(`preUpdate 缺少业务表：${schema.name}`);
+    const oldRows = oldTables[schema.name];
+    const index = indexBusinessRows(schema.keys, oldRows);
+    if (matches)
+      matches[schema.name] = [];
+    const addedKeys = new Set((newKeys[schema.name] ?? []).map((values) => businessKey(schema.keys, Object.fromEntries(schema.keys.map((key, i) => [key, values[i]])))));
+    const columns = new Map(schema.columns.map((column) => [column.name, column]));
+    const seen = new Set;
     result[schema.name] = rows.map((inputRow) => {
       if (!inputRow || typeof inputRow !== "object" || Array.isArray(inputRow))
         throw new Error("preUpdate 的业务行必须是字段对象。");
       const row = Object.create(null);
       for (const [name, value] of Object.entries(inputRow)) {
-        const column = schema.columns.find((column) => column.name === name);
+        const column = columns.get(name);
         if (!column || name === "rid" || name === "fid")
           throw new Error(`preUpdate 不支持字段：${name}`);
         row[name] = checkedValue(value);
       }
       if (!schema.keys.every((key) => Object.hasOwn(row, key)))
         throw new Error(`preUpdate 表 ${schema.name} 必须提供完整业务键。`);
-      const old = oldTables[schema.name].filter((oldRow) => sameKeys(schema, oldRow, row));
-      if (old.length > 1)
+      const key = businessKey(schema.keys, row);
+      if (seen.has(key))
+        throw new Error(`preUpdate 表 ${schema.name} 的业务键对应多行。`);
+      seen.add(key);
+      const positions = index.get(key) ?? [];
+      if (positions.length > 1)
         throw new Error("起点业务键对应多行。");
-      const isNew = !old.length || newKeys[schema.name]?.some((keys) => schema.keys.every((key, i) => sameValue(row[key], keys[i])));
+      const oldIndex = positions[0];
+      const old = oldIndex === undefined ? undefined : oldRows[oldIndex];
+      const explicitAdd = addedKeys.has(key);
+      const isNew = oldIndex === undefined || explicitAdd;
+      matches?.[schema.name].push({ oldIndex, explicitAdd });
       for (const column of schema.columns.filter((column) => column.name !== "rid")) {
         if (column.hidden !== 0) {
-          if (Object.hasOwn(row, column.name) && !(old[0] ? sameValue(row[column.name], old[0][column.name]) : oldTables[schema.name].some((prior) => schema.columns.filter((field) => field.hidden !== 0 && Object.hasOwn(row, field.name)).every((field) => sameValue(row[field.name], prior[field.name])))))
+          if (Object.hasOwn(row, column.name) && !(old ? sameValue(row[column.name], old[column.name]) : oldTables[schema.name].some((prior) => schema.columns.filter((field) => field.hidden !== 0 && Object.hasOwn(row, field.name)).every((field) => sameValue(row[field.name], prior[field.name])))))
             throw new Error(`preUpdate 不支持修改生成列：${column.name}`);
         } else if (!isNew && !Object.hasOwn(row, column.name))
           throw new Error(`preUpdate 已有行缺少字段：${column.name}`);
@@ -43536,17 +43695,16 @@ function compileVariableCommands(input) {
   identifierBytes(newFid);
   if (sourceFid)
     identifierBytes(sourceFid);
-  const finalTables = captureFinalTables(oldTables, schemas, input.finalTables, input.newKeys);
+  const matches = Object.create(null);
+  const finalTables = captureFinalTables(oldTables, schemas, input.finalTables, input.newKeys, matches);
   const commands = [], finalChecks = [];
   for (const schema of Object.values(schemas)) {
     const index = quoteIdentifier(schema.indexName), table = quoteIdentifier(schema.name), ids = rids[schema.name] ?? [], old = oldTables[schema.name], final = finalTables[schema.name];
     if (ids.length !== old.length || new Set(ids.map(hex)).size !== ids.length || sourceFid === null && ids.length)
       throw new Error("DVS 起点业务行与 rid 集合不一致。");
+    const start = commands.length;
     commands.push(check2(`NOT EXISTS (SELECT 1 FROM ${index} WHERE fid = ?)`, [newFid]));
     if (sourceFid) {
-      commands.push(check2(`(SELECT count(*) FROM ${index} WHERE fid = ?) = ?`, [sourceFid, ids.length]));
-      for (const rid of ids)
-        commands.push(check2(`(SELECT count(*) FROM ${index} AS idx JOIN ${table} AS data ON data.rid = idx.rid WHERE idx.fid = ? AND idx.rid = ?) = 1`, [sourceFid, identifierBytes(rid)]));
       commands.push({
         kind: "write",
         sql: `INSERT INTO ${index} (fid,rid) SELECT ?,rid FROM ${index} WHERE fid = ?`,
@@ -43556,11 +43714,8 @@ function compileVariableCommands(input) {
     }
     const reused = new Set;
     const writable = schema.columns.filter((column) => column.hidden === 0 && column.name !== "rid");
-    for (const row of final) {
-      const matches = old.map((value, i) => sameKeys(schema, value, row) ? i : -1).filter((i) => i >= 0);
-      const oldIndex = matches[0];
-      if (matches.length > 1)
-        throw new Error("DVS 起点业务键对应多行。");
+    for (const [position, row] of final.entries()) {
+      const { oldIndex, explicitAdd } = matches[schema.name][position];
       if (oldIndex !== undefined && !reused.has(oldIndex) && writable.every((column) => Object.hasOwn(row, column.name) && sameValue(row[column.name], old[oldIndex][column.name]))) {
         reused.add(oldIndex);
         continue;
@@ -43572,7 +43727,6 @@ function compileVariableCommands(input) {
         binds: [rid, ...columns.map((name) => row[name])],
         expectChanges: 1
       });
-      const explicitAdd = input.newKeys?.[schema.name]?.some((keys) => schema.keys.every((key, i) => sameValue(row[key], keys[i])));
       if (sourceFid && columns.length < writable.length && !explicitAdd)
         commands.push(check2(`NOT EXISTS (SELECT 1 FROM ${table} AS fresh JOIN ${table} AS source ON ${schema.keys.map((key) => `fresh.${quoteIdentifier(key)} IS source.${quoteIdentifier(key)}`).join(" AND ")} JOIN ${index} AS sourceIdx ON sourceIdx.rid = source.rid WHERE fresh.rid = ? AND sourceIdx.fid = ?)`, [rid, sourceFid]));
       commands.push({
@@ -43592,9 +43746,10 @@ function compileVariableCommands(input) {
             expectChanges: 1
           });
     }
-    const keyMatch = schema.keys.map((key) => `leftRow.${quoteIdentifier(key)} IS rightRow.${quoteIdentifier(key)}`).join(" AND ");
-    for (const fid of sourceFid ? [sourceFid, newFid] : [newFid])
-      finalChecks.push(check2(`NOT EXISTS (SELECT 1 FROM ${index} AS leftIdx JOIN ${table} AS leftRow ON leftRow.rid = leftIdx.rid JOIN ${index} AS rightIdx ON rightIdx.fid = leftIdx.fid AND rightIdx.rid != leftIdx.rid JOIN ${table} AS rightRow ON rightRow.rid = rightIdx.rid WHERE leftIdx.fid = ? AND ${keyMatch})`, [fid]));
+    for (let i = start;i < commands.length; i++)
+      commands[i].statementGroup = schema.name;
+    const fids = sourceFid ? [sourceFid, newFid] : [newFid];
+    finalChecks.push(check2(`NOT EXISTS (SELECT 1 FROM ${index} AS idx JOIN ${table} AS data ON data.rid = idx.rid WHERE idx.fid IN (${fids.map(() => "?").join(",")}) GROUP BY idx.fid,${schema.keys.map((key) => `data.${quoteIdentifier(key)}`).join(",")} HAVING count(*) > 1)`, fids));
     finalChecks.push(check2(`(SELECT count(*) FROM ${index} WHERE fid = ?) = ? AND NOT EXISTS (SELECT 1 FROM ${index} AS idx LEFT JOIN ${table} AS data ON data.rid = idx.rid WHERE idx.fid = ? AND data.rid IS NULL)`, [newFid, final.length, newFid]));
   }
   commands.push(...finalChecks);
@@ -44359,31 +44514,33 @@ function preparePromptFormats(input, serializer, keyFields = {}, includeKeyField
     });
   const yaml = (value) => serializer.stringify(value, { version: "1.2", aliasDuplicateObjects: false });
   const tables = capturePromptTables(input), formats = new Map;
-  for (const [name, rows] of Object.entries(tables))
-    formats.set(name, {
-      md: markdownRows(rows),
-      yaml: yaml(rows)
-    });
-  const all = {
-    md: formats.size ? [...formats].map(([name, value]) => [
+  const format = (table, kind) => {
+    const cacheKey = JSON.stringify([table, kind]);
+    const prior = formats.get(cacheKey);
+    if (prior !== undefined)
+      return prior;
+    const rows = table === undefined ? tables : tables[table];
+    const result = kind === "yaml" ? yaml(rows) : table !== undefined ? markdownRows(tables[table]) : Object.keys(tables).length ? Object.keys(tables).map((name) => [
       `### ${escapeMarkdown(name)}`,
       ...includeKeyFields ? [
         `Key fields: ${(Object.hasOwn(keyFields, name) ? keyFields[name] : []).map(escapeMarkdown).join(", ") || "(none)"}`
       ] : [],
-      value.md
+      format(name, "md")
     ].join(`
 
 `)).join(`
 
-`) : "{}",
-    yaml: yaml(tables)
+`) : "{}";
+    formats.set(cacheKey, result);
+    return result;
   };
+  const selections = new Map;
   const replace = (text, reportError, references = false) => text.replace(promptMarkers, (_match, body) => {
     if (body.startsWith("DVS_FILTER:"))
       return "";
     try {
-      const marker = dataMarker(body), data = marker.table === undefined ? all : formats.get(marker.table);
-      if (!data)
+      const marker = dataMarker(body);
+      if (marker.table !== undefined && !Object.hasOwn(tables, marker.table))
         throw new Error(`DVS 提示词数据中没有表：${marker.table}`);
       if (references) {
         if (marker.table === undefined)
@@ -44391,10 +44548,16 @@ function preparePromptFormats(input, serializer, keyFields = {}, includeKeyField
         return `See table ${JSON.stringify(marker.table)}${marker.key === undefined ? "" : `, filter group ${JSON.stringify(marker.key)}`} in current_tables.`;
       }
       if (marker.key !== undefined && selectedRows) {
-        const rows = capturePromptTables({ selected: selectedRows(marker.table, marker.key) }).selected;
-        return marker.format === "md" ? markdownRows(rows) : yaml(rows);
+        const cacheKey = JSON.stringify([marker.table, marker.key, marker.format]);
+        let result = selections.get(cacheKey);
+        if (result === undefined) {
+          const rows = capturePromptTables({ selected: selectedRows(marker.table, marker.key) }).selected;
+          result = marker.format === "md" ? markdownRows(rows) : yaml(rows);
+          selections.set(cacheKey, result);
+        }
+        return result;
       }
-      return data[marker.format];
+      return format(marker.table, marker.format);
     } catch (cause) {
       const error = new ServiceError({
         code: "INVALID_REQUEST",
@@ -44424,13 +44587,16 @@ function enableTableFiltering(payload) {
   filtering.add(payload);
   selected.delete(payload);
 }
-function validateTableGroups(payload) {
+var promptRowIdentity = (keys, row) => JSON.stringify(keys.map((key) => row[key]));
+function validateTableGroups(payload, indexes = new Map) {
   const tables = payload.tables;
   if (!tables)
     throw new Error("表筛选缺少正文表资料。");
-  const captured = capturePromptTables(tables.tables);
   for (const group of tables.filterGroups) {
-    const rows = captured[group.table], keys = tables.uniqueKeys[group.table];
+    if (indexes.has(group.table))
+      continue;
+    const source = tables.tables[group.table], keys = tables.uniqueKeys[group.table];
+    const rows = source === undefined ? undefined : capturePromptTables({ [group.table]: source })[group.table];
     if (!rows)
       throw new Error(`筛选表 ${group.table} 不在正文准备结果中。`);
     if (!keys?.length || new Set(keys).size !== keys.length)
@@ -44439,12 +44605,14 @@ function validateTableGroups(payload) {
     for (const row of rows) {
       if (keys.some((key) => !Object.hasOwn(row, key) || !(row[key] === null || typeof row[key] === "string" || typeof row[key] === "number" && Number.isFinite(row[key]))))
         throw new Error(`筛选表 ${group.table} 的准备行缺少有效业务键。`);
-      const id = JSON.stringify(keys.map((key) => row[key]));
+      const id = promptRowIdentity(keys, row);
       if (identities.has(id))
         throw new Error(`筛选表 ${group.table} 的业务键不能唯一定位准备行。`);
       identities.add(id);
     }
+    indexes.set(group.table, { rows, keys, identities });
   }
+  return indexes;
 }
 function mergeTableGroups(groups, compare = true) {
   const result = new Map;
@@ -44478,18 +44646,25 @@ function narrativeRows(payload, table, key) {
   const tables = payload.tables;
   if (!tables || !tables.filterGroups.some((group) => group.table === table && group.key === key))
     throw new Error(`DVS 未声明表筛选组：${table} / ${key}`);
-  const rows = capturePromptTables(tables.tables)[table];
-  if (!rows)
+  const source = tables.tables[table];
+  if (!source)
     throw new Error(`DVS 提示词数据中没有表：${table}`);
+  const rows = capturePromptTables({ [table]: source })[table];
   const selection = selected.has(payload) ? payload.tables_opt?.[table]?.[key] : undefined;
   if (selected.has(payload) && filtering.has(payload) && selection === undefined)
     throw new Error(`DVS 本次表筛选缺少选择：${table} / ${key}`);
-  return structuredClone(selection === undefined ? rows : rows.filter((row) => selection.some((keys) => Object.entries(keys).every(([name, value]) => row[name] === value))));
+  if (selection === undefined)
+    return structuredClone(rows);
+  const fields = tables.uniqueKeys[table], identities = new Set(selection.map((choice) => promptRowIdentity(fields, choice)));
+  return structuredClone(rows.filter((row) => identities.has(promptRowIdentity(fields, row))));
 }
 function createTablesPromptBridge(getPayload, serializer, options = {}) {
+  let narrativeFormats;
+  let formatSource, formatSelection, formatGroups;
   return {
     prepareNarrativeTables(entries) {
       const payload = getPayload();
+      narrativeFormats = undefined;
       if (!payload.tables)
         return;
       selected.delete(payload);
@@ -44512,6 +44687,7 @@ function createTablesPromptBridge(getPayload, serializer, options = {}) {
     },
     applyNarrativeTables(skip = false) {
       const payload = getPayload();
+      narrativeFormats = undefined;
       if (skip) {
         selected.delete(payload);
         delete payload.tables_opt;
@@ -44521,11 +44697,23 @@ function createTablesPromptBridge(getPayload, serializer, options = {}) {
         selected.add(payload);
     },
     replacePrompt(text, narrative = false) {
+      if (!text.includes("[[DVS_DATA"))
+        return withoutTablePromptData(text);
       const payload = getPayload();
       if (!payload.tables)
         return withoutTablePromptData(text);
       let failure;
-      const result = preparePromptFormats(payload.tables.tables, serializer, { ...payload.tables.uniqueKeys }, false, narrative ? (table, key) => narrativeRows(payload, table, key) : undefined).replace(text, (error) => {
+      const stable = narrative && selected.has(payload);
+      if (!stable || formatSource !== payload.tables.tables || formatSelection !== payload.tables_opt || formatGroups !== payload.tables.filterGroups)
+        narrativeFormats = undefined;
+      const formats = narrativeFormats ?? preparePromptFormats(payload.tables.tables, serializer, { ...payload.tables.uniqueKeys }, false, narrative ? (table, key) => narrativeRows(payload, table, key) : undefined);
+      if (stable) {
+        narrativeFormats = formats;
+        formatSource = payload.tables.tables;
+        formatSelection = payload.tables_opt;
+        formatGroups = payload.tables.filterGroups;
+      }
+      const result = formats.replace(text, (error) => {
         failure ??= error;
       });
       if (failure !== undefined)
@@ -55960,9 +56148,7 @@ function currentTablesData(payload) {
 `);
     const rules = payload.filterGroups.filter((group) => group.table === name).map((group) => `    <rule key="${promptAttribute(group.key)}">${group.condition}</rule>`).join(`
 `);
-    const data = preparePromptFormats({ rows }, { stringify: stringify3 }).replace("[[DVS_DATA_rows]]", (error) => {
-      throw error;
-    });
+    const data = markdownRows(rows);
     return `<table name="${promptAttribute(name)}">
   <keys>
 ${keys}
@@ -56029,7 +56215,7 @@ ${input.rules}`,
 ` : ""}For the "tables" task, its "data" value must be an object containing "Analysis" followed by "UpdateCommands".
 
 Analysis (tables.data.Analysis): an array of update decisions and reasons, using table, complete business keys and optional field.
-UpdateCommands (tables.data.UpdateCommands): an array of necessary operations in execution order, each with a matching Analysis item.
+UpdateCommands (tables.data.UpdateCommands): an array of necessary operations in execution order. Analysis guides the decisions; UpdateCommands independently provides every operation target.
 Analysis items: {"reason":"event and evidence","table":"exact table name","keys":{"business-key field":"value"}}, with optional field for one column. A row analysis may cover multiple fields or explain no update.
 Commands have reason, op, table and keys; include field and value as specified below.
 
@@ -56437,8 +56623,8 @@ class DvsTables {
       throw new Error("DVS 本次变量更新没有目标版本。");
     const versionid = ctx.versionid;
     const patch = validatePatch(data);
-    const calculated = applyPatch(structuredClone(this.origin.tables), requestSchemas(this.schemas, fixed.registration.virtualTables), patch);
-    const finalTables = fixed.registration.preUpdate ? await fixed.registration.preUpdate(this.sourceState, structuredClone(calculated.tables), structuredClone(this.origin.tables)) : calculated.tables;
+    const calculated = applyPatch(this.origin.tables, requestSchemas(this.schemas, fixed.registration.virtualTables), patch);
+    const finalTables = fixed.registration.preUpdate ? await fixed.registration.preUpdate(this.sourceState, calculated.tables, structuredClone(this.origin.tables)) : calculated.tables;
     fixed.assertCurrent();
     const commands = compileVariableCommands({
       schemas: this.schemas,
@@ -57069,6 +57255,7 @@ class LorebookOptimize {
       if (content !== undefined)
         entry.content = content;
     }
+    const currentCandidates = new Set(candidates.map(identity3));
     let result;
     if (data === undefined) {
       const old = ctx.getCapsule();
@@ -57083,7 +57270,7 @@ class LorebookOptimize {
         throw new Error(`世界书筛选结果须包含 ${field} 数组。`);
       const listed = new Set;
       for (const choice of choices) {
-        if (!choice || typeof choice !== "object" || typeof choice.lorebook !== "string" || !Number.isSafeInteger(choice.uid) || !candidates.some((entry) => entry.book === choice.lorebook && entry.uid === choice.uid))
+        if (!choice || typeof choice !== "object" || typeof choice.lorebook !== "string" || !Number.isSafeInteger(choice.uid) || !currentCandidates.has(JSON.stringify([choice.lorebook, choice.uid])))
           throw new Error(`世界书筛选结果包含未知条目：${JSON.stringify(choice)}。`);
         listed.add(JSON.stringify([choice.lorebook, choice.uid]));
       }
@@ -57091,9 +57278,9 @@ class LorebookOptimize {
         excludedEntries: candidates.filter((entry) => mode === "include" ? !listed.has(identity3(entry)) : listed.has(identity3(entry))).map((entry) => ({ lorebook: entry.book, uid: entry.uid, name: entry.name }))
       };
     }
-    const currentCandidates = new Set(candidates.map(identity3));
+    const excluded = new Set(result.excludedEntries.map((choice) => JSON.stringify([choice.lorebook, choice.uid])));
     for (const entry of ctx.lorebook ?? [])
-      if (currentCandidates.has(identity3(entry)) && result.excludedEntries.some((choice) => choice.lorebook === entry.book && choice.uid === entry.uid))
+      if (currentCandidates.has(identity3(entry)) && excluded.has(identity3(entry)))
         entry.content = "";
     if (data !== undefined)
       ctx.setCapsule(JSON.parse(JSON.stringify(result)));
@@ -57524,8 +57711,7 @@ class TablesOptimize {
       return;
     if (!tables.filterGroups.length)
       return;
-    validateTableGroups(ctx.payload);
-    const current = capturePromptTables(tables.tables);
+    const indexes = validateTableGroups(ctx.payload);
     let filters;
     if (data === undefined) {
       const old = ctx.getCapsule();
@@ -57539,7 +57725,8 @@ class TablesOptimize {
         const fields = tables.uniqueKeys[group.table];
         if (choices.some((choice) => fields.some((field) => !Object.hasOwn(choice, field) || !scalar3(choice[field]))))
           throw new Error(`表筛选记录 ${group.table}.${group.key} 缺少完整业务键。`);
-        (filters[group.table] ??= Object.create(null))[group.key] = current[group.table].filter((row) => choices.some((choice) => fields.every((field) => row[field] === choice[field]))).map((row) => Object.fromEntries(fields.map((field) => [field, row[field]])));
+        const listed = new Set(choices.map((choice) => promptRowIdentity(fields, choice)));
+        (filters[group.table] ??= Object.create(null))[group.key] = indexes.get(group.table).rows.filter((row) => listed.has(promptRowIdentity(fields, row))).map((row) => Object.fromEntries(fields.map((field) => [field, row[field]])));
       }
     } else {
       const mode = ctx.config.filter_mode ?? "exclude";
@@ -57564,16 +57751,16 @@ class TablesOptimize {
           const list = selected[group];
           if (!Array.isArray(list))
             throw new Error(`表筛选 ${table}.${group} 须返回数组。`);
-          const valid = [];
+          const valid = new Set;
           for (const choice of list) {
             if (!object4(choice) || fields.some((field) => !Object.hasOwn(choice, field) || !scalar3(choice[field])))
               throw new Error(`表筛选 ${table}.${group} 须返回完整且类型正确的业务键。`);
-            if (!current[table].some((row) => fields.every((field) => row[field] === choice[field])))
+            if (!indexes.get(table).identities.has(promptRowIdentity(fields, choice)))
               throw new Error(`表筛选 ${table}.${group} 的业务键不在正文准备结果中：${JSON.stringify(choice)}。`);
-            valid.push(Object.fromEntries(fields.map((field) => [field, choice[field]])));
+            valid.add(promptRowIdentity(fields, choice));
           }
-          (filters[table] ??= Object.create(null))[group] = current[table].filter((row) => {
-            const listed = valid.some((choice) => fields.every((field) => row[field] === choice[field]));
+          (filters[table] ??= Object.create(null))[group] = indexes.get(table).rows.filter((row) => {
+            const listed = valid.has(promptRowIdentity(fields, row));
             return mode === "include" ? listed : !listed;
           }).map((row) => Object.fromEntries(fields.map((field) => [field, row[field]])));
         }
@@ -58142,13 +58329,14 @@ async function prepareUserPrompt(options) {
   const sources = sortWorldbookEntries([...canonical.values()]);
   const active = isTableFiltering(payload);
   const baseGroups = active ? [] : [...payload.tables?.filterGroups ?? []];
+  const tableIndexes = new Map;
   const declarations = new Map;
   const updateGroups = (compare) => {
     if (!payload.tables)
       return;
     payload.tables.filterGroups = mergeTableGroups([...baseGroups, ...[...declarations.values()].flat()], active && compare);
     if (active)
-      validateTableGroups(payload);
+      validateTableGroups(payload, tableIndexes);
   };
   for (const source of sources)
     declarations.set(source, mergeTableGroups(collectPromptFilters(source.content), active));
@@ -59704,7 +59892,7 @@ function createDvsRuntime(owner, service, options) {
           },
           reportError: options.reportError,
           onUpdate: notify,
-          readReferences: () => adapter.context().chat.flatMap((row, id) => row.is_user ? [] : adapter.helper.getChatMessages(String(id), { include_swipes: true })[0]?.swipes_data.flatMap((value) => typeof value.dvs?.fid === "string" ? [value.dvs.fid] : []) ?? []),
+          readReferences: adapter.readReferences,
           release: () => {
             if (generation === controller)
               generation = undefined;
@@ -59829,6 +60017,24 @@ function createDvsRuntime(owner, service, options) {
   };
   const api = {
     ...configApi,
+    async llm(type, messages) {
+      if (type !== "pre" && type !== "post")
+        throw new Error("DVS.llm 的 type 须为 'pre' 或 'post'。");
+      if (!Array.isArray(messages) || !messages.length)
+        throw new Error("DVS.llm 需要非空的消息数组。");
+      const prompt = messages.map((message) => {
+        if (!message || !["system", "user", "assistant"].includes(message.role) || typeof message.content !== "string")
+          throw new Error("DVS.llm 消息须提供有效的 role 和文本 content。");
+        return { role: message.role, content: message.content };
+      });
+      const snapshot = await options.readModelSnapshot(type === "pre" ? "userReq" : "aiReq");
+      const response = await requestModel({ ...snapshot, config: { ...snapshot.config, outputFormat: "text" } }, prompt, undefined, {
+        purpose: "llm",
+        fetch: owner.fetch?.bind(owner),
+        getRequestHeaders: () => adapter.context().getRequestHeaders()
+      });
+      return response.content;
+    },
     async register(input, lifetime) {
       if (generation || pending)
         throw new Error("DVS 正在执行，请等待后再注册。");
@@ -60226,7 +60432,7 @@ function claimNativeGenerationUi(owner, port, context) {
     context.activateSendButtons?.();
   };
 }
-function attachNativeGeneration(runtime, owner, port, reportError, aiMinimumLength = 0) {
+function attachNativeGeneration(runtime, owner, port, reportError, readAiMinimumLength) {
   const adapter = runtime.adapter, context = adapter.context(), source = context.eventSource;
   if (!source?.makeFirst || !source.makeLast || !context.stopGeneration)
     throw new Error("酒馆缺少正文事件排序或停止接口。");
@@ -60317,7 +60523,18 @@ ${turn.supplement}`;
       const observed = actual && !actual.is_user ? adapter.capture(floorid, turn.expectedSwipeid ?? actual.swipe_id ?? 0) : undefined;
       const target = observed && (observed.floorid >= turn.firstChatLength || observed.message !== turn.firstLastAi || turn.rendered !== undefined || observed.swipeid >= turn.firstSwipeCount) ? observed : undefined;
       if (turn.work && target) {
-        if (successful && narrativeLength(target.body()) > aiMinimumLength)
+        let update = false;
+        if (successful) {
+          try {
+            const minimum = await readAiMinimumLength();
+            update = !turn.stopped && narrativeLength(target.body()) > minimum;
+          } catch (error) {
+            turn.error = error;
+            reportError(error);
+          }
+          turn.assertChat();
+        }
+        if (update)
           await turn.work.processAi(target);
         else {
           turn.work.bindAi(target);
@@ -60631,6 +60848,11 @@ async function testModel(snapshot, signal, options) {
       status: error instanceof ModelRequestError && error.kind === "response" ? "failed" : "unfinished",
       detail: error instanceof Error ? error.message : "联通请求未完成。"
     };
+    return result;
+  }
+  if (excludedFields(config.excludeBody).includes("response_format")) {
+    result.schema = result.object = unfinished("排除参数包含 response_format，未测试格式约束。");
+    result.suggestedFormat = "text";
     return result;
   }
   for (const [field, format] of [
@@ -60970,17 +61192,25 @@ var NUMBER_GROUPS = [
   },
   {
     title: "请求",
-    hint: "最多请求次数包含第一次。",
+    hint: "最多请求次数包含第一次。正文超过设定字符数才自动更新变量。",
     fields: [
       { key: "maxAttempts", label: "最多请求", unit: "次", step: "1", min: 1 },
       { key: "retryIntervalMs", label: "重试间隔", unit: "毫秒", step: "100", min: 0 },
-      { key: "requestTimeoutSeconds", label: "超时", unit: "秒", step: "1", min: 1 }
+      { key: "requestTimeoutSeconds", label: "超时", unit: "秒", step: "1", min: 1 },
+      { key: "aiMinimumLength", label: "最小正文", unit: "字符", step: "1", min: 0 }
     ]
   }
 ];
 var NUMBER_FIELDS = NUMBER_GROUPS.flatMap((group) => group.fields);
 function changedAdvanced(config) {
-  return NUMBER_FIELDS.filter((field) => config[field.key] !== DEFAULT_DVS_CONFIG[field.key]).map((field) => `${field.label} ${config[field.key]}`);
+  const changes = NUMBER_FIELDS.filter((field) => config[field.key] !== DEFAULT_DVS_CONFIG[field.key]).map((field) => `${field.label} ${config[field.key]}`);
+  if (hasExtraBody(config))
+    changes.push("附加请求参数");
+  if (config.excludeBody.trim())
+    changes.push("排除参数");
+  if (config.extraHeaders.trim())
+    changes.push("附加请求头");
+  return changes;
 }
 var hasExtraBody = (config) => Object.keys(config.extraBody).length > 0;
 var extraBodyText = (body) => Object.keys(body).length ? JSON.stringify(body, null, 2) : "";
@@ -61065,8 +61295,32 @@ var __component37 = /* @__PURE__ */ defineComponent({
     function undoClear() {
       action.value = baseAction;
     }
-    const extraRows = computed2(() => Math.min(Math.max(extraText.value.split(`
-`).length, 3), 12));
+    const textRows = (text) => Math.min(Math.max(text.split(`
+`).length, 3), 12);
+    const headerInput = ref();
+    const headerError = computed2(() => {
+      try {
+        parseExtraHeaders(form.config.extraHeaders);
+        return "";
+      } catch (error) {
+        return errorText(error);
+      }
+    });
+    async function opencodePreset() {
+      const text = form.config.extraHeaders;
+      const existing = /^[ \t]*x-opencode-session[ \t]*:[ \t]*(.*)$/im.exec(text);
+      const value = existing?.[1] ?? "your-session-key";
+      if (!existing) {
+        const separator = text && !text.endsWith(`
+`) ? `
+` : "";
+        form.config.extraHeaders = text + separator + "x-opencode-session: " + value;
+        await nextTick();
+      }
+      const end = existing ? existing.index + existing[0].length : form.config.extraHeaders.length;
+      headerInput.value?.focus();
+      headerInput.value?.setSelectionRange(end - value.length, end);
+    }
     const extraError = computed2(() => extraBodyError(extraText.value));
     const presetNote = ref("");
     function deepseekPreset() {
@@ -61077,7 +61331,7 @@ var __component37 = /* @__PURE__ */ defineComponent({
       } catch {}
     }
     watch2(extraText, () => presetNote.value = "");
-    const changedCount = computed2(() => NUMBER_GROUPS.flatMap((group) => group.fields).filter((field) => form.config[field.key] !== DEFAULT_DVS_CONFIG[field.key]).length + (extraText.value.trim() ? 1 : 0));
+    const changedCount = computed2(() => NUMBER_GROUPS.flatMap((group) => group.fields).filter((field) => form.config[field.key] !== DEFAULT_DVS_CONFIG[field.key]).length + [extraText.value, form.config.excludeBody, form.config.extraHeaders].filter((text) => text.trim()).length);
     const pending = ref();
     const models = ref([]);
     const modelsOpen = ref(false);
@@ -61093,7 +61347,7 @@ var __component37 = /* @__PURE__ */ defineComponent({
         note.value = message ? { kind: "info", text: message } : undefined;
       }
     }
-    watch2(() => [form.config.apiUrl, form.config.model, extraText.value, action.value], () => {
+    watch2(() => [form.config.apiUrl, form.config.model, extraText.value, form.config.excludeBody, form.config.extraHeaders, action.value], () => {
       cancelPending("连接参数已修改，进行中的请求已取消。");
       result.value = undefined;
     });
@@ -61193,7 +61447,7 @@ var __component37 = /* @__PURE__ */ defineComponent({
       return { id: props.draft.id, name: form.name, config: { ...plain(form.config), extraBody }, secretAction: action.value };
     }
     __expose({ snapshot });
-    const __returned__ = { props, emit, look, id, plain, baseAction, action, form, extraText, keyInput, signature, initialSignature, dirty, keyView, canClearKey, canUndoClear, keyPlaceholder, clearKey, undoClear, extraRows, extraError, presetNote, deepseekPreset, changedCount, pending, models, modelsOpen, modelTyped, modelQuery, result, note, cancelPending, touched, formError, currentConfig, run, statusLook, testRows, formatOptions, errors, submit, snapshot, get pinWhileToggling() {
+    const __returned__ = { props, emit, look, id, plain, baseAction, action, form, extraText, keyInput, signature, initialSignature, dirty, keyView, canClearKey, canUndoClear, keyPlaceholder, clearKey, undoClear, textRows, headerInput, headerError, opencodePreset, extraError, presetNote, deepseekPreset, changedCount, pending, models, modelsOpen, modelTyped, modelQuery, result, note, cancelPending, touched, formError, currentConfig, run, statusLook, testRows, formatOptions, errors, submit, snapshot, get pinWhileToggling() {
       return pinWhileToggling;
     }, get PhArrowCounterClockwise() {
       return G;
@@ -61240,10 +61494,16 @@ var _hoisted_157 = ["id", "onUpdate:modelValue", "min", "step"];
 var _hoisted_167 = { class: "dvs:mb-1.5 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-2" };
 var _hoisted_177 = ["for"];
 var _hoisted_186 = ["id", "rows", "aria-invalid"];
-var _hoisted_195 = { class: "dvs:mb-1.5 dvs:flex dvs:items-center dvs:gap-2" };
-var _hoisted_205 = { class: "dvs:space-y-1" };
-var _hoisted_2111 = { class: "dvs:w-[8em] dvs:shrink-0" };
-var _hoisted_2210 = { class: "dvs:ms-auto dvs:flex dvs:items-center dvs:gap-2" };
+var _hoisted_195 = { class: "dvs:mb-1.5 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-2" };
+var _hoisted_205 = ["for"];
+var _hoisted_2111 = ["id", "rows"];
+var _hoisted_2210 = { class: "dvs:mb-1.5 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-2" };
+var _hoisted_236 = ["for"];
+var _hoisted_245 = ["id", "rows", "aria-invalid"];
+var _hoisted_255 = { class: "dvs:mb-1.5 dvs:flex dvs:items-center dvs:gap-2" };
+var _hoisted_265 = { class: "dvs:space-y-1" };
+var _hoisted_273 = { class: "dvs:w-[8em] dvs:shrink-0" };
+var _hoisted_283 = { class: "dvs:ms-auto dvs:flex dvs:items-center dvs:gap-2" };
 function render38(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("form", {
     class: "dvs:@container",
@@ -61454,7 +61714,7 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
             size: 15,
             class: normalizeClass($setup.look.muted)
           }, null, 8, ["class"]),
-          _cache[17] || (_cache[17] = createBaseVNode("span", { class: "dvs:font-medium" }, "高级参数", -1)),
+          _cache[19] || (_cache[19] = createBaseVNode("span", { class: "dvs:font-medium" }, "高级参数", -1)),
           $setup.changedCount ? (openBlock(), createElementBlock("span", {
             key: 0,
             class: normalizeClass(["dvs:rounded dvs:px-1.5 dvs:text-[0.82em]", $setup.look.badgeAccent])
@@ -61553,14 +61813,14 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
                   size: 12,
                   weight: "fill"
                 }),
-                _cache[18] || (_cache[18] = createTextVNode("DeepSeek 关闭思考 ", -1))
+                _cache[20] || (_cache[20] = createTextVNode("DeepSeek 关闭思考 ", -1))
               ], 2)
             ]),
             withDirectives(createBaseVNode("textarea", {
               id: `${$setup.id}-extra`,
               "onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.extraText = $event),
               class: normalizeClass($setup.look.textarea),
-              rows: $setup.extraRows,
+              rows: $setup.textRows($setup.extraText),
               spellcheck: "false",
               placeholder: '{"thinking": {"type": "disabled"}}',
               "aria-invalid": !!$setup.extraError
@@ -61574,6 +61834,65 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
               key: 1,
               class: normalizeClass(["dvs:mt-1 dvs:text-[0.85em]", $setup.look.faint])
             }, toDisplayString($setup.presetNote), 3)) : createCommentVNode("v-if", true)
+          ]),
+          createBaseVNode("section", null, [
+            createBaseVNode("div", _hoisted_195, [
+              createBaseVNode("label", {
+                for: `${$setup.id}-exclude`,
+                class: normalizeClass(["dvs:text-[0.85em] dvs:font-medium", $setup.look.muted])
+              }, "排除参数", 10, _hoisted_205),
+              createBaseVNode("span", {
+                class: normalizeClass(["dvs:text-[0.82em]", $setup.look.faint])
+              }, "填请求体字段名，用逗号或换行分隔", 2)
+            ]),
+            withDirectives(createBaseVNode("textarea", {
+              id: `${$setup.id}-exclude`,
+              "onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.form.config.excludeBody = $event),
+              class: normalizeClass($setup.look.textarea),
+              rows: $setup.textRows($setup.form.config.excludeBody),
+              spellcheck: "false",
+              placeholder: "top_p, reasoning_effort"
+            }, null, 10, _hoisted_2111), [
+              [vModelText, $setup.form.config.excludeBody]
+            ])
+          ]),
+          createBaseVNode("section", null, [
+            createBaseVNode("div", _hoisted_2210, [
+              createBaseVNode("label", {
+                for: `${$setup.id}-headers`,
+                class: normalizeClass(["dvs:text-[0.85em] dvs:font-medium", $setup.look.muted])
+              }, "附加请求头", 10, _hoisted_236),
+              createBaseVNode("span", {
+                class: normalizeClass(["dvs:text-[0.82em]", $setup.look.faint])
+              }, "每行一个 Header: Value", 2),
+              createBaseVNode("button", {
+                type: "button",
+                class: normalizeClass(["dvs:ms-auto dvs:inline-flex dvs:cursor-pointer dvs:items-center dvs:gap-1 dvs:rounded-md dvs:px-1.5 dvs:py-0.5 dvs:text-[0.82em]", $setup.look.chip]),
+                onClick: $setup.opencodePreset
+              }, [
+                createVNode($setup["PhLightning"], {
+                  size: 12,
+                  weight: "fill"
+                }),
+                _cache[21] || (_cache[21] = createTextVNode("opencode会话头", -1))
+              ], 2)
+            ]),
+            withDirectives(createBaseVNode("textarea", {
+              id: `${$setup.id}-headers`,
+              ref: "headerInput",
+              "onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.form.config.extraHeaders = $event),
+              class: normalizeClass($setup.look.textarea),
+              rows: $setup.textRows($setup.form.config.extraHeaders),
+              spellcheck: "false",
+              placeholder: "X-Custom-Header: value",
+              "aria-invalid": !!$setup.headerError
+            }, null, 10, _hoisted_245), [
+              [vModelText, $setup.form.config.extraHeaders]
+            ]),
+            $setup.headerError ? (openBlock(), createElementBlock("p", {
+              key: 0,
+              class: normalizeClass(["dvs:mt-1 dvs:text-[0.85em]", $setup.look.remove])
+            }, toDisplayString($setup.headerError), 3)) : createCommentVNode("v-if", true)
           ])
         ], 2)
       ], 2),
@@ -61587,14 +61906,14 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
         key: 1,
         class: normalizeClass(["dvs:rounded-lg dvs:px-3 dvs:py-2.5", [$setup.look.raised, $setup.look.box]])
       }, [
-        createBaseVNode("div", _hoisted_195, [
+        createBaseVNode("div", _hoisted_255, [
           createVNode($setup["PhFlask"], {
             size: 15,
             class: normalizeClass($setup.look.muted)
           }, null, 8, ["class"]),
-          _cache[19] || (_cache[19] = createBaseVNode("span", { class: "dvs:font-medium" }, "测试结果", -1))
+          _cache[22] || (_cache[22] = createBaseVNode("span", { class: "dvs:font-medium" }, "测试结果", -1))
         ]),
-        createBaseVNode("ul", _hoisted_205, [
+        createBaseVNode("ul", _hoisted_265, [
           (openBlock(true), createElementBlock(Fragment, null, renderList($setup.testRows, ([label, item]) => {
             return openBlock(), createElementBlock("li", {
               key: label,
@@ -61605,7 +61924,7 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
                 weight: "fill",
                 class: normalizeClass(["dvs:mt-[0.2em] dvs:shrink-0", $setup.statusLook[item.status].tone])
               }, null, 8, ["class"])),
-              createBaseVNode("span", _hoisted_2111, toDisplayString(label), 1),
+              createBaseVNode("span", _hoisted_273, toDisplayString(label), 1),
               createBaseVNode("span", {
                 class: normalizeClass(["dvs:min-w-0", $setup.look.muted])
               }, [
@@ -61623,7 +61942,7 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
           key: 0,
           class: normalizeClass(["dvs:mt-2 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-2 dvs:pt-2 dvs:text-[0.92em]", $setup.look.ruleTop])
         }, [
-          _cache[20] || (_cache[20] = createTextVNode(" 推荐输出格式：", -1)),
+          _cache[23] || (_cache[23] = createTextVNode(" 推荐输出格式：", -1)),
           createBaseVNode("strong", null, toDisplayString($setup.FORMAT_NAMES[$setup.result.suggestedFormat]), 1),
           $setup.form.config.outputFormat === $setup.result.suggestedFormat ? (openBlock(), createElementBlock("span", {
             key: 0,
@@ -61632,7 +61951,7 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
             key: 1,
             label: "改用推荐格式",
             class: "dvs:ms-auto",
-            onClick: _cache[13] || (_cache[13] = ($event) => $setup.form.config.outputFormat = $setup.result.suggestedFormat)
+            onClick: _cache[15] || (_cache[15] = ($event) => $setup.form.config.outputFormat = $setup.result.suggestedFormat)
           }))
         ], 2)) : (openBlock(), createElementBlock("p", {
           key: 1,
@@ -61642,7 +61961,7 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
             size: 14,
             weight: "fill"
           }),
-          _cache[21] || (_cache[21] = createTextVNode("测试没有完成，修正上面的问题后再试一次。 ", -1))
+          _cache[24] || (_cache[24] = createTextVNode("测试没有完成，修正上面的问题后再试一次。 ", -1))
         ], 2))
       ], 2)) : createCommentVNode("v-if", true),
       $setup.formError ? (openBlock(), createBlock($setup["ConfigNotice"], {
@@ -61658,20 +61977,20 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
           key: 0,
           icon: $setup.PhStop,
           label: "取消测试",
-          onClick: _cache[14] || (_cache[14] = ($event) => $setup.cancelPending("已取消测试。"))
+          onClick: _cache[16] || (_cache[16] = ($event) => $setup.cancelPending("已取消测试。"))
         }, null, 8, ["icon"])) : (openBlock(), createBlock($setup["ConfigButton"], {
           key: 1,
           icon: $setup.PhFlask,
           label: "测试",
           disabled: !!$setup.pending,
           title: "最多发送 3 次固定请求，可能产生少量费用；不读取聊天，也不更新变量",
-          onClick: _cache[15] || (_cache[15] = ($event) => $setup.run("test"))
+          onClick: _cache[17] || (_cache[17] = ($event) => $setup.run("test"))
         }, null, 8, ["icon", "disabled"])),
         createBaseVNode("span", {
           class: normalizeClass(["dvs:text-[0.82em] dvs:@max-[26rem]:hidden", $setup.look.faint]),
           title: "最多发送 3 次固定请求，可能产生少量费用；不读取聊天，也不更新变量"
         }, "测试会产生少量费用", 2),
-        createBaseVNode("span", _hoisted_2210, [
+        createBaseVNode("span", _hoisted_283, [
           $setup.dirty ? (openBlock(), createElementBlock("span", {
             key: 0,
             class: normalizeClass(["dvs:text-[0.85em]", $setup.look.delta])
@@ -61680,9 +61999,9 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
             label: "取消",
             variant: "ghost",
             disabled: $props.saving,
-            onClick: _cache[16] || (_cache[16] = ($event) => $setup.emit("cancel"))
+            onClick: _cache[18] || (_cache[18] = ($event) => $setup.emit("cancel"))
           }, null, 8, ["disabled"]),
-          _cache[22] || (_cache[22] = createBaseVNode("button", {
+          _cache[25] || (_cache[25] = createBaseVNode("button", {
             type: "submit",
             class: "dvs:contents",
             tabindex: "-1",
@@ -61729,7 +62048,7 @@ var __component38 = /* @__PURE__ */ defineComponent({
   }
 });
 var _hoisted_151 = { class: "dvs:relative dvs:min-w-0 dvs:flex-1" };
-var _hoisted_236 = ["id", "value", "disabled", "aria-invalid"];
+var _hoisted_237 = ["id", "value", "disabled", "aria-invalid"];
 var _hoisted_318 = ["value"];
 function render39(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("div", _hoisted_151, [
@@ -61748,7 +62067,7 @@ function render39(_ctx, _cache, $props, $setup, $data, $options) {
           class: normalizeClass($setup.look.option)
         }, toDisplayString(option.label), 11, _hoisted_318);
       }), 128))
-    ], 42, _hoisted_236),
+    ], 42, _hoisted_237),
     !$setup.look.native ? (openBlock(), createBlock($setup["PhCaretDown"], {
       key: 0,
       size: 12,
@@ -62291,7 +62610,7 @@ var _hoisted_158 = {
   key: 0,
   class: "dvs:space-y-1 dvs:px-3 dvs:pt-0.5 dvs:pb-2.5 dvs:text-[0.92em]"
 };
-var _hoisted_237 = {
+var _hoisted_238 = {
   key: 0,
   class: "dvs:flex dvs:min-w-0 dvs:items-baseline dvs:gap-1.5"
 };
@@ -62324,12 +62643,12 @@ var _hoisted_206 = {
 };
 var _hoisted_2112 = { class: "dvs:m-0 dvs:grid dvs:grid-cols-[auto_1fr] dvs:gap-x-4 dvs:gap-y-1 dvs:text-[0.92em]" };
 var _hoisted_2211 = { class: "dvs:m-0 dvs:min-w-0 dvs:font-dvs-mono dvs:text-[0.92em] dvs:break-all" };
-var _hoisted_238 = { class: "dvs:m-0" };
-var _hoisted_245 = { class: "dvs:m-0" };
-var _hoisted_255 = { class: "dvs:mt-3 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-1.5" };
-var _hoisted_265 = { class: "dvs:ms-auto dvs:flex dvs:gap-1.5" };
-var _hoisted_273 = { class: "dvs:flex dvs:items-center dvs:gap-2 dvs:px-3 dvs:pt-2.5 dvs:pb-1 dvs:font-medium" };
-var _hoisted_283 = { class: "dvs:px-3 dvs:pt-1 dvs:pb-3" };
+var _hoisted_239 = { class: "dvs:m-0" };
+var _hoisted_246 = { class: "dvs:m-0" };
+var _hoisted_256 = { class: "dvs:mt-3 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-1.5" };
+var _hoisted_266 = { class: "dvs:ms-auto dvs:flex dvs:gap-1.5" };
+var _hoisted_274 = { class: "dvs:flex dvs:items-center dvs:gap-2 dvs:px-3 dvs:pt-2.5 dvs:pb-1 dvs:font-medium" };
+var _hoisted_284 = { class: "dvs:px-3 dvs:pt-1 dvs:pb-3" };
 var _hoisted_293 = { class: "dvs:ms-auto dvs:flex dvs:gap-1.5" };
 var _hoisted_303 = {
   key: 2,
@@ -62399,7 +62718,7 @@ function render40(_ctx, _cache, $props, $setup, $data, $options) {
             createBaseVNode("dt", {
               class: normalizeClass(["dvs:shrink-0", $setup.look.muted])
             }, toDisplayString(row.title), 3),
-            row.name ? (openBlock(), createElementBlock("dd", _hoisted_237, [
+            row.name ? (openBlock(), createElementBlock("dd", _hoisted_238, [
               createBaseVNode("span", _hoisted_319, toDisplayString(row.name), 1),
               row.follow ? (openBlock(), createElementBlock("span", {
                 key: 0,
@@ -62688,19 +63007,19 @@ function render40(_ctx, _cache, $props, $setup, $data, $options) {
                       createBaseVNode("dt", {
                         class: normalizeClass($setup.look.muted)
                       }, "输出格式", 2),
-                      createBaseVNode("dd", _hoisted_238, toDisplayString($setup.FORMAT_NAMES[config.config.outputFormat]), 1),
+                      createBaseVNode("dd", _hoisted_239, toDisplayString($setup.FORMAT_NAMES[config.config.outputFormat]), 1),
                       createBaseVNode("dt", {
                         class: normalizeClass($setup.look.muted)
                       }, "调用方式", 2),
-                      createBaseVNode("dd", _hoisted_245, toDisplayString(config.config.stream ? "流式" : "非流式"), 1),
+                      createBaseVNode("dd", _hoisted_246, toDisplayString(config.config.stream ? "流式" : "非流式"), 1),
                       createBaseVNode("dt", {
                         class: normalizeClass($setup.look.muted)
                       }, "高级参数", 2),
                       createBaseVNode("dd", {
                         class: normalizeClass(["dvs:m-0", $setup.look.muted])
                       }, [
-                        $setup.changedAdvanced(config.config).length || $setup.hasExtraBody(config.config) ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
-                          createTextVNode(toDisplayString([...$setup.changedAdvanced(config.config), ...$setup.hasExtraBody(config.config) ? ["附加请求参数"] : []].join(" · ")), 1)
+                        $setup.changedAdvanced(config.config).length ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
+                          createTextVNode(toDisplayString($setup.changedAdvanced(config.config).join(" · ")), 1)
                         ], 64)) : (openBlock(), createElementBlock("span", {
                           key: 1,
                           class: normalizeClass($setup.look.faint)
@@ -62711,12 +63030,12 @@ function render40(_ctx, _cache, $props, $setup, $data, $options) {
                       key: 0,
                       class: normalizeClass(["dvs-scroll dvs:mx-0 dvs:mt-2 dvs:mb-0 dvs:overflow-x-auto dvs:rounded-lg dvs:px-3 dvs:py-1.5 dvs:font-dvs-mono dvs:text-[0.84em] dvs:whitespace-pre-wrap", $setup.look.sunken])
                     }, toDisplayString($setup.extraBodyText(config.config.extraBody)), 3)) : createCommentVNode("v-if", true),
-                    createBaseVNode("div", _hoisted_255, [
+                    createBaseVNode("div", _hoisted_256, [
                       $setup.confirmDelete === config.id ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
                         createBaseVNode("span", {
                           class: normalizeClass(["dvs:text-[0.9em]", $setup.look.remove])
                         }, "删除「" + toDisplayString(config.name) + "」？无法撤销。", 3),
-                        createBaseVNode("span", _hoisted_265, [
+                        createBaseVNode("span", _hoisted_266, [
                           createVNode($setup["ConfigButton"], {
                             label: "取消",
                             variant: "ghost",
@@ -62777,7 +63096,7 @@ function render40(_ctx, _cache, $props, $setup, $data, $options) {
               key: 0,
               class: normalizeClass(["dvs:overflow-hidden dvs:rounded-lg", $setup.look.boxNew])
             }, [
-              createBaseVNode("div", _hoisted_273, [
+              createBaseVNode("div", _hoisted_274, [
                 createVNode($setup["PhPlus"], {
                   size: 14,
                   weight: "bold",
@@ -62785,7 +63104,7 @@ function render40(_ctx, _cache, $props, $setup, $data, $options) {
                 }, null, 8, ["class"]),
                 createTextVNode(" " + toDisplayString($setup.editing.copied ? "复制配置" : $setup.configs.length ? "新增配置" : "创建第一个模型配置"), 1)
               ]),
-              createBaseVNode("div", _hoisted_283, [
+              createBaseVNode("div", _hoisted_284, [
                 $setup.pendingStart ? (openBlock(), createElementBlock("div", {
                   key: 0,
                   class: normalizeClass(["dvs:mb-3 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-1.5 dvs:rounded-lg dvs:px-2.5 dvs:py-1.5", $setup.look.warnBar]),
@@ -62927,7 +63246,7 @@ var __component40 = /* @__PURE__ */ defineComponent({
   }
 });
 var _hoisted_160 = ["aria-expanded"];
-var _hoisted_239 = {
+var _hoisted_240 = {
   role: "group",
   "aria-label": "功能",
   class: "dvs:space-y-3"
@@ -62974,7 +63293,7 @@ function render41(_ctx, _cache, $props, $setup, $data, $options) {
           class: normalizeClass(["dvs:mt-1 dvs:text-[0.85em]", $setup.look.faint])
         }, "角色卡功能设置", 2)
       ]),
-      createBaseVNode("div", _hoisted_239, [
+      createBaseVNode("div", _hoisted_240, [
         createBaseVNode("div", _hoisted_320, [
           (openBlock(true), createElementBlock(Fragment, null, renderList($setup.primary, (row) => {
             return openBlock(), createElementBlock("button", {
@@ -63361,7 +63680,7 @@ var __component41 = /* @__PURE__ */ defineComponent({
   }
 });
 var _hoisted_161 = ["open"];
-var _hoisted_240 = { class: "dvs:shrink-0 dvs:font-medium dvs:whitespace-nowrap" };
+var _hoisted_241 = { class: "dvs:shrink-0 dvs:font-medium dvs:whitespace-nowrap" };
 var _hoisted_321 = {
   key: 0,
   class: "dvs:text-dvs-faint"
@@ -63419,7 +63738,7 @@ function render42(_ctx, _cache, $props, $setup, $data, $options) {
           weight: "fill"
         }))
       ], 2),
-      createBaseVNode("span", _hoisted_240, toDisplayString($props.title), 1),
+      createBaseVNode("span", _hoisted_241, toDisplayString($props.title), 1),
       $props.tone ? (openBlock(), createElementBlock("span", {
         key: 0,
         class: normalizeClass(["dvs:shrink-0 dvs:text-[0.9em] dvs:font-medium dvs:whitespace-nowrap", [$setup.toneLook[$props.tone.kind].text, $props.tone.kind === "busy" && "dvs-busy-dots"]])
@@ -63873,7 +64192,10 @@ async function startDvs2(owner, service, options) {
       ui?.refresh();
     }
   });
-  const native = attachNativeGeneration(runtime, owner, nativePort, options.reportError, options.aiMinimumLength);
+  const native = attachNativeGeneration(runtime, owner, nativePort, options.reportError, async () => {
+    const library = await options.settings?.readModelConfigs();
+    return library?.configs.find((item) => item.id === library.variableConfigId)?.config.aiMinimumLength ?? 0;
+  });
   ui = mountDvsResults(owner, runtime);
   const config = options.settings ? mountDvsConfig(owner, runtime, { settings: options.settings, service }) : undefined;
   const previousIntercept = owner.sqliteHelperDvsIntercept;
@@ -64228,7 +64550,7 @@ var __component42 = /* @__PURE__ */ defineComponent({
   }
 });
 var _hoisted_169 = ["aria-label"];
-var _hoisted_241 = {
+var _hoisted_247 = {
   class: "dvs-scroll dvs:min-h-0 dvs:overflow-y-auto",
   "aria-live": "polite"
 };
@@ -64249,7 +64571,7 @@ function render43(_ctx, _cache, $props, $setup, $data, $options) {
     "aria-label": [...$props.books.values()].some((book) => book.kind === "script") ? "角色卡解压" : "世界书解压",
     class: "dvs-ui dvs:flex dvs:max-h-[80dvh] dvs:flex-col dvs:overflow-hidden dvs:rounded-xl dvs:border dvs:border-dvs-border-strong dvs:bg-dvs-solid dvs:text-left dvs:text-dvs-text"
   }, [
-    createBaseVNode("div", _hoisted_241, [
+    createBaseVNode("div", _hoisted_247, [
       (openBlock(true), createElementBlock(Fragment, null, renderList($props.books, ([key, book]) => {
         return openBlock(), createElementBlock("section", {
           key,

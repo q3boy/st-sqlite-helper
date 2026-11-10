@@ -2383,7 +2383,7 @@
 
   // src/protocol.ts
   var PROTOCOL_VERSION = 27;
-  var BUILD_ID = "0537afdc-fc78-408d-90a4-03b63ff09274";
+  var BUILD_ID = "6c055b10-3b8f-4dd4-921c-c3fcf4b98681";
   var extensionEntryPath = undefined;
   var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
   var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;
@@ -3538,9 +3538,11 @@
       const kind = fields.kind?.value, sql = fields.sql?.value;
       if (kind !== "check" && kind !== "write")
         return invalid("检查事务命令类型无效。");
-      const allowed = kind === "check" ? ["kind", "sql", "binds"] : ["kind", "sql", "binds", "expectChanges"];
+      const allowed = kind === "check" ? ["kind", "sql", "binds", "statementGroup"] : ["kind", "sql", "binds", "expectChanges", "statementGroup"];
       if (Object.keys(fields).some((key) => !allowed.includes(key)))
         return invalid("检查事务命令包含未知字段。");
+      if (fields.statementGroup && (typeof fields.statementGroup.value !== "string" || !fields.statementGroup.value.length))
+        return invalid("statementGroup 必须是非空字符串。");
       checkPrefix(sql, kind === "check" ? "query" : "transaction");
       if (fields.expectChanges) {
         const count = fields.expectChanges.value;
@@ -4279,8 +4281,7 @@
           phase = "identity";
           this.storeInitialization(db, initialization);
           phase = "command";
-          for (const command of snapshot)
-            this.executeCommand(db, command);
+          this.executeTransactionCommands(db, snapshot);
           phase = "commit";
           db.run("COMMIT");
         } catch (sqlError) {
@@ -4363,7 +4364,39 @@
         return { committed: true, persisted: false };
       });
     }
-    executeCommand(db, command) {
+    executeTransactionCommands(db, commands) {
+      const statements = new Map;
+      let group;
+      let failed = false;
+      const release = () => {
+        try {
+          for (const stmt of statements.values())
+            stmt.free();
+        } finally {
+          statements.clear();
+        }
+      };
+      try {
+        for (const command of commands) {
+          if (command.statementGroup !== group) {
+            release();
+            group = command.statementGroup;
+          }
+          this.executeCommand(db, command, group === undefined ? undefined : statements);
+        }
+      } catch (error) {
+        failed = true;
+        throw error;
+      } finally {
+        try {
+          release();
+        } catch (error) {
+          if (!failed)
+            throw error;
+        }
+      }
+    }
+    executeCommand(db, command, statements) {
       if (command.mode === "runSql") {
         db.run(command.sql);
         return;
@@ -4401,7 +4434,11 @@
           });
         checkPrefix(command.sql, "update");
       }
-      const stmt = command.kind === "check" ? prepareQuery(db, command.sql) : command.kind === "write" ? prepareSingle(db, command.sql, "transaction") : command.mode ? prepareSingle(db, command.sql, command.mode) : db.prepare(command.sql);
+      const reusable = command.kind === "write" ? statements : undefined;
+      const cached = reusable?.get(command.sql);
+      const stmt = cached ?? (command.kind === "check" ? prepareQuery(db, command.sql) : command.kind === "write" ? prepareSingle(db, command.sql, "transaction") : command.mode ? prepareSingle(db, command.sql, command.mode) : db.prepare(command.sql));
+      if (reusable && !cached)
+        reusable.set(command.sql, stmt);
       let failed = false;
       try {
         if (command.binds) {
@@ -4437,7 +4474,10 @@
         throw error;
       } finally {
         try {
-          stmt.free();
+          if (!reusable)
+            stmt.free();
+          else
+            stmt.reset();
         } catch (error) {
           if (!failed)
             throw error;
@@ -9972,6 +10012,7 @@
       return operation.commands.map((input) => ({
         kind: input.kind,
         sql: input.sql,
+        ...input.statementGroup === undefined ? {} : { statementGroup: input.statementGroup },
         binds: validateSerializedBinds(input.binds),
         ...input.kind === "write" ? {
           mode: "transaction",

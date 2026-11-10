@@ -29,6 +29,14 @@
 node tools/dvs-card-compress.mjs 我的卡/index.yaml 我的卡.png 我的卡-发布.png
 ```
 
+使用 `dvs` skill 时，脚本位于该包的 `scripts/` 下。例如在卡片工程根目录运行：
+
+```sh
+node ".agents/skills/dvs/scripts/dvs-card-compress.mjs" "index.yaml" "原卡.png" "发布卡.png"
+```
+
+按实际安装位置替换脚本路径。三个参数依次是索引、原始卡和发布副本。输入为 JSON 卡时，输出也使用 `.json`。
+
 同一个脚本可用 Node.js 22.2 或更高版本，也可将命令开头的 `node` 换成 `bun`。用 `--list-file 路径` 指定另一份清单，相对路径从运行命令的目录算起。清单内的条目路径始终相对于索引目录。在本项目源码中可用 `bun run card:compress` 代替 `node tools/dvs-card-compress.mjs`，参数相同。工具从原始卡中取得各条最终正文，保留打包时的合集拆分和用户名替换结果。清单按文件选择，多个条目引用同一文件时都会压缩，同名条目可以分别选择。内联正文如需压缩，先将它移到文件。默认 PNG 只保留 `ccv3`，即使没有清单也会移除 `chara`。需要保留已有 `chara` 时加 `--save-chara`，其中选中的世界书条目也会压缩。只有 `chara` 的旧 PNG 需要加这个参数；它保留已有角色格式。
 
 终端逐项显示压缩、移除或同步 `chara`、写入发布卡的进度。百分比是处理后大小除以原大小，例如 `25%, 128 KB -> 32 KB`。最后出现“完成”表示发布副本已写入。

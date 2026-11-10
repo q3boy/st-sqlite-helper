@@ -18,7 +18,7 @@
 | suggestion | 可选abort_quiet／retry_later／refresh_page，只提供建议，不自动重试、刷新或返回成功 |
 | data | 原内部错误、具体原因、结果证据和本调用关联信息，供调试；普通业务不解析它来决定业务流程 |
 
-方法通过Promise拒绝交付错误；属性访问或debounce配置失败可能同步抛出同一公共格式。跨iframe或不同打包副本按字段读取，不依赖 `instanceof`。错误处理步骤见[业务指南](helper-author-guide.md#错误处理)，可运行的完整处理见[笔记示例](../assets/helper-notes/README.md)。
+SQL 方法通过 Promise 拒绝交付错误，属性访问或 `debounce` 配置失败也可能同步抛出。跨 iframe 按公共字段读取，示例脚本捕获异常后打印原错误并重新抛出。如何针对具体错误采取行动，见[业务指南](helper-author-guide.md#错误处理)和[笔记示例](../assets/helper-notes/README.md#查询与错误)。
 
 ### 公共code与处理
 
@@ -29,7 +29,7 @@
 | AUTH_TIMEOUT | 本次授权等待超时，当前SQL未执行；完成授权后再发起需要的操作，迟到授权不恢复旧调用 | warning |
 | AUTH_FAILED | 目录选择或授权未能完成，当前SQL未执行；保留实际异常供诊断，不一概说用户拒绝权限 | warning |
 | SQL_INVALID | SQL、参数或调用配置不符要求；executionState 区分执行前拒绝与事务内拒绝后回滚 | error |
-| SQL_FAILED | 查询没有返回结果，或 SQL／事务内检查拒绝了修改；按 failureKind 和 executionState 判断原因及结果 | error |
+| SQL_FAILED | 查询执行失败，或 SQL／事务内检查拒绝了修改。成功的查询没有匹配行时正常返回 `rows: []`。写入失败时按 `failureKind` 和 `executionState` 判断 | error |
 | SQL_COMMITTED | 本次 SQL 已在内存提交，调用另有错误；不重复提交，不按普通成功继续依赖返回结果的流程；无文件保存确认 | error |
 | SQL_SAVED | 本次修改已确认保存到文件，但调用另有错误；不重复提交，不继续依赖正常返回的流程。只在本次业务直接得到文件保存确认的少见路径出现，不能把管理保存或后来的后台保存结果移给原调用 | error |
 | SQL_UNKNOWN | 本次修改的执行结果未知；保留输入和诊断信息，停止依赖该结果的流程，不直接重复提交或补偿 | error |
