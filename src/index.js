@@ -2097,7 +2097,7 @@ function fileRetryable(error) {
 
 // src/protocol.ts
 var PROTOCOL_VERSION = 27;
-var BUILD_ID = "060f8d2c-1f2c-479c-ae91-b90ea413cc75";
+var BUILD_ID = "0fb9e11a-67e5-4598-afe6-96df415f0636";
 var extensionEntryPath = new URL(import.meta.url).pathname;
 var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
 var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;
@@ -2828,11 +2828,11 @@ function parseDatabasePath(relativePath, entry) {
       return;
     if (segments.length === 3 && segments[2] === CHARACTER_DATABASE)
       return { kind: "char", charDbId: segments[1] };
-    if (segments.length === 4 && segments[2] === CHATS_DIRECTORY && segments[3].endsWith(DATABASE_EXTENSION))
+    if (segments.length === 4 && segments[2] === CHATS_DIRECTORY && /\.sqlite(?:\.br)?$/.test(segments[3]))
       return {
         kind: "chat",
         charDbId: segments[1],
-        chatDbId: segments[3].slice(0, -DATABASE_EXTENSION.length)
+        chatDbId: segments[3].replace(/\.sqlite(?:\.br)?$/, "")
       };
     return;
   }
@@ -2865,6 +2865,87 @@ function checkRelativePath(relativePath, purpose) {
   return segments;
 }
 
+// src/chat-storage-settings.ts
+var DEFAULT_CHAT_STORAGE_OPTIONS = { compressed: true, quality: 4 };
+var COMPRESSION_LEVELS = [
+  { quality: 3, label: "低" },
+  { quality: 4, label: "中" },
+  { quality: 7, label: "高" },
+  { quality: 9, label: "超高" }
+];
+function isChatStorageOptions(value) {
+  if (!value || typeof value !== "object" || !("compressed" in value) || !("quality" in value))
+    return false;
+  return typeof value.compressed === "boolean" && typeof value.quality === "number" && Number.isInteger(value.quality) && value.quality >= 0 && value.quality <= 11;
+}
+
+// src/shared/chat-database-codec.ts
+class ChatDatabaseDecodeError extends Error {
+}
+var sqliteHeader = new TextEncoder().encode("SQLite format 3\x00");
+var isSQLiteDatabase = (bytes) => sqliteHeader.every((value, index) => bytes[index] === value);
+function createChatDatabaseCodec(module) {
+  const wasm = new WebAssembly.Instance(module).exports;
+  return (bytes, encode, quality = 4) => {
+    const input = wasm.alloc(bytes.length);
+    try {
+      new Uint8Array(wasm.memory.buffer, input, bytes.length).set(bytes);
+      const result = wasm.transform_bytes(input, bytes.length, encode ? 1 : 0, quality);
+      const ptr = Number(result & 0xffffffffn);
+      const size = Number(result >> 32n & 0x7fffffffn);
+      try {
+        const output = new Uint8Array(wasm.memory.buffer, ptr, size).slice();
+        if (result < 0n)
+          throw new Error(new TextDecoder().decode(output));
+        return output;
+      } finally {
+        wasm.release(ptr, size);
+      }
+    } finally {
+      wasm.release(input, bytes.length);
+    }
+  };
+}
+var codecModule;
+async function loadCodecModule() {
+  return codecModule ??= (async () => {
+    const worker = typeof document === "undefined" && typeof globalThis.location !== "undefined";
+    const base = worker ? new URL("worldbook-codec.wasm", globalThis.location.href).href : `${EXTENSION_PATH}worldbook-codec.wasm`;
+    const response = await fetch(base);
+    if (!response.ok)
+      throw new Error(`无法加载 Brotli 编解码器：HTTP ${response.status}`);
+    return WebAssembly.compile(await response.arrayBuffer());
+  })().catch((error) => {
+    codecModule = undefined;
+    throw error;
+  });
+}
+async function decodeChatDatabase(bytes) {
+  if (isSQLiteDatabase(bytes))
+    return bytes;
+  const module = await loadCodecModule();
+  try {
+    const output = createChatDatabaseCodec(module)(bytes, false);
+    if (!isSQLiteDatabase(output))
+      throw new Error("Brotli 解压结果不是 SQLite 数据库。");
+    return output;
+  } catch (error) {
+    throw new ChatDatabaseDecodeError(error instanceof Error ? error.message : String(error), { cause: error });
+  }
+}
+async function encodeChatDatabase(bytes, quality = 4) {
+  return createChatDatabaseCodec(await loadCodecModule())(bytes, true, quality);
+}
+
+// src/core/storage-write-error.ts
+class StorageWriteError extends Error {
+  fileState;
+  constructor(message, fileState, options) {
+    super(message, options);
+    this.fileState = fileState;
+  }
+}
+
 // src/worker/storage.ts
 var PROBE_FILE_PREFIX = "__st_sqlite_helper_probe__/";
 var indexedDbSource = (source) => ("mode" in source) && source.mode === "indexeddb";
@@ -2877,6 +2958,25 @@ function storageDirectory(source) {
   return source;
 }
 var storageName = (source) => indexedDbSource(source) ? "IndexedDB" : storageDirectory(source).name;
+async function directoryChatFiles(directory, filename) {
+  const files = [];
+  for (const name of [filename, `${filename}.br`]) {
+    try {
+      files.push(await (await directory.getFileHandle(name, { create: false })).getFile());
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "NotFoundError"))
+        throw error;
+    }
+  }
+  return files.sort((a, b) => b.lastModified - a.lastModified);
+}
+async function compressedBytes(bytes, quality) {
+  try {
+    return await encodeChatDatabase(bytes, quality);
+  } catch (error) {
+    throw new StorageWriteError(`压缩失败，本次修改未保存：${detail(error).message}`, "not-saved", { cause: error });
+  }
+}
 async function filesTransaction(mode, operation) {
   const db = await openStorageDatabase();
   return new Promise((resolve, reject) => {
@@ -2991,10 +3091,12 @@ async function storageEntryExists(source, path, kind) {
 class IndexedDbStorage {
   charDbId;
   chatDbId;
+  chatOptions;
   path;
-  constructor(charDbId, chatDbId) {
+  constructor(charDbId, chatDbId, chatOptions = DEFAULT_CHAT_STORAGE_OPTIONS) {
     this.charDbId = charDbId;
     this.chatDbId = chatDbId;
+    this.chatOptions = chatOptions;
     this.path = databasePath(charDbId, chatDbId);
   }
   async readSnapshot() {
@@ -3002,7 +3104,7 @@ class IndexedDbStorage {
     if (record === undefined)
       return { bytes: null };
     return {
-      bytes: record.bytes,
+      bytes: this.chatDbId ? await decodeChatDatabase(record.bytes) : record.bytes,
       metadata: {
         directoryName: "IndexedDB",
         name: this.path.split("/").at(-1),
@@ -3016,17 +3118,23 @@ class IndexedDbStorage {
     return (await this.readSnapshot()).bytes;
   }
   async metadata() {
-    const file = await this.readSnapshot();
-    if (!file.metadata)
+    const record = await indexedDbRecord(this.path);
+    if (!record)
       throw new DOMException("数据库文件不存在。", "NotFoundError");
-    return file.metadata;
+    return {
+      directoryName: "IndexedDB",
+      name: this.path.split("/").at(-1),
+      size: record.bytes.length,
+      lastModified: record.lastModified,
+      relativePath: this.path
+    };
   }
   async assertExisting() {
     if (!(await this.metadata()).size)
       throw new Error("已有数据库文件为空。");
   }
-  write(bytes, options = {}) {
-    return writeIndexedDbFile(this.path, bytes, options.create === true);
+  async write(bytes, options = {}) {
+    return writeIndexedDbFile(this.path, this.chatDbId && this.chatOptions.compressed ? await compressedBytes(bytes, this.chatOptions.quality) : bytes, options.create === true);
   }
   async remove() {
     if (!isUuid(this.charDbId) || this.chatDbId !== undefined && !isUuid(this.chatDbId))
@@ -3043,8 +3151,8 @@ class IndexedDbStorage {
       });
   }
 }
-function createStorage(source, charDbId, chatDbId, opfs = false) {
-  return indexedDbSource(source) ? new IndexedDbStorage(charDbId, chatDbId) : new DirectoryStorage(storageDirectory(source), charDbId, chatDbId, opfs || "mode" in source && source.mode === "opfs");
+function createStorage(source, charDbId, chatDbId, opfs = false, chatOptions = DEFAULT_CHAT_STORAGE_OPTIONS) {
+  return indexedDbSource(source) ? new IndexedDbStorage(charDbId, chatDbId, chatOptions) : new DirectoryStorage(storageDirectory(source), charDbId, chatDbId, opfs || "mode" in source && source.mode === "opfs", chatOptions);
 }
 async function directoryPermission(directory) {
   if (!("queryPermission" in directory))
@@ -3077,11 +3185,14 @@ class DirectoryStorage {
   charDbId;
   chatDbId;
   opfs;
-  constructor(directory, charDbId, chatDbId, opfs = false) {
+  chatOptions;
+  observed;
+  constructor(directory, charDbId, chatDbId, opfs = false, chatOptions = DEFAULT_CHAT_STORAGE_OPTIONS) {
     this.directory = directory;
     this.charDbId = charDbId;
     this.chatDbId = chatDbId;
     this.opfs = opfs;
+    this.chatOptions = chatOptions;
   }
   async target(create) {
     let directory = this.directory;
@@ -3092,16 +3203,35 @@ class DirectoryStorage {
   filename() {
     return databaseLocation(this.charDbId, this.chatDbId).file;
   }
-  async metadata() {
-    await this.permission();
-    const file = await (await (await this.target(false)).getFileHandle(this.filename(), { create: false })).getFile();
+  get developmentChat() {
+    return !!this.chatDbId && !this.opfs;
+  }
+  async files(directory) {
+    if (this.developmentChat)
+      return directoryChatFiles(directory, this.filename());
+    try {
+      return [await (await directory.getFileHandle(this.filename(), { create: false })).getFile()];
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "NotFoundError")
+        return [];
+      throw error;
+    }
+  }
+  fileMetadata(file) {
     return {
       directoryName: this.directory.name,
       name: file.name,
       size: file.size,
       lastModified: file.lastModified,
-      relativePath: databasePath(this.charDbId, this.chatDbId)
+      relativePath: [...databaseLocation(this.charDbId, this.chatDbId).directories, file.name].join("/")
     };
+  }
+  async metadata() {
+    await this.permission();
+    const file = (await this.files(await this.target(false)))[0];
+    if (!file)
+      throw new DOMException("数据库文件不存在。", "NotFoundError");
+    return this.fileMetadata(file);
   }
   async remove() {
     if (!isUuid(this.charDbId) || this.chatDbId !== undefined && !isUuid(this.chatDbId))
@@ -3118,24 +3248,26 @@ class DirectoryStorage {
         return;
       throw error;
     }
-    try {
-      await directory.removeEntry(this.filename());
-    } catch (error) {
-      if (!(error instanceof DOMException && error.name === "NotFoundError"))
+    for (const name of this.developmentChat ? [this.filename(), `${this.filename()}.br`] : [this.filename()]) {
+      try {
+        await directory.removeEntry(name);
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "NotFoundError"))
+          throw error;
+      }
+      try {
+        await directory.getFileHandle(name, { create: false });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "NotFoundError")
+          continue;
         throw error;
+      }
+      throw new ServiceError({
+        code: "RESULT_UNCONFIRMED",
+        resultState: "unconfirmed",
+        message: `文件删除后仍存在，清理结果尚未确认：${name}`
+      });
     }
-    try {
-      await directory.getFileHandle(this.filename(), { create: false });
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "NotFoundError")
-        return;
-      throw error;
-    }
-    throw new ServiceError({
-      code: "RESULT_UNCONFIRMED",
-      resultState: "unconfirmed",
-      message: "文件删除后仍存在，清理结果尚未确认。"
-    });
   }
   async permission() {
     if (this.opfs)
@@ -3148,45 +3280,91 @@ class DirectoryStorage {
   }
   async readSnapshot() {
     await this.permission();
-    let file;
+    let files;
     try {
-      file = await (await this.target(false)).getFileHandle(this.filename());
+      files = await this.files(await this.target(false));
     } catch (error) {
       if (error instanceof DOMException && error.name === "NotFoundError")
         return { bytes: null };
       throw error;
     }
-    const current = await file.getFile();
+    this.observed = new Map(files.map((file) => [file.name, file.lastModified]));
+    const current = files[0];
+    if (!current)
+      return { bytes: null };
+    const bytes = new Uint8Array(await current.arrayBuffer());
     return {
-      bytes: new Uint8Array(await current.arrayBuffer()),
-      metadata: {
-        directoryName: this.directory.name,
-        name: current.name,
-        size: current.size,
-        lastModified: current.lastModified,
-        relativePath: databasePath(this.charDbId, this.chatDbId)
-      }
+      bytes: this.chatDbId ? await decodeChatDatabase(bytes) : bytes,
+      metadata: this.fileMetadata(current)
     };
   }
   async assertExisting() {
     await this.permission();
-    const file = await (await this.target(false)).getFileHandle(this.filename(), { create: false });
-    if ((await file.getFile()).size === 0)
+    if (!(await this.metadata()).size)
       throw new Error("已有数据库文件为空。");
   }
   async write(bytes, options = {}) {
+    const compressed = this.chatOptions.compressed;
+    const quality = this.chatOptions.quality;
     await this.permission();
     const create = options.create === true;
-    const file = await (await this.target(create)).getFileHandle(this.filename(), { create });
-    const writer = await file.createWritable();
+    if (this.chatDbId && compressed)
+      bytes = await compressedBytes(bytes, quality);
+    const directory = await this.target(create);
+    const name = `${this.filename()}${this.developmentChat && compressed ? ".br" : ""}`;
+    let newTarget = false;
+    if (this.developmentChat) {
+      const files = await this.files(directory);
+      newTarget = !files.some((file) => file.name === name);
+      if (!create && !files.length)
+        throw new DOMException("数据库文件不存在。", "NotFoundError");
+      for (const file of files) {
+        if (this.observed?.get(file.name) !== file.lastModified)
+          throw new StorageWriteError(`文件在载入后已新增或修改，保留 ${this.fileMetadata(file).relativePath}；请重新加载后再保存。`, "not-saved");
+      }
+    }
+    const file = await directory.getFileHandle(name, { create: this.developmentChat || create });
+    const createdFile = newTarget ? await file.getFile() : undefined;
+    let writer;
     try {
+      writer = await file.createWritable();
       await writer.write(bytes);
       await writer.close();
     } catch (error) {
       try {
-        await writer.abort();
+        await writer?.abort();
       } catch {}
+      if (createdFile) {
+        try {
+          const current = await file.getFile();
+          if (current.size === 0 && current.lastModified === createdFile.lastModified)
+            await directory.removeEntry(name);
+        } catch (cleanupError) {
+          if (!(cleanupError instanceof DOMException && cleanupError.name === "NotFoundError"))
+            throw new Error(`${detail(error).message}；新建目标文件未能检查或清理：${this.fileMetadata(createdFile).relativePath}；${detail(cleanupError).message}`, { cause: error });
+        }
+      }
       throw error;
+    }
+    if (this.developmentChat) {
+      const other = name === this.filename() ? `${this.filename()}.br` : this.filename();
+      const baseline = this.observed;
+      try {
+        const written = await file.getFile();
+        this.observed = new Map([[name, written.lastModified]]);
+        const alternate = (await this.files(directory)).find((value) => value.name === other);
+        if (alternate) {
+          this.observed.set(other, alternate.lastModified);
+          if (baseline?.get(other) !== alternate.lastModified) {
+            this.observed.delete(other);
+            throw new Error("副本在保存期间已新增或修改，请重新加载后再保存。");
+          }
+          await directory.removeEntry(other);
+          this.observed.delete(other);
+        }
+      } catch (error) {
+        throw new StorageWriteError(`新库已保存，但副本已保留：${[...databaseLocation(this.charDbId, this.chatDbId).directories, other].join("/")}；${errorData(error).message}`, "saved", { cause: error });
+      }
     }
   }
 }
@@ -4116,6 +4294,24 @@ class EntityCoordinator {
         this.currentCoordinates.delete(key);
       }
   }
+  replaceChat(binding, entity, id, expectedId) {
+    return this.serialize(() => this.access(binding, async (records) => {
+      this.checkRename(binding, entity);
+      this.checkRename(binding, binding.characterEntity);
+      this.checkTarget(binding, id, true);
+      const key = chatKey(entity), old = reference(await records.get(key));
+      if (old && old.id !== expectedId)
+        fail("STALE_IDENTITY", "检查点身份在覆盖期间已改变，未重新登记。");
+      await records.put(key, {
+        id,
+        generation: (old?.generation ?? 0) + 1,
+        confirmed: true,
+        origin: "generated",
+        parent: binding.charDbId,
+        ...old?.referenceId ? { referenceId: old.referenceId } : {}
+      }, old ?? null);
+    }));
+  }
   candidate(binding, entity) {
     return this.access(binding, async (records) => {
       this.checkRename(binding, entity);
@@ -4516,443 +4712,6 @@ class EntityRenames {
   }
 }
 
-// src/worker/entity-deletions.ts
-var domain3 = (b) => JSON.stringify([b.storageId, b.configGeneration]);
-var stale = () => new ServiceError({
-  code: "STALE_IDENTITY",
-  resultKind: "identity",
-  resultState: "not-applied",
-  message: "原角色或聊天已删除，旧代理不能重新生成身份或创建数据库。"
-});
-function deletionTicket(task) {
-  return {
-    taskId: task.taskId,
-    operationId: task.operationId,
-    kind: task.chat ? "chat" : "char",
-    entity: task.entity,
-    stage: task.phase === "invalidated" ? "applied" : task.phase === "cancelled" ? "cancelled" : task.phase === "blocked" ? "unconfirmed" : "pending",
-    revision: task.revision,
-    credentials: task.credentials,
-    ...task.reference ? { expected: task.reference } : {},
-    ...task.deleteChats !== undefined ? { deleteChats: task.deleteChats } : {},
-    ...task.reason ? { reason: task.reason } : {}
-  };
-}
-
-class EntityDeletions {
-  storage;
-  changed;
-  tasks = new Map;
-  cleanups = new Map;
-  discoveries = new Map;
-  running = new Map;
-  scanning = new Map;
-  revisions = new Map;
-  tail = Promise.resolve();
-  constructor(storage, changed = () => {}) {
-    this.storage = storage;
-    this.changed = changed;
-  }
-  serialize(work) {
-    const next = this.tail.then(work);
-    this.tail = next.catch(() => {});
-    return next;
-  }
-  key(b, taskId) {
-    return `${domain3(b)}:${taskId}`;
-  }
-  revision(binding) {
-    return this.revisions.get(domain3(binding)) ?? 0;
-  }
-  inDomain(binding, key) {
-    return key.startsWith(`${domain3(binding)}:`);
-  }
-  isCleanupWaiting(binding, target) {
-    for (const [key, t] of this.cleanups)
-      if (this.inDomain(binding, key) && t.scope === target.scope && t.charDbId === target.charDbId && t.chatDbId === target.chatDbId && t.phase === "waiting")
-        return true;
-    return false;
-  }
-  updateCleanup(binding, task, phase, reason) {
-    const next = { ...task, phase };
-    delete next.reason;
-    if (reason)
-      next.reason = reason;
-    if (["done", "retained", "blocked"].includes(phase))
-      this.cleanups.delete(this.key(binding, task.taskId));
-    else
-      this.cleanups.set(this.key(binding, task.taskId), next);
-    return next;
-  }
-  forgetCleanups(binding, deletionTaskId) {
-    for (const [key, value] of this.cleanups)
-      if (this.inDomain(binding, key) && value.deletionTaskId === deletionTaskId)
-        this.cleanups.delete(key);
-  }
-  hasDeletedCoordinate(binding, entity, chat, generation) {
-    const c = coordinate(entity, chat);
-    for (const [key, t] of this.tasks)
-      if (this.inDomain(binding, key) && t.phase !== "cancelled" && t.revision > (binding.entityRevision ?? -1) && (t.entity === entity && t.chat === chat || chat && !t.chat && t.entity === c.avatar) && (generation === undefined || t.reference?.generation === generation))
-        return true;
-    return false;
-  }
-  matches(task, entity, chat) {
-    if (task.entity === entity && task.chat === chat)
-      return true;
-    return !task.chat && chat && coordinate(entity, true).avatar === task.entity;
-  }
-  assertEntity(binding, entity, chat = false) {
-    if (!entity)
-      return;
-    for (const [key, found] of this.discoveries)
-      if (key.startsWith(`${domain3(binding)}:`) && this.matches(found, entity, chat)) {
-        throw new ServiceError({
-          code: "ENTITY_DELETE_PENDING",
-          resultKind: "identity",
-          resultState: "not-applied",
-          deleteStage: "pending",
-          message: "原对象的删除正在核对，本次 SQL 未执行。"
-        });
-      }
-    for (const [key, task] of this.tasks) {
-      if (!key.startsWith(`${domain3(binding)}:`) || task.phase === "cancelled")
-        continue;
-      const generation = chat ? binding.chatIdentityGeneration : binding.identityGeneration;
-      const credential = task.credentials.some((c) => c.entity === entity && c.chat === chat && generation !== undefined && c.generation === generation && ((chat ? binding.chatReferenceId : binding.characterReferenceId) === undefined || c.referenceId === (chat ? binding.chatReferenceId : binding.characterReferenceId)));
-      const affected = this.matches(task, entity, chat) || credential;
-      if (!affected)
-        continue;
-      if (task.phase !== "invalidated")
-        throw new ServiceError({
-          code: task.phase === "blocked" ? "ENTITY_DELETE_UNCONFIRMED" : "ENTITY_DELETE_PENDING",
-          resultKind: "identity",
-          resultState: "not-applied",
-          deleteStage: task.phase === "blocked" ? "unconfirmed" : "pending",
-          message: "原对象的删除结果尚未核对，本次 SQL 未执行。"
-        });
-      if (credential || (binding.entityRevision ?? -1) < task.revision)
-        throw stale();
-    }
-  }
-  assertBinding(binding) {
-    this.assertEntity(binding, binding.characterEntity);
-    this.assertEntity(binding, binding.chatEntity, true);
-  }
-  async verify(binding, entity, chat = false) {
-    this.assertEntity(binding, entity, chat);
-    await this.storage.manageEntities(binding, async () => {
-      const generation = chat ? binding.chatIdentityGeneration : binding.identityGeneration;
-      if (this.hasDeletedCoordinate(binding, entity, chat, generation))
-        throw stale();
-    });
-  }
-  begin(kind, entity, operationId, deleteChats, binding) {
-    if (!["char", "chat"].includes(kind) || !isUuid(operationId) || deleteChats !== undefined && typeof deleteChats !== "boolean")
-      return Promise.reject(new ServiceError({ code: "INVALID_REQUEST", message: "删除通知参数无效。" }));
-    coordinate(entity, kind === "chat");
-    if (!binding)
-      return Promise.reject(new ServiceError({ code: "ENTITY_DELETE_PENDING", message: "请先授权原数据库目录。" }));
-    const discovery = this.key(binding, operationId);
-    this.discoveries.set(discovery, { entity, chat: kind === "chat" });
-    return this.serialize(() => this.storage.manageEntities(binding, async (records) => {
-      const task = await this.beginDeletion(binding, records, {
-        entity,
-        chat: kind === "chat",
-        operationId,
-        ...deleteChats !== undefined ? { deleteChats } : {}
-      });
-      this.revisions.set(domain3(binding), Math.max(this.revision(binding), task.revision));
-      this.tasks.set(this.key(binding, task.taskId), task);
-      const ticket = deletionTicket(task);
-      this.changed(binding, ticket);
-      return ticket;
-    })).finally(() => this.discoveries.delete(discovery));
-  }
-  async beginDeletion(binding, records, input) {
-    await records.ready();
-    const previous = this.tasks.get(this.key(binding, input.operationId));
-    if (previous)
-      return structuredClone(previous);
-    const found = await records.deletions.readDeletion(input);
-    return {
-      ...input,
-      taskId: input.operationId,
-      revision: this.revision(binding) + 1,
-      entity: found.entity,
-      ...found.reference ? { reference: found.reference } : {},
-      ...!input.chat ? { roleRecordId: found.roleRecordId } : {},
-      children: found.children,
-      credentials: found.credentials,
-      phase: "observed",
-      version: 1
-    };
-  }
-  pending(binding) {
-    return Promise.resolve([...this.tasks].filter(([key, t]) => key.startsWith(`${domain3(binding)}:`) && t.phase === "observed").map(([, t]) => deletionTicket(t)));
-  }
-  settle(input, binding) {
-    return this.serialize(async () => {
-      const key = this.key(binding, input.taskId), task = this.tasks.get(key);
-      if (!task || task.entity !== input.entity || task.chat !== (input.kind === "chat") || JSON.stringify(task.reference) !== JSON.stringify(input.expected))
-        throw stale();
-      try {
-        if (!input.confirmed)
-          throw new ServiceError({
-            code: "ENTITY_DELETE_UNCONFIRMED",
-            message: "酒馆删除结果无法确认，未清理数据库；请稍后扫描核对。"
-          });
-        if (!input.absent) {
-          if (task.chat ? input.observedId !== (task.reference?.id ?? null) : input.nativeResult !== "failed")
-            throw stale();
-          const ticket = { ...deletionTicket(task), stage: "cancelled" };
-          this.changed(binding, ticket);
-          return ticket;
-        }
-        const deletion = await this.storage.manageEntities(binding, async (records) => {
-          const cleanups = await records.deletions.settleDeletion(task, {
-            childrenDeleted: task.deleteChats === true && input.remainingChatNames?.length === 0
-          });
-          if (!cleanups)
-            return task;
-          const invalidated = { ...task, phase: "invalidated", version: task.version + 1 };
-          delete invalidated.reason;
-          for (const t of cleanups)
-            this.cleanups.set(this.key(binding, t.taskId), t);
-          return invalidated;
-        });
-        this.tasks.set(key, deletion);
-        const ticket = deletionTicket(deletion);
-        this.changed(binding, ticket);
-        const outcomes = await this.cleanup(binding);
-        if (outcomes.every((t) => t.phase === "done" || t.phase === "retained"))
-          await this.storage.manageEntities(binding, (records) => records.deletions.finishDeletion(deletion));
-        return ticket;
-      } finally {
-        await this.storage.manageEntities(binding, async () => {
-          this.tasks.delete(key);
-          this.forgetCleanups(binding, task.taskId);
-        }).catch(() => {});
-      }
-    });
-  }
-  cleanScan(input, binding) {
-    if (!input || !isUuid(input.operationId) || !input.expected || typeof input.removeRecord !== "boolean" || typeof input.removeFile !== "boolean" || !["char", "chat"].includes(input.expected.scope) || !Number.isSafeInteger(input.expected.referenceId) || input.expected.referenceId < 1 || !input.observation || !["deleted", "same", "unknown"].includes(input.observation.status) || input.parentDeleted !== undefined && input.parentDeleted !== true)
-      return Promise.reject(new ServiceError({ code: "INVALID_REQUEST", message: "扫描清理必须提供原记录、核对结果和确认范围。" }));
-    const request = structuredClone(input);
-    const work = this.serialize(async () => {
-      await this.running.get(domain3(binding));
-      const expected = request.expected;
-      const relativePath = expected.id ? databasePath(expected.scope === "char" ? expected.id : String(expected.parent), expected.scope === "chat" ? expected.id : undefined) : undefined;
-      const result = {
-        scope: expected.scope,
-        referenceId: expected.referenceId,
-        partial: true,
-        file: {
-          status: expected.id ? "blocked" : "none",
-          ...relativePath ? { relativePath } : {},
-          message: expected.id ? "数据库文件尚未清理。" : "原记录没有数据库文件编号。"
-        },
-        record: { status: "blocked", message: "原管理记录尚未删除。" }
-      };
-      const blocked = (message) => {
-        result.record.message = result.marked ? `${expected.scope === "char" ? "角色已标记为删除，其下聊天改为保留状态" : "聊天已标记为删除"}，这一修改已保存；${message}` : message;
-        if (result.file.status === "blocked")
-          result.file.message = message;
-        return result;
-      };
-      const parentDeleted = request.parentDeleted === true;
-      let current;
-      try {
-        current = await this.storage.manageEntities(binding, (records) => records.deletions.assertScanRecord(expected, true, parentDeleted));
-      } catch (error) {
-        if (errorData(error).code !== "STALE_IDENTITY")
-          throw error;
-        result.record = { status: "removed", message: "原记录已清理或对象已变化，请重新扫描。" };
-        result.file = { ...result.file, status: "none", message: "本次没有删除文件。" };
-        result.partial = false;
-        return result;
-      }
-      if (parentDeleted) {
-        const parent = expected.scope === "chat" && current.state !== "active" ? await this.storage.manageEntities(binding, (records) => records.deletions.scanRecord({ scope: "char", referenceId: expected.parentReferenceId })) : undefined;
-        if (parent?.state !== "deleted")
-          return blocked("所属角色尚未确认删除，未处理这个聊天。");
-      } else if (current.state !== "deleted" && request.observation.status !== "deleted")
-        return blocked("原酒馆文件没有确认不存在，请重新扫描核对。");
-      if (current.taskReasons.some((reason) => !reason.includes("数据库文件清理")))
-        return blocked(current.taskReasons.join("；"));
-      if (current.initialization === "creating")
-        return blocked("原数据库首次保存尚未确认，请先完成已有恢复操作。");
-      let local;
-      if (expected.id) {
-        local = await this.storage.scan(binding, {
-          operation: "file",
-          charDbId: expected.scope === "char" ? expected.id : expected.parent,
-          ...expected.scope === "chat" ? { chatDbId: expected.id } : {}
-        });
-        if (local.status === "unknown")
-          return blocked(local.reason ?? "无法确认原数据库文件。");
-        if (current.initialization === "never" && local.status === "exists")
-          return blocked("管理记录显示数据库从未创建，但本地已有文件，请核对来源；未删除文件和记录。");
-        if (parentDeleted && current.state !== "deleted" && current.initialization === "ready" && local.status === "missing")
-          return blocked("管理记录显示聊天数据库已创建，但本地文件不存在；保留这个聊天的记录。");
-        const protection = await this.storage.manageEntities(binding, (records) => records.deletions.protectionReferences({
-          scope: expected.scope,
-          charDbId: local.charDbId,
-          chatDbId: local.chatDbId
-        }));
-        const ownActive = current.state === "active" && current.confirmed ? 1 : 0, ownRetained = current.state === "retained" ? 1 : 0;
-        const shared = protection.active > ownActive || protection.retained > ownRetained || protection.unconfirmed > (current.state !== "deleted" && !current.confirmed ? 1 : 0);
-        if (local.status === "exists" && !request.removeFile && !shared)
-          return blocked("这个数据库文件目前没有共享引用，但本次确认范围没有允许删除文件，请重新扫描选择。");
-      }
-      const prepared = await this.storage.manageEntities(binding, async (records) => {
-        const result = await records.deletions.prepareScanDeletion(expected, request.operationId, parentDeleted, this.revision(binding) + 1);
-        if (result.cleanup)
-          this.cleanups.set(this.key(binding, result.cleanup.taskId), result.cleanup);
-        this.revisions.set(domain3(binding), result.deletion.revision);
-        return result;
-      });
-      this.tasks.set(this.key(binding, prepared.deletion.taskId), prepared.deletion);
-      this.changed(binding, deletionTicket(prepared.deletion));
-      if (current.state !== "deleted")
-        result.marked = true;
-      if (prepared.cleanup) {
-        const task = prepared.cleanup;
-        const target = {
-          storageId: binding.storageId,
-          configGeneration: binding.configGeneration,
-          scope: task.scope,
-          charDbId: task.charDbId,
-          ...task.chatDbId ? { chatDbId: task.chatDbId } : {}
-        };
-        const protection = await this.storage.manageEntities(binding, (records) => records.deletions.protectionReferences(target));
-        if (protection.active || protection.retained || protection.unconfirmed) {
-          result.file = {
-            ...result.file,
-            status: "shared",
-            message: "数据库文件仍被其他有效或保留对象使用，继续保留。"
-          };
-          await this.storage.manageEntities(binding, async () => this.updateCleanup(binding, task, "retained", "remaining-reference"));
-        } else if (!request.removeFile && local?.status === "exists")
-          return blocked("文件引用已改变，本次确认范围没有允许删除文件，请重新扫描。");
-        else {
-          const tasks = await this.cleanup(binding, task.taskId);
-          const outcome = tasks.find((row) => row.taskId === task.taskId);
-          if (outcome?.phase !== "done")
-            return blocked(outcome?.reason === "permission-required" ? "目录权限不足，文件未确认清理；请恢复授权后重试。" : outcome?.reason === "file-remove-failed" ? "数据库文件删除失败，保留管理记录，请重试。" : "原数据库保存或清理结果尚未确认，保留管理记录，请先核对原操作。");
-          result.file = {
-            ...result.file,
-            status: local?.status === "missing" ? "missing" : "removed",
-            message: local?.status === "missing" ? "数据库文件已确认不存在。" : "原数据库文件已精确删除。"
-          };
-        }
-      }
-      const after = await this.storage.manageEntities(binding, (records) => records.deletions.assertScanRecord(expected, true));
-      if (!request.removeRecord || after.parentDependency) {
-        result.record = {
-          status: "retained",
-          message: after.parentDependency ? "保留的聊天仍需要父角色记录定位，管理记录继续保留。" : "本次只确认清理数据库文件，管理记录继续保留。"
-        };
-        return result;
-      }
-      if (expected.scope === "char" && await this.storage.manageEntities(binding, (records) => records.deletions.hasScanChildren(expected.referenceId)))
-        return blocked("父角色下仍有未清理的聊天记录，请先清理所选聊天再处理角色记录。");
-      await this.storage.manageEntities(binding, (records) => records.deletions.purgeScanRecord(expected));
-      await this.storage.manageEntities(binding, async () => {});
-      result.record = { status: "removed", message: "原管理记录已删除并确认保存。" };
-      result.partial = false;
-      return result;
-    });
-    const id = domain3(binding);
-    this.scanning.set(id, work);
-    work.finally(async () => {
-      if (this.scanning.get(id) === work)
-        this.scanning.delete(id);
-      await this.storage.manageEntities(binding, async () => {
-        this.tasks.delete(this.key(binding, request.operationId));
-        this.forgetCleanups(binding, request.operationId);
-      });
-    }).catch(() => {});
-    return work;
-  }
-  resume(binding) {
-    const scanning = this.scanning.get(domain3(binding));
-    if (scanning)
-      return scanning.then(() => this.resume(binding), () => this.resume(binding));
-    const id = domain3(binding), previous = this.running.get(id);
-    if (previous)
-      return previous;
-    const work = this.cleanup(binding);
-    this.running.set(id, work);
-    work.finally(() => {
-      if (this.running.get(id) === work)
-        this.running.delete(id);
-    }).catch(() => {});
-    return work;
-  }
-  async cleanup(binding, selectedTaskId) {
-    const tasks = await this.storage.manageEntities(binding, async () => structuredClone([...this.cleanups].filter(([key]) => this.inDomain(binding, key)).map(([, task]) => task)));
-    const results = [];
-    for (let task of tasks) {
-      if (selectedTaskId && task.taskId !== selectedTaskId)
-        continue;
-      if (["done", "retained"].includes(task.phase)) {
-        results.push(task);
-        continue;
-      }
-      const target = {
-        storageId: binding.storageId,
-        configGeneration: binding.configGeneration,
-        scope: task.scope,
-        charDbId: task.charDbId,
-        ...task.chatDbId ? { chatDbId: task.chatDbId } : {}
-      };
-      const update = async (phase, reason) => {
-        task = await this.storage.manageEntities(binding, async () => this.updateCleanup(binding, task, phase, reason));
-      };
-      try {
-        const deletion = this.tasks.get(this.key(binding, task.deletionTaskId));
-        if (!deletion || deletion.phase !== "invalidated") {
-          await update("blocked", "invalidation-unconfirmed");
-          results.push(task);
-          continue;
-        }
-        const check = async (records) => {
-          const protection = await records.deletions.protectionReferences(target);
-          if (protection.active || protection.retained || protection.unconfirmed)
-            throw new ServiceError({ code: "IDENTITY_CONFLICT", message: "数据库仍有有效、保留或未确认引用。" });
-        };
-        const protection = await this.storage.manageEntities(binding, (records) => records.deletions.protectionReferences(target));
-        if (protection.active || protection.retained || protection.unconfirmed) {
-          await update("retained", "remaining-reference");
-          results.push(task);
-          continue;
-        }
-        this.storage.sealCleanup(target);
-        await this.storage.drainCleanup(target);
-        await this.storage.removeCleanupFile(target, check);
-        if (!selectedTaskId)
-          await this.storage.manageEntities(binding, (records) => records.deletions.finishCleanup(task));
-        await update("done");
-      } catch (error) {
-        await update("blocked", errorData(error).code === "PERMISSION_REQUIRED" ? "permission-required" : "file-remove-failed").catch(() => {});
-      } finally {
-        this.storage.releaseCleanup(target);
-      }
-      results.push(task);
-    }
-    return results;
-  }
-  assertSettled() {
-    if (this.discoveries.size || this.running.size || this.scanning.size)
-      throw new ServiceError({
-        code: "ENTITY_DELETE_UNCONFIRMED",
-        resultKind: "identity",
-        message: "删除记录或文件清理仍在进行，尚不能确认安全排空。"
-      });
-  }
-}
-
 // src/core/sqlite-errors.ts
 var captured = new WeakSet;
 
@@ -5221,6 +4980,34 @@ class SingleDatabase {
   drain() {
     return this.enqueue(async () => {});
   }
+  committedSnapshot(beforeExport) {
+    return this.enqueue(async () => {
+      const db = this.ready();
+      beforeExport?.();
+      const bytes = db.export();
+      this.configure(db);
+      return bytes;
+    });
+  }
+  createFromSnapshot(bytes, marker, prepare = () => []) {
+    return this.enqueue(async () => {
+      if (await this.storage.read())
+        throw new Error("分支数据库位置已有文件，拒绝覆盖。");
+      const copy = new this.SQL.Database(bytes);
+      wrapSQLiteErrors(copy);
+      this.configure(copy);
+      try {
+        copy.run("BEGIN");
+        this.storeInitialization(copy, marker);
+        for (const command of prepare(copy))
+          this.executeCommand(copy, command);
+        copy.run("COMMIT");
+        await this.persist(copy, true, true);
+      } finally {
+        copy.close();
+      }
+    });
+  }
   async waitForMaintenanceSave(timeoutMs = 1e4) {
     const deadline = Date.now() + timeoutMs;
     const timeout = () => new ServiceError({
@@ -5353,20 +5140,26 @@ class SingleDatabase {
         businessResult: management ? "not-started" : "not-saved"
       }, "export", "not-saved");
     }
+    let savedFailure;
     try {
       await this.storage.write(bytes, { create });
     } catch (error) {
-      if (management)
-        this.disable();
-      throw new PersistenceFailure({
-        code: "RESULT_UNCONFIRMED",
-        failureKind: "service",
-        message: `保存失败，无法确认修改是否落盘：${detail(error).message}`,
-        saveError: detail(error),
-        businessResult: management ? "not-started" : "unknown",
-        resultState: "unconfirmed",
-        retryable: false
-      }, "write", "unknown");
+      if (error instanceof StorageWriteError && error.fileState === "saved")
+        savedFailure = error;
+      else {
+        if (management)
+          this.disable();
+        const notSaved = error instanceof StorageWriteError && error.fileState === "not-saved";
+        throw new PersistenceFailure({
+          code: notSaved ? "SAVE_FAILED" : "RESULT_UNCONFIRMED",
+          failureKind: "service",
+          message: notSaved ? detail(error).message : `保存失败，无法确认修改是否落盘：${detail(error).message}`,
+          saveError: detail(error),
+          businessResult: management ? "not-started" : notSaved ? "not-saved" : "unknown",
+          resultState: notSaved ? "not-applied" : "unconfirmed",
+          retryable: false
+        }, "write", notSaved ? "not-saved" : "unknown");
+      }
     }
     this.transient = false;
     this.markUnsaved(false);
@@ -5384,6 +5177,15 @@ class SingleDatabase {
         ...management ? {} : { databasePersisted: true }
       }, "metadata", "saved");
     }
+    if (savedFailure)
+      throw new PersistenceFailure({
+        code: "SAVE_FAILED",
+        failureKind: "service",
+        message: savedFailure.message,
+        saveError: detail(savedFailure),
+        businessResult: management ? "not-started" : "saved",
+        databasePersisted: true
+      }, "write", "saved");
   }
   cancelPendingSave() {
     clearTimeout(this.saveTimer);
@@ -5469,7 +5271,7 @@ class SingleDatabase {
         return false;
       try {
         const current = await this.storage.metadata();
-        if (current.lastModified <= this.fileBaseline.lastModified && current.size === this.fileBaseline.size)
+        if (current.lastModified === this.fileBaseline.lastModified && current.size === this.fileBaseline.size && current.relativePath === this.fileBaseline.relativePath)
           return false;
         await this.load("existing");
         return true;
@@ -5517,7 +5319,7 @@ class SingleDatabase {
       this.state = "ready";
       this.savesSealed = false;
     } catch (error) {
-      this.loadFailure = phase;
+      this.loadFailure = error instanceof ChatDatabaseDecodeError ? "database" : phase;
       this.disable();
       if (error instanceof ServiceError)
         throw error;
@@ -5983,6 +5785,979 @@ class SingleDatabase {
   }
 }
 
+// src/dvs2/ext/tables/ids.ts
+function identifierBytes(value) {
+  if (!ArrayBuffer.isView(value) || Object.prototype.toString.call(value) !== "[object Uint8Array]" || value.byteLength !== 16)
+    throw new Error("DVS 标识必须是 16 字节 BLOB。");
+  return new Uint8Array(value);
+}
+function hex(value) {
+  return [...identifierBytes(value)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+function formatUuid(value) {
+  const text = hex(value);
+  return `${text.slice(0, 8)}-${text.slice(8, 12)}-${text.slice(12, 16)}-${text.slice(16, 20)}-${text.slice(20)}`;
+}
+function parseUuid(value) {
+  if (typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))
+    throw new Error("DVS 消息标识必须是 UUID 字符串。");
+  return new Uint8Array(value.replaceAll("-", "").match(/../g).map((byte) => parseInt(byte, 16)));
+}
+function uuidV7() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  let time = Date.now();
+  for (let index = 5;index >= 0; index--) {
+    bytes[index] = time % 256;
+    time = Math.floor(time / 256);
+  }
+  bytes[6] = bytes[6] & 15 | 112;
+  bytes[8] = bytes[8] & 63 | 128;
+  return bytes;
+}
+function blobLiteral(value) {
+  return `X'${hex(value)}'`;
+}
+
+// src/dvs2/ext/tables/sql.ts
+function quoteIdentifier(value) {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+function sqlLiteral(value) {
+  if (value === null)
+    return "NULL";
+  if (typeof value === "string")
+    return `'${value.replaceAll("'", "''")}'`;
+  if (typeof value === "number" && Number.isFinite(value))
+    return String(value);
+  if (value instanceof Uint8Array)
+    return blobLiteral(value);
+  throw new Error("不能将该值写入 DVS SQL 字面量。");
+}
+function captureValue(value) {
+  return serializeBinds([value])[0];
+}
+function copyValues(values) {
+  return Object.fromEntries(Object.entries(values).map(([name, value]) => [name, value instanceof Uint8Array ? value.slice() : value]));
+}
+function sameValue(a, b) {
+  return a instanceof Uint8Array && b instanceof Uint8Array ? a.length === b.length && a.every((value, index) => value === b[index]) : a === b;
+}
+function managementCommands(operation, fid) {
+  const { kind, schema, oldRid, newRid, values } = operation;
+  const table = quoteIdentifier(schema.name), index = quoteIdentifier(schema.indexName), commands = [];
+  if (kind !== "insert")
+    commands.push({
+      kind: "check",
+      sql: `SELECT CASE WHEN (SELECT count(*) FROM ${index} AS idx JOIN ${table} AS data ON data.rid = idx.rid WHERE idx.fid = ? AND idx.rid = ?) = 1 THEN 1 ELSE 0 END`,
+      binds: [fid, oldRid]
+    });
+  if (kind === "remove") {
+    commands.push({
+      kind: "write",
+      sql: `DELETE FROM ${index} WHERE fid = ? AND rid = ?`,
+      binds: [fid, oldRid],
+      expectChanges: 1
+    });
+    return commands;
+  }
+  const columns = Object.keys(values);
+  if (kind === "insert")
+    commands.push({
+      kind: "write",
+      sql: `INSERT INTO ${table} (${["rid", ...columns].map(quoteIdentifier).join(",")}) VALUES (${["rid", ...columns].map(() => "?").join(",")})`,
+      binds: [newRid, ...columns.map((name) => values[name])],
+      expectChanges: 1
+    });
+  else {
+    const writable = schema.columns.filter((column) => column.hidden === 0 && column.name !== "rid");
+    commands.push({
+      kind: "write",
+      sql: `INSERT INTO ${table} (${["rid", ...writable.map((column) => column.name)].map(quoteIdentifier).join(",")}) SELECT ?,${writable.map((column) => Object.hasOwn(values, column.name) ? "?" : `data.${quoteIdentifier(column.name)}`).join(",")} FROM ${table} AS data WHERE data.rid = ?`,
+      binds: [
+        newRid,
+        ...writable.filter((column) => Object.hasOwn(values, column.name)).map((column) => values[column.name]),
+        oldRid
+      ],
+      expectChanges: 1
+    });
+  }
+  commands.push({
+    kind: "check",
+    sql: `SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM ${table} AS fresh JOIN ${table} AS data ON ${schema.keys.map((key) => `fresh.${quoteIdentifier(key)} IS data.${quoteIdentifier(key)}`).join(" AND ")} JOIN ${index} AS idx ON idx.rid = data.rid WHERE fresh.rid = ? AND idx.fid = ?${kind === "update" ? " AND data.rid != ?" : ""}) THEN 1 ELSE 0 END`,
+    binds: kind === "update" ? [newRid, fid, oldRid] : [newRid, fid]
+  });
+  commands.push(kind === "insert" ? { kind: "write", sql: `INSERT INTO ${index} (fid,rid) VALUES (?,?)`, binds: [fid, newRid], expectChanges: 1 } : {
+    kind: "write",
+    sql: `UPDATE ${index} SET rid = ? WHERE fid = ? AND rid = ?`,
+    binds: [newRid, fid, oldRid],
+    expectChanges: 1
+  });
+  return commands;
+}
+
+// src/dvs2/ext/tables/schema.ts
+function validateVirtualTables(input, realKeys) {
+  const result = Object.create(null);
+  if (input === undefined)
+    return result;
+  if (!input || typeof input !== "object" || Array.isArray(input))
+    throw new Error("DVS virtualTables 必须是表名与虚拟表声明。");
+  const seen = new Set(Object.keys(realKeys).map((name) => name.toLowerCase()));
+  const validName = (name) => name.trim() && !["rid", "fid"].includes(name.toLowerCase()) && !name.toLowerCase().startsWith("_dvs_") && !name.toLowerCase().startsWith("__stsh_");
+  for (const [name, declaration] of Object.entries(input)) {
+    if (!validName(name) || seen.has(name.toLowerCase()))
+      throw new Error(`DVS 虚拟表名称无效或冲突：${name}`);
+    seen.add(name.toLowerCase());
+    if (!declaration || !Array.isArray(declaration.keys) || !declaration.fields || typeof declaration.fields !== "object" || Array.isArray(declaration.fields))
+      throw new Error(`DVS 虚拟表 ${name} 需要 keys 和 fields。`);
+    const entries = Object.entries(declaration.fields), fields = Object.create(null);
+    const names = new Set;
+    if (!entries.length)
+      throw new Error(`DVS 虚拟表 ${name} 必须声明字段。`);
+    for (const [field, type] of entries) {
+      if (!validName(field) || names.has(field.toLowerCase()) || !["string", "number", "boolean", "array", "object", "null"].includes(type))
+        throw new Error(`DVS 虚拟表 ${name} 字段或 JSON 类型无效：${field}`);
+      names.add(field.toLowerCase());
+      fields[field] = type;
+    }
+    if (new Set(declaration.keys).size !== declaration.keys.length || declaration.keys.some((key) => typeof key !== "string" || !Object.hasOwn(fields, key) || !["string", "number"].includes(fields[key])))
+      throw new Error(`DVS 虚拟表 ${name} 的定位键必须是已声明的 string 或 number 字段，且不能重复。`);
+    result[name] = { keys: [...declaration.keys], fields };
+  }
+  return result;
+}
+function requestSchemas(real, virtualTables) {
+  const virtual = validateVirtualTables(virtualTables, Object.fromEntries(Object.values(real).map((schema) => [schema.name, schema.keys])));
+  return Object.assign(Object.create(null), real, Object.fromEntries(Object.entries(virtual).map(([name, declaration]) => [
+    name,
+    {
+      name,
+      keys: [...declaration.keys],
+      virtual: true,
+      columns: Object.entries(declaration.fields).map(([name, type]) => ({ name, type, hidden: 0 }))
+    }
+  ])));
+}
+var DVS_EXT_VERSION_TABLE_SQL = 'CREATE TABLE IF NOT EXISTS "_dvs_ext_version" (key TEXT PRIMARY KEY NOT NULL, version TEXT NOT NULL)';
+var DVS_VERSION_TABLE_SQL = 'CREATE TABLE IF NOT EXISTS "_dvs_version" (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version TEXT NOT NULL)';
+var DVS_GC_COUNTER_TABLE_SQL = `CREATE TABLE "_dvs_gc_counter" (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), successful_updates INTEGER NOT NULL CHECK (typeof(successful_updates) = 'integer' AND successful_updates >= 0))`;
+function indexTableName(name) {
+  return `_dvs_index_${name}`;
+}
+function createIndexSql(name) {
+  return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(indexTableName(name))} (fid BLOB NOT NULL CHECK (typeof(fid) = 'blob' AND length(fid) = 16), rid BLOB NOT NULL CHECK (typeof(rid) = 'blob' AND length(rid) = 16), PRIMARY KEY (fid,rid)) WITHOUT ROWID`;
+}
+function validateUniqueKeys(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input))
+    throw new Error("DVS uniqueKeys 必须是表名与业务键声明。");
+  const result = Object.create(null), seen = new Set;
+  for (const [name, keys] of Object.entries(input)) {
+    const folded = name.toLowerCase();
+    if (!name.trim() || folded.startsWith("_dvs_") || folded.startsWith("__stsh_") || seen.has(folded))
+      throw new Error(`DVS 业务表名称无效或冲突：${name}`);
+    seen.add(folded);
+    if (!Array.isArray(keys) || !keys.length || keys.some((key) => typeof key !== "string" || !key.trim() || key.toLowerCase() === "rid" || key.toLowerCase().startsWith("_dvs_")) || new Set(keys.map((key) => key.toLowerCase())).size !== keys.length)
+      throw new Error(`DVS 表 ${name} 必须声明不重复的完整业务键。`);
+    result[name] = [...keys];
+  }
+  return result;
+}
+async function columns(helper, name) {
+  const result = await helper.query('SELECT name,type,"notnull",pk,hidden FROM pragma_table_xinfo(?)', [name]);
+  return result.rows.map((row) => ({
+    name: String(row[0]),
+    type: String(row[1]),
+    notnull: Number(row[2]),
+    pk: Number(row[3]),
+    hidden: Number(row[4])
+  }));
+}
+async function inspectSchemas(helper, uniqueKeys) {
+  const declaration = validateUniqueKeys(uniqueKeys), result = Object.create(null);
+  for (const [name, keys] of Object.entries(declaration)) {
+    const fields = await columns(helper, name), rid = fields.find((column) => column.name === "rid");
+    if (!rid || rid.pk !== 1 || rid.hidden !== 0 || fields.filter((column) => column.pk).length !== 1)
+      throw new Error(`DVS 表 ${name} 的 rid 必须是普通列和单列主键。`);
+    for (const key of keys)
+      if (!fields.some((column) => column.name === key))
+        throw new Error(`DVS 表 ${name} 缺少业务键字段：${key}`);
+    const indexName = indexTableName(name);
+    result[name] = { name, indexName, keys: [...keys], columns: fields };
+  }
+  return result;
+}
+
+// src/worker/scan.ts
+var missing = (error) => error instanceof DOMException && error.name === "NotFoundError";
+var targetKey = (scope, char, chat) => JSON.stringify([scope, char, chat ?? ""]);
+function assertTarget(charDbId, chatDbId) {
+  if (!isUuid(charDbId) || chatDbId !== undefined && !isUuid(chatDbId))
+    throw new ServiceError({ code: "INVALID_REQUEST", message: "扫描文件必须指定有效的角色或聊天数据库编号。" });
+}
+async function scanRecords(root, directoryName) {
+  const snapshot = {
+    directoryName,
+    management: "unreadable",
+    differences: [],
+    rootReadable: false,
+    records: [],
+    targets: [],
+    issues: []
+  };
+  try {
+    if (root.availability !== "ready")
+      throw new Error("管理数据库尚未恢复，请先完成现有恢复操作。");
+    await root.assertFileExisting();
+    const inspection = await inspectSchema6(root);
+    if (inspection.state !== "valid") {
+      snapshot.management = inspection.state;
+      snapshot.differences = inspection.differences;
+      return snapshot;
+    }
+    const query = async (sql) => (await root.query({ sql })).rows;
+    const version = Number(JSON.parse(String((await query(`SELECT value FROM ${META} WHERE key='schema_version'`))[0]?.[0])));
+    snapshot.schemaVersion = version;
+    const targets = await query(`SELECT scope,char_dbid,chat_dbid,origin,state FROM ${TARGETS}`);
+    for (const row of targets) {
+      const scope = String(row[0]), charDbId = String(row[1]), chatDbId = String(row[2]), origin = String(row[3]), state = String(row[4]);
+      if (!["char", "chat"].includes(scope) || !isUuid(charDbId) || (scope === "chat" ? !isUuid(chatDbId) : chatDbId !== "") || !["generated", "legacy"].includes(origin) || !["never", "creating", "ready"].includes(state))
+        throw new Error("数据库初始化记录字段无效。");
+      snapshot.targets.push({
+        scope,
+        charDbId,
+        ...chatDbId ? { chatDbId } : {},
+        origin,
+        state
+      });
+    }
+    const initialization = new Map(snapshot.targets.map((target) => [targetKey(target.scope, target.charDbId, target.chatDbId), target.state]));
+    const roles = await query(`SELECT role_id,avatar_name,char_dbid,state,generation,confirmed,origin FROM ${ROLES} ORDER BY role_id`);
+    const chats = await query(`SELECT chat_id,role_id,file_name,chat_dbid,parent_char_dbid,state,generation,confirmed,origin FROM ${CHATS} ORDER BY chat_id`);
+    for (const row of roles)
+      snapshot.records.push({
+        scope: "char",
+        referenceId: Number(row[0]),
+        avatar: String(row[1]),
+        id: row[2] === null ? null : String(row[2]),
+        state: row[3],
+        generation: Number(row[4]),
+        confirmed: row[5] === 1,
+        origin: row[6],
+        taskReasons: [],
+        parentDependency: chats.some((chat) => chat[1] === row[0] && chat[5] !== "deleted"),
+        shared: false
+      });
+    for (const row of chats) {
+      const role = roles.find((role) => role[0] === row[1]);
+      if (!role)
+        throw new Error("聊天记录缺少对应角色记录。");
+      snapshot.records.push({
+        scope: "chat",
+        referenceId: Number(row[0]),
+        parentReferenceId: Number(row[1]),
+        avatar: String(role[1]),
+        file: String(row[2]),
+        id: row[3] === null ? null : String(row[3]),
+        parent: String(row[4]),
+        state: row[5],
+        generation: Number(row[6]),
+        confirmed: row[7] === 1,
+        origin: row[8],
+        taskReasons: [],
+        parentDependency: false,
+        shared: false
+      });
+    }
+    for (const record of snapshot.records) {
+      if (!Number.isSafeInteger(record.referenceId) || record.referenceId < 1 || !record.avatar || record.id !== null && !isUuid(record.id) || record.scope === "chat" && (!isUuid(record.parent) || !record.file) || !["active", "retained", "deleted"].includes(record.state))
+        throw new Error("角色或聊天管理记录字段无效。");
+      if (record.id)
+        record.initialization = initialization.get(targetKey(record.scope, record.scope === "char" ? record.id : record.parent, record.scope === "chat" ? record.id : undefined));
+      record.shared = record.id !== null && snapshot.records.some((other) => other !== record && other.scope === record.scope && other.state !== "deleted" && other.id === record.id && other.parent === record.parent);
+    }
+    snapshot.rootReadable = true;
+    snapshot.management = "valid";
+  } catch (error) {
+    snapshot.management = "unreadable";
+    snapshot.rootReadable = false;
+    snapshot.records = [];
+    snapshot.targets = [];
+    snapshot.issues.push({ relativePath: GLOBAL_DATABASE, reason: detail(error).message });
+  }
+  return snapshot;
+}
+async function readScanBasis(root) {
+  const rows = async (sql) => (await root.query({ sql })).rows.map((row) => row.map(String));
+  const chats = await rows(`SELECT parent_char_dbid,coalesce(chat_dbid,'') FROM ${CHATS}`);
+  return {
+    roles: (await rows(`SELECT char_dbid FROM ${ROLES} WHERE char_dbid IS NOT NULL`)).map((row) => row[0]),
+    chats: chats.filter((row) => row[1]).map((row) => [row[0], row[1]]),
+    chatParents: chats.map((row) => row[0]),
+    targets: (await rows(`SELECT scope,char_dbid,chat_dbid FROM ${TARGETS}`)).map(([scope, charDbId, chatDbId]) => ({
+      scope,
+      charDbId,
+      ...chatDbId ? { chatDbId } : {}
+    }))
+  };
+}
+async function scanFile(directory, charDbId, chatDbId) {
+  assertTarget(charDbId, chatDbId);
+  const file = {
+    charDbId,
+    ...chatDbId ? { chatDbId } : {},
+    relativePath: databasePath(charDbId, chatDbId),
+    status: "unknown"
+  };
+  try {
+    const metadata = await createStorage(directory, charDbId, chatDbId).metadata();
+    file.relativePath = metadata.relativePath;
+    file.size = metadata.size;
+    return {
+      ...file,
+      relativePath: metadata.relativePath,
+      status: "exists",
+      size: metadata.size,
+      ...chatDbId ? { format: await chatFileFormat(directory, metadata.relativePath) } : {}
+    };
+  } catch (error) {
+    return {
+      ...file,
+      status: missing(error) ? "missing" : "unknown",
+      ...missing(error) ? {} : { reason: detail(error).message }
+    };
+  }
+}
+async function chatFileFormat(source, relativePath) {
+  let header;
+  if (indexedDbSource(source))
+    header = (await readStorageFile(source, relativePath)).bytes.subarray(0, 16);
+  else {
+    const parts = relativePath.split("/");
+    let directory = storageDirectory(source);
+    for (const part of parts.slice(0, -1))
+      directory = await directory.getDirectoryHandle(part, { create: false });
+    const file = await (await directory.getFileHandle(parts.at(-1), { create: false })).getFile();
+    header = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+  }
+  return header.length === 16 && String.fromCharCode(...header) === SQLITE_HEADER ? "sqlite" : "brotli";
+}
+function matchesScanFile(file, expectedFile, expectedFileFormat) {
+  if (expectedFile === undefined)
+    return true;
+  if (expectedFile === "")
+    return file.status === "missing";
+  return file.status === "exists" && file.relativePath === expectedFile && (expectedFileFormat === undefined || file.format === expectedFileFormat);
+}
+function chatCandidate(source, path) {
+  const part = parseDatabasePath(path, "file");
+  const development = !indexedDbSource(source) && !(("mode" in source) && source.mode === "opfs");
+  return part?.kind === "chat" && (development || !path.endsWith(".br"));
+}
+async function entries2(directory) {
+  const result = [];
+  for await (const item of directory.entries())
+    result.push(item);
+  return result;
+}
+var SQLITE_HEADER = "SQLite format 3\x00";
+async function scanInventory(directory) {
+  const result = {
+    mode: "mode" in directory ? directory.mode ?? "directory" : "directory",
+    entries: [],
+    issues: []
+  };
+  if (indexedDbSource(directory)) {
+    try {
+      const directories = new Set;
+      for (const path of (await indexedDbFileKeys()).sort()) {
+        const parts = path.split("/");
+        for (let i = 1;i < parts.length; i++)
+          directories.add(parts.slice(0, i).join("/"));
+        const item = { relativePath: path, kind: "file" };
+        result.entries.push(item);
+        try {
+          const file = await readStorageFile(directory, path);
+          item.size = file.size;
+          const header = file.bytes.subarray(0, 16);
+          item.sqlite = header.length === 16 && String.fromCharCode(...header) === SQLITE_HEADER;
+          if (chatCandidate(directory, path))
+            item.format = item.sqlite ? "sqlite" : "brotli";
+        } catch (error) {
+          item.reason = detail(error).message;
+        }
+      }
+      result.entries.push(...[...directories].map((relativePath) => ({ relativePath, kind: "directory" })));
+      result.entries.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+    } catch (error) {
+      result.issues.push({ relativePath: "", reason: detail(error).message });
+    }
+    return result;
+  }
+  const walk = async (handle, prefix, entry) => {
+    let children;
+    try {
+      children = await entries2(handle);
+    } catch (error) {
+      const reason = detail(error).message;
+      if (entry)
+        entry.reason = reason;
+      result.issues.push({ relativePath: prefix, reason });
+      return;
+    }
+    children.sort((a, b) => a[0].localeCompare(b[0]));
+    for (const [name, child] of children) {
+      const relativePath = prefix ? `${prefix}/${name}` : name;
+      if (child.kind === "file" && isTemporaryFileName(name)) {
+        if (entry)
+          entry.temporary = true;
+        continue;
+      }
+      if (child.kind === "directory") {
+        const item = { relativePath, kind: "directory" };
+        result.entries.push(item);
+        await walk(child, relativePath, item);
+        continue;
+      }
+      const item = { relativePath, kind: "file" };
+      result.entries.push(item);
+      try {
+        const file = await child.getFile();
+        item.size = file.size;
+        const header = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+        item.sqlite = header.length === 16 && String.fromCharCode(...header) === SQLITE_HEADER;
+        if (chatCandidate(directory, relativePath)) {
+          item.format = item.sqlite ? "sqlite" : "brotli";
+          if (!(("mode" in directory) && directory.mode === "opfs"))
+            item.lastModified = file.lastModified;
+        }
+      } catch (error) {
+        item.reason = detail(error).message;
+      }
+    }
+  };
+  await walk(storageDirectory(directory), "");
+  return result;
+}
+async function scanDatabase(db, directory, charDbId, chatDbId) {
+  const file = await scanFile(directory, charDbId, chatDbId);
+  const result = {
+    charDbId,
+    ...chatDbId ? { chatDbId } : {},
+    relativePath: file.relativePath,
+    ...file.format ? { format: file.format } : {},
+    status: file.status === "exists" ? "checked" : file.status,
+    ...file.reason ? { reason: file.reason } : {},
+    meta: "absent",
+    dvs: []
+  };
+  if (result.status !== "checked")
+    return result;
+  try {
+    await db.openExisting();
+    const rows = async (sql, binds = []) => (await db.query({ sql, binds })).rows;
+    const tables = new Map((await rows("SELECT name,sql FROM sqlite_master WHERE type='table'")).map((row) => [
+      String(row[0]),
+      String(row[1])
+    ]));
+    const meta = tables.get("__stsh_meta");
+    if (meta !== undefined) {
+      result.meta = sameDefinition(meta, SCOPED_META_TABLE_SQL) ? "valid" : "invalid";
+      try {
+        const identity = (await rows("SELECT value FROM __stsh_meta WHERE key='identity'"))[0];
+        if (identity) {
+          const value = JSON.parse(String(identity[0]));
+          result.identity = value && typeof value === "object" && typeof value.scope === "string" && typeof value.charDbId === "string" && (value.chatDbId === undefined || typeof value.chatDbId === "string") ? {
+            scope: value.scope,
+            charDbId: value.charDbId,
+            ...value.chatDbId !== undefined ? { chatDbId: value.chatDbId } : {}
+          } : "invalid";
+        }
+      } catch {
+        result.identity = "invalid";
+      }
+    }
+    if ([...tables.keys()].some((name) => name.startsWith("_dvs_"))) {
+      for (const [name, sql] of [
+        ["_dvs_version", DVS_VERSION_TABLE_SQL],
+        ["_dvs_gc_counter", DVS_GC_COUNTER_TABLE_SQL]
+      ]) {
+        const stored = tables.get(name);
+        if (stored === undefined)
+          result.dvs.push(`缺少 DVS 系统表 ${name}。`);
+        else if (!sameDefinition(stored, sql))
+          result.dvs.push(`DVS 系统表 ${name} 的定义与当前版本不同。`);
+      }
+      const extVersion = tables.get("_dvs_ext_version");
+      if (extVersion !== undefined && !sameDefinition(extVersion, DVS_EXT_VERSION_TABLE_SQL))
+        result.dvs.push("DVS 系统表 _dvs_ext_version 的定义与当前版本不同。");
+      for (const [name, sql] of tables)
+        if (name.startsWith("_dvs_index_") && !sameDefinition(sql, createIndexSql(name.slice("_dvs_index_".length))))
+          result.dvs.push(`DVS 索引表 ${name} 的定义与当前版本不同。`);
+    }
+  } catch (error) {
+    result.status = "unknown";
+    result.reason = detail(error).message;
+    result.failure = db.loadFailureStage ?? "database";
+  }
+  return result;
+}
+async function readScanFile(directory, relativePath) {
+  const segments = checkRelativePath(relativePath, "read");
+  if (typeof segments === "string")
+    throw new ServiceError({ code: "INVALID_REQUEST", message: segments });
+  return readStorageFile(directory, relativePath);
+}
+
+// src/worker/entity-deletions.ts
+var domain3 = (b) => JSON.stringify([b.storageId, b.configGeneration]);
+var stale = () => new ServiceError({
+  code: "STALE_IDENTITY",
+  resultKind: "identity",
+  resultState: "not-applied",
+  message: "原角色或聊天已删除，旧代理不能重新生成身份或创建数据库。"
+});
+function deletionTicket(task) {
+  return {
+    taskId: task.taskId,
+    operationId: task.operationId,
+    kind: task.chat ? "chat" : "char",
+    entity: task.entity,
+    stage: task.phase === "invalidated" ? "applied" : task.phase === "cancelled" ? "cancelled" : task.phase === "blocked" ? "unconfirmed" : "pending",
+    revision: task.revision,
+    credentials: task.credentials,
+    ...task.reference ? { expected: task.reference } : {},
+    ...task.deleteChats !== undefined ? { deleteChats: task.deleteChats } : {},
+    ...task.reason ? { reason: task.reason } : {}
+  };
+}
+
+class EntityDeletions {
+  storage;
+  changed;
+  tasks = new Map;
+  cleanups = new Map;
+  discoveries = new Map;
+  running = new Map;
+  scanning = new Map;
+  revisions = new Map;
+  tail = Promise.resolve();
+  constructor(storage, changed = () => {}) {
+    this.storage = storage;
+    this.changed = changed;
+  }
+  serialize(work) {
+    const next = this.tail.then(work);
+    this.tail = next.catch(() => {});
+    return next;
+  }
+  key(b, taskId) {
+    return `${domain3(b)}:${taskId}`;
+  }
+  revision(binding) {
+    return this.revisions.get(domain3(binding)) ?? 0;
+  }
+  inDomain(binding, key) {
+    return key.startsWith(`${domain3(binding)}:`);
+  }
+  isCleanupWaiting(binding, target) {
+    for (const [key, t] of this.cleanups)
+      if (this.inDomain(binding, key) && t.scope === target.scope && t.charDbId === target.charDbId && t.chatDbId === target.chatDbId && t.phase === "waiting")
+        return true;
+    return false;
+  }
+  updateCleanup(binding, task, phase, reason) {
+    const next = { ...task, phase };
+    delete next.reason;
+    if (reason)
+      next.reason = reason;
+    if (["done", "retained", "blocked"].includes(phase))
+      this.cleanups.delete(this.key(binding, task.taskId));
+    else
+      this.cleanups.set(this.key(binding, task.taskId), next);
+    return next;
+  }
+  forgetCleanups(binding, deletionTaskId) {
+    for (const [key, value] of this.cleanups)
+      if (this.inDomain(binding, key) && value.deletionTaskId === deletionTaskId)
+        this.cleanups.delete(key);
+  }
+  hasDeletedCoordinate(binding, entity, chat, generation) {
+    const c = coordinate(entity, chat);
+    for (const [key, t] of this.tasks)
+      if (this.inDomain(binding, key) && t.phase !== "cancelled" && t.revision > (binding.entityRevision ?? -1) && (t.entity === entity && t.chat === chat || chat && !t.chat && t.entity === c.avatar) && (generation === undefined || t.reference?.generation === generation))
+        return true;
+    return false;
+  }
+  matches(task, entity, chat) {
+    if (task.entity === entity && task.chat === chat)
+      return true;
+    return !task.chat && chat && coordinate(entity, true).avatar === task.entity;
+  }
+  assertEntity(binding, entity, chat = false) {
+    if (!entity)
+      return;
+    for (const [key, found] of this.discoveries)
+      if (key.startsWith(`${domain3(binding)}:`) && this.matches(found, entity, chat)) {
+        throw new ServiceError({
+          code: "ENTITY_DELETE_PENDING",
+          resultKind: "identity",
+          resultState: "not-applied",
+          deleteStage: "pending",
+          message: "原对象的删除正在核对，本次 SQL 未执行。"
+        });
+      }
+    for (const [key, task] of this.tasks) {
+      if (!key.startsWith(`${domain3(binding)}:`) || task.phase === "cancelled")
+        continue;
+      const generation = chat ? binding.chatIdentityGeneration : binding.identityGeneration;
+      const credential = task.credentials.some((c) => c.entity === entity && c.chat === chat && generation !== undefined && c.generation === generation && ((chat ? binding.chatReferenceId : binding.characterReferenceId) === undefined || c.referenceId === (chat ? binding.chatReferenceId : binding.characterReferenceId)));
+      const affected = this.matches(task, entity, chat) || credential;
+      if (!affected)
+        continue;
+      if (task.phase !== "invalidated")
+        throw new ServiceError({
+          code: task.phase === "blocked" ? "ENTITY_DELETE_UNCONFIRMED" : "ENTITY_DELETE_PENDING",
+          resultKind: "identity",
+          resultState: "not-applied",
+          deleteStage: task.phase === "blocked" ? "unconfirmed" : "pending",
+          message: "原对象的删除结果尚未核对，本次 SQL 未执行。"
+        });
+      if (credential || (binding.entityRevision ?? -1) < task.revision)
+        throw stale();
+    }
+  }
+  assertBinding(binding) {
+    this.assertEntity(binding, binding.characterEntity);
+    this.assertEntity(binding, binding.chatEntity, true);
+  }
+  async verify(binding, entity, chat = false) {
+    this.assertEntity(binding, entity, chat);
+    await this.storage.manageEntities(binding, async () => {
+      const generation = chat ? binding.chatIdentityGeneration : binding.identityGeneration;
+      if (this.hasDeletedCoordinate(binding, entity, chat, generation))
+        throw stale();
+    });
+  }
+  begin(kind, entity, operationId, deleteChats, binding) {
+    if (!["char", "chat"].includes(kind) || !isUuid(operationId) || deleteChats !== undefined && typeof deleteChats !== "boolean")
+      return Promise.reject(new ServiceError({ code: "INVALID_REQUEST", message: "删除通知参数无效。" }));
+    coordinate(entity, kind === "chat");
+    if (!binding)
+      return Promise.reject(new ServiceError({ code: "ENTITY_DELETE_PENDING", message: "请先授权原数据库目录。" }));
+    const discovery = this.key(binding, operationId);
+    this.discoveries.set(discovery, { entity, chat: kind === "chat" });
+    return this.serialize(() => this.storage.manageEntities(binding, async (records) => {
+      const task = await this.beginDeletion(binding, records, {
+        entity,
+        chat: kind === "chat",
+        operationId,
+        ...deleteChats !== undefined ? { deleteChats } : {}
+      });
+      this.revisions.set(domain3(binding), Math.max(this.revision(binding), task.revision));
+      this.tasks.set(this.key(binding, task.taskId), task);
+      const ticket = deletionTicket(task);
+      this.changed(binding, ticket);
+      return ticket;
+    })).finally(() => this.discoveries.delete(discovery));
+  }
+  async beginDeletion(binding, records, input) {
+    await records.ready();
+    const previous = this.tasks.get(this.key(binding, input.operationId));
+    if (previous)
+      return structuredClone(previous);
+    const found = await records.deletions.readDeletion(input);
+    return {
+      ...input,
+      taskId: input.operationId,
+      revision: this.revision(binding) + 1,
+      entity: found.entity,
+      ...found.reference ? { reference: found.reference } : {},
+      ...!input.chat ? { roleRecordId: found.roleRecordId } : {},
+      children: found.children,
+      credentials: found.credentials,
+      phase: "observed",
+      version: 1
+    };
+  }
+  pending(binding) {
+    return Promise.resolve([...this.tasks].filter(([key, t]) => key.startsWith(`${domain3(binding)}:`) && t.phase === "observed").map(([, t]) => deletionTicket(t)));
+  }
+  settle(input, binding) {
+    return this.serialize(async () => {
+      const key = this.key(binding, input.taskId), task = this.tasks.get(key);
+      if (!task || task.entity !== input.entity || task.chat !== (input.kind === "chat") || JSON.stringify(task.reference) !== JSON.stringify(input.expected))
+        throw stale();
+      try {
+        if (!input.confirmed)
+          throw new ServiceError({
+            code: "ENTITY_DELETE_UNCONFIRMED",
+            message: "酒馆删除结果无法确认，未清理数据库；请稍后扫描核对。"
+          });
+        if (!input.absent) {
+          if (task.chat ? input.observedId !== (task.reference?.id ?? null) : input.nativeResult !== "failed")
+            throw stale();
+          const ticket = { ...deletionTicket(task), stage: "cancelled" };
+          this.changed(binding, ticket);
+          return ticket;
+        }
+        const deletion = await this.storage.manageEntities(binding, async (records) => {
+          const cleanups = await records.deletions.settleDeletion(task, {
+            childrenDeleted: task.deleteChats === true && input.remainingChatNames?.length === 0
+          });
+          if (!cleanups)
+            return task;
+          const invalidated = { ...task, phase: "invalidated", version: task.version + 1 };
+          delete invalidated.reason;
+          for (const t of cleanups)
+            this.cleanups.set(this.key(binding, t.taskId), t);
+          return invalidated;
+        });
+        this.tasks.set(key, deletion);
+        const ticket = deletionTicket(deletion);
+        this.changed(binding, ticket);
+        const outcomes = await this.cleanup(binding);
+        if (outcomes.every((t) => t.phase === "done" || t.phase === "retained"))
+          await this.storage.manageEntities(binding, (records) => records.deletions.finishDeletion(deletion));
+        return ticket;
+      } finally {
+        await this.storage.manageEntities(binding, async () => {
+          this.tasks.delete(key);
+          this.forgetCleanups(binding, task.taskId);
+        }).catch(() => {});
+      }
+    });
+  }
+  cleanScan(input, binding) {
+    if (!input || !isUuid(input.operationId) || !input.expected || typeof input.removeRecord !== "boolean" || typeof input.removeFile !== "boolean" || !["char", "chat"].includes(input.expected.scope) || !Number.isSafeInteger(input.expected.referenceId) || input.expected.referenceId < 1 || !input.observation || !["deleted", "same", "unknown"].includes(input.observation.status) || input.parentDeleted !== undefined && input.parentDeleted !== true)
+      return Promise.reject(new ServiceError({ code: "INVALID_REQUEST", message: "扫描清理必须提供原记录、核对结果和确认范围。" }));
+    const request = structuredClone(input);
+    const work = this.serialize(async () => {
+      await this.running.get(domain3(binding));
+      const expected = request.expected;
+      const relativePath = expected.id ? databasePath(expected.scope === "char" ? expected.id : String(expected.parent), expected.scope === "chat" ? expected.id : undefined) : undefined;
+      const result = {
+        scope: expected.scope,
+        referenceId: expected.referenceId,
+        partial: true,
+        file: {
+          status: expected.id ? "blocked" : "none",
+          ...relativePath ? { relativePath } : {},
+          message: expected.id ? "数据库文件尚未清理。" : "原记录没有数据库文件编号。"
+        },
+        record: { status: "blocked", message: "原管理记录尚未删除。" }
+      };
+      const blocked = (message) => {
+        result.record.message = result.marked ? `${expected.scope === "char" ? "角色已标记为删除，其下聊天改为保留状态" : "聊天已标记为删除"}，这一修改已保存；${message}` : message;
+        if (result.file.status === "blocked")
+          result.file.message = message;
+        return result;
+      };
+      const parentDeleted = request.parentDeleted === true;
+      let current;
+      try {
+        current = await this.storage.manageEntities(binding, (records) => records.deletions.assertScanRecord(expected, true, parentDeleted));
+      } catch (error) {
+        if (errorData(error).code !== "STALE_IDENTITY")
+          throw error;
+        result.record = { status: "removed", message: "原记录已清理或对象已变化，请重新扫描。" };
+        result.file = { ...result.file, status: "none", message: "本次没有删除文件。" };
+        result.partial = false;
+        return result;
+      }
+      if (parentDeleted) {
+        const parent = expected.scope === "chat" && current.state !== "active" ? await this.storage.manageEntities(binding, (records) => records.deletions.scanRecord({ scope: "char", referenceId: expected.parentReferenceId })) : undefined;
+        if (parent?.state !== "deleted")
+          return blocked("所属角色尚未确认删除，未处理这个聊天。");
+      } else if (current.state !== "deleted" && request.observation.status !== "deleted")
+        return blocked("原酒馆文件没有确认不存在，请重新扫描核对。");
+      if (current.taskReasons.some((reason) => !reason.includes("数据库文件清理")))
+        return blocked(current.taskReasons.join("；"));
+      if (current.initialization === "creating")
+        return blocked("原数据库首次保存尚未确认，请先完成已有恢复操作。");
+      let local;
+      if (expected.id) {
+        local = await this.storage.scan(binding, {
+          operation: "file",
+          charDbId: expected.scope === "char" ? expected.id : expected.parent,
+          ...expected.scope === "chat" ? { chatDbId: expected.id } : {}
+        });
+        if (local.status === "exists")
+          result.file.relativePath = local.relativePath;
+        if (!matchesScanFile(local, request.expectedFile, request.expectedFileFormat))
+          return blocked("数据库文件或保存格式已改变，未修改文件和记录；请重新扫描。");
+        if (local.status === "unknown")
+          return blocked(local.reason ?? "无法确认原数据库文件。");
+        if (current.initialization === "never" && local.status === "exists")
+          return blocked("管理记录显示数据库从未创建，但本地已有文件，请核对来源；未删除文件和记录。");
+        if (parentDeleted && current.state !== "deleted" && current.initialization === "ready" && local.status === "missing")
+          return blocked("管理记录显示聊天数据库已创建，但本地文件不存在；保留这个聊天的记录。");
+        const protection = await this.storage.manageEntities(binding, (records) => records.deletions.protectionReferences({
+          scope: expected.scope,
+          charDbId: local.charDbId,
+          chatDbId: local.chatDbId
+        }));
+        const ownActive = current.state === "active" && current.confirmed ? 1 : 0, ownRetained = current.state === "retained" ? 1 : 0;
+        const shared = protection.active > ownActive || protection.retained > ownRetained || protection.unconfirmed > (current.state !== "deleted" && !current.confirmed ? 1 : 0);
+        if (local.status === "exists" && !request.removeFile && !shared)
+          return blocked("这个数据库文件目前没有共享引用，但本次确认范围没有允许删除文件，请重新扫描选择。");
+      }
+      const prepared = await this.storage.manageEntities(binding, async (records) => {
+        const result = await records.deletions.prepareScanDeletion(expected, request.operationId, parentDeleted, this.revision(binding) + 1);
+        if (result.cleanup)
+          this.cleanups.set(this.key(binding, result.cleanup.taskId), result.cleanup);
+        this.revisions.set(domain3(binding), result.deletion.revision);
+        return result;
+      });
+      this.tasks.set(this.key(binding, prepared.deletion.taskId), prepared.deletion);
+      this.changed(binding, deletionTicket(prepared.deletion));
+      if (current.state !== "deleted")
+        result.marked = true;
+      if (prepared.cleanup) {
+        const task = prepared.cleanup;
+        const target = {
+          storageId: binding.storageId,
+          configGeneration: binding.configGeneration,
+          scope: task.scope,
+          charDbId: task.charDbId,
+          ...task.chatDbId ? { chatDbId: task.chatDbId } : {}
+        };
+        const protection = await this.storage.manageEntities(binding, (records) => records.deletions.protectionReferences(target));
+        if (protection.active || protection.retained || protection.unconfirmed) {
+          result.file = {
+            ...result.file,
+            status: "shared",
+            message: "数据库文件仍被其他有效或保留对象使用，继续保留。"
+          };
+          await this.storage.manageEntities(binding, async () => this.updateCleanup(binding, task, "retained", "remaining-reference"));
+        } else if (!request.removeFile && local?.status === "exists")
+          return blocked("文件引用已改变，本次确认范围没有允许删除文件，请重新扫描。");
+        else {
+          const tasks = await this.cleanup(binding, task.taskId, request.expectedFile, request.expectedFileFormat);
+          const outcome = tasks.find((row) => row.taskId === task.taskId);
+          if (outcome?.phase !== "done")
+            return blocked(outcome?.reason === "permission-required" ? "目录权限不足，文件未确认清理；请恢复授权后重试。" : outcome?.reason === "file-remove-failed" ? "数据库文件删除失败，保留管理记录，请重试。" : "原数据库保存或清理结果尚未确认，保留管理记录，请先核对原操作。");
+          result.file = {
+            ...result.file,
+            status: local?.status === "missing" ? "missing" : "removed",
+            message: local?.status === "missing" ? "数据库文件已确认不存在。" : "原数据库文件已精确删除。"
+          };
+          if (request.expectedFile) {
+            const remaining = await this.storage.scan(binding, {
+              operation: "file",
+              charDbId: target.charDbId,
+              ...target.chatDbId ? { chatDbId: target.chatDbId } : {}
+            });
+            if (remaining.status === "exists")
+              result.file.message = `选中文件已删除；同库另一格式的文件仍保留：${remaining.relativePath}`;
+          }
+        }
+      }
+      const after = await this.storage.manageEntities(binding, (records) => records.deletions.assertScanRecord(expected, true));
+      if (!request.removeRecord || after.parentDependency) {
+        result.record = {
+          status: "retained",
+          message: after.parentDependency ? "保留的聊天仍需要父角色记录定位，管理记录继续保留。" : "本次只确认清理数据库文件，管理记录继续保留。"
+        };
+        return result;
+      }
+      if (expected.scope === "char" && await this.storage.manageEntities(binding, (records) => records.deletions.hasScanChildren(expected.referenceId)))
+        return blocked("父角色下仍有未清理的聊天记录，请先清理所选聊天再处理角色记录。");
+      await this.storage.manageEntities(binding, (records) => records.deletions.purgeScanRecord(expected));
+      await this.storage.manageEntities(binding, async () => {});
+      result.record = { status: "removed", message: "原管理记录已删除并确认保存。" };
+      result.partial = false;
+      return result;
+    });
+    const id = domain3(binding);
+    this.scanning.set(id, work);
+    work.finally(async () => {
+      if (this.scanning.get(id) === work)
+        this.scanning.delete(id);
+      await this.storage.manageEntities(binding, async () => {
+        this.tasks.delete(this.key(binding, request.operationId));
+        this.forgetCleanups(binding, request.operationId);
+      });
+    }).catch(() => {});
+    return work;
+  }
+  resume(binding) {
+    const scanning = this.scanning.get(domain3(binding));
+    if (scanning)
+      return scanning.then(() => this.resume(binding), () => this.resume(binding));
+    const id = domain3(binding), previous = this.running.get(id);
+    if (previous)
+      return previous;
+    const work = this.cleanup(binding);
+    this.running.set(id, work);
+    work.finally(() => {
+      if (this.running.get(id) === work)
+        this.running.delete(id);
+    }).catch(() => {});
+    return work;
+  }
+  async cleanup(binding, selectedTaskId, expectedFile, expectedFileFormat) {
+    const tasks = await this.storage.manageEntities(binding, async () => structuredClone([...this.cleanups].filter(([key]) => this.inDomain(binding, key)).map(([, task]) => task)));
+    const results = [];
+    for (let task of tasks) {
+      if (selectedTaskId && task.taskId !== selectedTaskId)
+        continue;
+      if (["done", "retained"].includes(task.phase)) {
+        results.push(task);
+        continue;
+      }
+      const target = {
+        storageId: binding.storageId,
+        configGeneration: binding.configGeneration,
+        scope: task.scope,
+        charDbId: task.charDbId,
+        ...task.chatDbId ? { chatDbId: task.chatDbId } : {}
+      };
+      const update = async (phase, reason) => {
+        task = await this.storage.manageEntities(binding, async () => this.updateCleanup(binding, task, phase, reason));
+      };
+      try {
+        const deletion = this.tasks.get(this.key(binding, task.deletionTaskId));
+        if (!deletion || deletion.phase !== "invalidated") {
+          await update("blocked", "invalidation-unconfirmed");
+          results.push(task);
+          continue;
+        }
+        const check = async (records) => {
+          const protection = await records.deletions.protectionReferences(target);
+          if (protection.active || protection.retained || protection.unconfirmed)
+            throw new ServiceError({ code: "IDENTITY_CONFLICT", message: "数据库仍有有效、保留或未确认引用。" });
+        };
+        const protection = await this.storage.manageEntities(binding, (records) => records.deletions.protectionReferences(target));
+        if (protection.active || protection.retained || protection.unconfirmed) {
+          await update("retained", "remaining-reference");
+          results.push(task);
+          continue;
+        }
+        this.storage.sealCleanup(target);
+        await this.storage.drainCleanup(target);
+        await this.storage.removeCleanupFile(target, check, expectedFile, expectedFileFormat);
+        if (!selectedTaskId)
+          await this.storage.manageEntities(binding, (records) => records.deletions.finishCleanup(task));
+        await update("done");
+      } catch (error) {
+        await update("blocked", errorData(error).code === "PERMISSION_REQUIRED" ? "permission-required" : "file-remove-failed").catch(() => {});
+      } finally {
+        this.storage.releaseCleanup(target);
+      }
+      results.push(task);
+    }
+    return results;
+  }
+  assertSettled() {
+    if (this.discoveries.size || this.running.size || this.scanning.size)
+      throw new ServiceError({
+        code: "ENTITY_DELETE_UNCONFIRMED",
+        resultKind: "identity",
+        message: "删除记录或文件清理仍在进行，尚不能确认安全排空。"
+      });
+  }
+}
+
 // src/worker/write-errors.ts
 var invalidRequest = () => {
   throw new ServiceError({
@@ -6199,6 +6974,10 @@ class TargetLifecycle {
       throw notInitialized(this.binding);
     return task(this.db);
   }
+  async snapshot() {
+    const record = await this.resolve();
+    return record.state === "never" ? undefined : this.db.committedSnapshot();
+  }
   async refresh(onlyChanged = false) {
     const record = await this.resolve();
     if (record.state !== "ready")
@@ -6270,479 +7049,6 @@ class TargetLifecycle {
       throw error;
     }
   }
-}
-
-// src/dvs2/ext/tables/ids.ts
-function identifierBytes(value) {
-  if (!ArrayBuffer.isView(value) || Object.prototype.toString.call(value) !== "[object Uint8Array]" || value.byteLength !== 16)
-    throw new Error("DVS 标识必须是 16 字节 BLOB。");
-  return new Uint8Array(value);
-}
-function hex(value) {
-  return [...identifierBytes(value)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-function formatUuid(value) {
-  const text = hex(value);
-  return `${text.slice(0, 8)}-${text.slice(8, 12)}-${text.slice(12, 16)}-${text.slice(16, 20)}-${text.slice(20)}`;
-}
-function parseUuid(value) {
-  if (typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))
-    throw new Error("DVS 消息标识必须是 UUID 字符串。");
-  return new Uint8Array(value.replaceAll("-", "").match(/../g).map((byte) => parseInt(byte, 16)));
-}
-function uuidV7() {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  let time = Date.now();
-  for (let index = 5;index >= 0; index--) {
-    bytes[index] = time % 256;
-    time = Math.floor(time / 256);
-  }
-  bytes[6] = bytes[6] & 15 | 112;
-  bytes[8] = bytes[8] & 63 | 128;
-  return bytes;
-}
-function blobLiteral(value) {
-  return `X'${hex(value)}'`;
-}
-
-// src/dvs2/ext/tables/sql.ts
-function quoteIdentifier(value) {
-  return `"${value.replaceAll('"', '""')}"`;
-}
-function sqlLiteral(value) {
-  if (value === null)
-    return "NULL";
-  if (typeof value === "string")
-    return `'${value.replaceAll("'", "''")}'`;
-  if (typeof value === "number" && Number.isFinite(value))
-    return String(value);
-  if (value instanceof Uint8Array)
-    return blobLiteral(value);
-  throw new Error("不能将该值写入 DVS SQL 字面量。");
-}
-function captureValue(value) {
-  return serializeBinds([value])[0];
-}
-function copyValues(values) {
-  return Object.fromEntries(Object.entries(values).map(([name, value]) => [name, value instanceof Uint8Array ? value.slice() : value]));
-}
-function sameValue(a, b) {
-  return a instanceof Uint8Array && b instanceof Uint8Array ? a.length === b.length && a.every((value, index) => value === b[index]) : a === b;
-}
-function managementCommands(operation, fid) {
-  const { kind, schema, oldRid, newRid, values } = operation;
-  const table = quoteIdentifier(schema.name), index = quoteIdentifier(schema.indexName), commands = [];
-  if (kind !== "insert")
-    commands.push({
-      kind: "check",
-      sql: `SELECT CASE WHEN (SELECT count(*) FROM ${index} AS idx JOIN ${table} AS data ON data.rid = idx.rid WHERE idx.fid = ? AND idx.rid = ?) = 1 THEN 1 ELSE 0 END`,
-      binds: [fid, oldRid]
-    });
-  if (kind === "remove") {
-    commands.push({
-      kind: "write",
-      sql: `DELETE FROM ${index} WHERE fid = ? AND rid = ?`,
-      binds: [fid, oldRid],
-      expectChanges: 1
-    });
-    return commands;
-  }
-  const columns = Object.keys(values);
-  if (kind === "insert")
-    commands.push({
-      kind: "write",
-      sql: `INSERT INTO ${table} (${["rid", ...columns].map(quoteIdentifier).join(",")}) VALUES (${["rid", ...columns].map(() => "?").join(",")})`,
-      binds: [newRid, ...columns.map((name) => values[name])],
-      expectChanges: 1
-    });
-  else {
-    const writable = schema.columns.filter((column) => column.hidden === 0 && column.name !== "rid");
-    commands.push({
-      kind: "write",
-      sql: `INSERT INTO ${table} (${["rid", ...writable.map((column) => column.name)].map(quoteIdentifier).join(",")}) SELECT ?,${writable.map((column) => Object.hasOwn(values, column.name) ? "?" : `data.${quoteIdentifier(column.name)}`).join(",")} FROM ${table} AS data WHERE data.rid = ?`,
-      binds: [
-        newRid,
-        ...writable.filter((column) => Object.hasOwn(values, column.name)).map((column) => values[column.name]),
-        oldRid
-      ],
-      expectChanges: 1
-    });
-  }
-  commands.push({
-    kind: "check",
-    sql: `SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM ${table} AS fresh JOIN ${table} AS data ON ${schema.keys.map((key) => `fresh.${quoteIdentifier(key)} IS data.${quoteIdentifier(key)}`).join(" AND ")} JOIN ${index} AS idx ON idx.rid = data.rid WHERE fresh.rid = ? AND idx.fid = ?${kind === "update" ? " AND data.rid != ?" : ""}) THEN 1 ELSE 0 END`,
-    binds: kind === "update" ? [newRid, fid, oldRid] : [newRid, fid]
-  });
-  commands.push(kind === "insert" ? { kind: "write", sql: `INSERT INTO ${index} (fid,rid) VALUES (?,?)`, binds: [fid, newRid], expectChanges: 1 } : {
-    kind: "write",
-    sql: `UPDATE ${index} SET rid = ? WHERE fid = ? AND rid = ?`,
-    binds: [newRid, fid, oldRid],
-    expectChanges: 1
-  });
-  return commands;
-}
-
-// src/dvs2/ext/tables/schema.ts
-function validateVirtualTables(input, realKeys) {
-  const result = Object.create(null);
-  if (input === undefined)
-    return result;
-  if (!input || typeof input !== "object" || Array.isArray(input))
-    throw new Error("DVS virtualTables 必须是表名与虚拟表声明。");
-  const seen = new Set(Object.keys(realKeys).map((name) => name.toLowerCase()));
-  const validName = (name) => name.trim() && !["rid", "fid"].includes(name.toLowerCase()) && !name.toLowerCase().startsWith("_dvs_") && !name.toLowerCase().startsWith("__stsh_");
-  for (const [name, declaration] of Object.entries(input)) {
-    if (!validName(name) || seen.has(name.toLowerCase()))
-      throw new Error(`DVS 虚拟表名称无效或冲突：${name}`);
-    seen.add(name.toLowerCase());
-    if (!declaration || !Array.isArray(declaration.keys) || !declaration.fields || typeof declaration.fields !== "object" || Array.isArray(declaration.fields))
-      throw new Error(`DVS 虚拟表 ${name} 需要 keys 和 fields。`);
-    const entries = Object.entries(declaration.fields), fields = Object.create(null);
-    const names = new Set;
-    if (!entries.length)
-      throw new Error(`DVS 虚拟表 ${name} 必须声明字段。`);
-    for (const [field, type] of entries) {
-      if (!validName(field) || names.has(field.toLowerCase()) || !["string", "number", "boolean", "array", "object", "null"].includes(type))
-        throw new Error(`DVS 虚拟表 ${name} 字段或 JSON 类型无效：${field}`);
-      names.add(field.toLowerCase());
-      fields[field] = type;
-    }
-    if (new Set(declaration.keys).size !== declaration.keys.length || declaration.keys.some((key) => typeof key !== "string" || !Object.hasOwn(fields, key) || !["string", "number"].includes(fields[key])))
-      throw new Error(`DVS 虚拟表 ${name} 的定位键必须是已声明的 string 或 number 字段，且不能重复。`);
-    result[name] = { keys: [...declaration.keys], fields };
-  }
-  return result;
-}
-function requestSchemas(real, virtualTables) {
-  const virtual = validateVirtualTables(virtualTables, Object.fromEntries(Object.values(real).map((schema) => [schema.name, schema.keys])));
-  return Object.assign(Object.create(null), real, Object.fromEntries(Object.entries(virtual).map(([name, declaration]) => [
-    name,
-    {
-      name,
-      keys: [...declaration.keys],
-      virtual: true,
-      columns: Object.entries(declaration.fields).map(([name, type]) => ({ name, type, hidden: 0 }))
-    }
-  ])));
-}
-var DVS_VERSION_TABLE_SQL = 'CREATE TABLE IF NOT EXISTS "_dvs_version" (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version TEXT NOT NULL)';
-var DVS_GC_COUNTER_TABLE_SQL = `CREATE TABLE "_dvs_gc_counter" (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), successful_updates INTEGER NOT NULL CHECK (typeof(successful_updates) = 'integer' AND successful_updates >= 0))`;
-function indexTableName(name) {
-  return `_dvs_index_${name}`;
-}
-function createIndexSql(name) {
-  return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(indexTableName(name))} (fid BLOB NOT NULL CHECK (typeof(fid) = 'blob' AND length(fid) = 16), rid BLOB NOT NULL CHECK (typeof(rid) = 'blob' AND length(rid) = 16), PRIMARY KEY (fid,rid)) WITHOUT ROWID`;
-}
-function validateUniqueKeys(input) {
-  if (!input || typeof input !== "object" || Array.isArray(input))
-    throw new Error("DVS uniqueKeys 必须是表名与业务键声明。");
-  const result = Object.create(null), seen = new Set;
-  for (const [name, keys] of Object.entries(input)) {
-    const folded = name.toLowerCase();
-    if (!name.trim() || folded.startsWith("_dvs_") || folded.startsWith("__stsh_") || seen.has(folded))
-      throw new Error(`DVS 业务表名称无效或冲突：${name}`);
-    seen.add(folded);
-    if (!Array.isArray(keys) || !keys.length || keys.some((key) => typeof key !== "string" || !key.trim() || key.toLowerCase() === "rid" || key.toLowerCase().startsWith("_dvs_")) || new Set(keys.map((key) => key.toLowerCase())).size !== keys.length)
-      throw new Error(`DVS 表 ${name} 必须声明不重复的完整业务键。`);
-    result[name] = [...keys];
-  }
-  return result;
-}
-async function columns(helper, name) {
-  const result = await helper.query('SELECT name,type,"notnull",pk,hidden FROM pragma_table_xinfo(?)', [name]);
-  return result.rows.map((row) => ({
-    name: String(row[0]),
-    type: String(row[1]),
-    notnull: Number(row[2]),
-    pk: Number(row[3]),
-    hidden: Number(row[4])
-  }));
-}
-async function inspectSchemas(helper, uniqueKeys) {
-  const declaration = validateUniqueKeys(uniqueKeys), result = Object.create(null);
-  for (const [name, keys] of Object.entries(declaration)) {
-    const fields = await columns(helper, name), rid = fields.find((column) => column.name === "rid");
-    if (!rid || rid.pk !== 1 || rid.hidden !== 0 || fields.filter((column) => column.pk).length !== 1)
-      throw new Error(`DVS 表 ${name} 的 rid 必须是普通列和单列主键。`);
-    for (const key of keys)
-      if (!fields.some((column) => column.name === key))
-        throw new Error(`DVS 表 ${name} 缺少业务键字段：${key}`);
-    const indexName = indexTableName(name);
-    result[name] = { name, indexName, keys: [...keys], columns: fields };
-  }
-  return result;
-}
-
-// src/worker/scan.ts
-var missing = (error) => error instanceof DOMException && error.name === "NotFoundError";
-var targetKey = (scope, char, chat) => JSON.stringify([scope, char, chat ?? ""]);
-function assertTarget(charDbId, chatDbId) {
-  if (!isUuid(charDbId) || chatDbId !== undefined && !isUuid(chatDbId))
-    throw new ServiceError({ code: "INVALID_REQUEST", message: "扫描文件必须指定有效的角色或聊天数据库编号。" });
-}
-async function scanRecords(root, directoryName) {
-  const snapshot = {
-    directoryName,
-    management: "unreadable",
-    differences: [],
-    rootReadable: false,
-    records: [],
-    targets: [],
-    issues: []
-  };
-  try {
-    if (root.availability !== "ready")
-      throw new Error("管理数据库尚未恢复，请先完成现有恢复操作。");
-    await root.assertFileExisting();
-    const inspection = await inspectSchema6(root);
-    if (inspection.state !== "valid") {
-      snapshot.management = inspection.state;
-      snapshot.differences = inspection.differences;
-      return snapshot;
-    }
-    const query = async (sql) => (await root.query({ sql })).rows;
-    const version = Number(JSON.parse(String((await query(`SELECT value FROM ${META} WHERE key='schema_version'`))[0]?.[0])));
-    snapshot.schemaVersion = version;
-    const targets = await query(`SELECT scope,char_dbid,chat_dbid,origin,state FROM ${TARGETS}`);
-    for (const row of targets) {
-      const scope = String(row[0]), charDbId = String(row[1]), chatDbId = String(row[2]), origin = String(row[3]), state = String(row[4]);
-      if (!["char", "chat"].includes(scope) || !isUuid(charDbId) || (scope === "chat" ? !isUuid(chatDbId) : chatDbId !== "") || !["generated", "legacy"].includes(origin) || !["never", "creating", "ready"].includes(state))
-        throw new Error("数据库初始化记录字段无效。");
-      snapshot.targets.push({
-        scope,
-        charDbId,
-        ...chatDbId ? { chatDbId } : {},
-        origin,
-        state
-      });
-    }
-    const initialization = new Map(snapshot.targets.map((target) => [targetKey(target.scope, target.charDbId, target.chatDbId), target.state]));
-    const roles = await query(`SELECT role_id,avatar_name,char_dbid,state,generation,confirmed,origin FROM ${ROLES} ORDER BY role_id`);
-    const chats = await query(`SELECT chat_id,role_id,file_name,chat_dbid,parent_char_dbid,state,generation,confirmed,origin FROM ${CHATS} ORDER BY chat_id`);
-    for (const row of roles)
-      snapshot.records.push({
-        scope: "char",
-        referenceId: Number(row[0]),
-        avatar: String(row[1]),
-        id: row[2] === null ? null : String(row[2]),
-        state: row[3],
-        generation: Number(row[4]),
-        confirmed: row[5] === 1,
-        origin: row[6],
-        taskReasons: [],
-        parentDependency: chats.some((chat) => chat[1] === row[0] && chat[5] !== "deleted"),
-        shared: false
-      });
-    for (const row of chats) {
-      const role = roles.find((role) => role[0] === row[1]);
-      if (!role)
-        throw new Error("聊天记录缺少对应角色记录。");
-      snapshot.records.push({
-        scope: "chat",
-        referenceId: Number(row[0]),
-        parentReferenceId: Number(row[1]),
-        avatar: String(role[1]),
-        file: String(row[2]),
-        id: row[3] === null ? null : String(row[3]),
-        parent: String(row[4]),
-        state: row[5],
-        generation: Number(row[6]),
-        confirmed: row[7] === 1,
-        origin: row[8],
-        taskReasons: [],
-        parentDependency: false,
-        shared: false
-      });
-    }
-    for (const record of snapshot.records) {
-      if (!Number.isSafeInteger(record.referenceId) || record.referenceId < 1 || !record.avatar || record.id !== null && !isUuid(record.id) || record.scope === "chat" && (!isUuid(record.parent) || !record.file) || !["active", "retained", "deleted"].includes(record.state))
-        throw new Error("角色或聊天管理记录字段无效。");
-      if (record.id)
-        record.initialization = initialization.get(targetKey(record.scope, record.scope === "char" ? record.id : record.parent, record.scope === "chat" ? record.id : undefined));
-      record.shared = record.id !== null && snapshot.records.some((other) => other !== record && other.scope === record.scope && other.state !== "deleted" && other.id === record.id && other.parent === record.parent);
-    }
-    snapshot.rootReadable = true;
-    snapshot.management = "valid";
-  } catch (error) {
-    snapshot.management = "unreadable";
-    snapshot.rootReadable = false;
-    snapshot.records = [];
-    snapshot.targets = [];
-    snapshot.issues.push({ relativePath: GLOBAL_DATABASE, reason: detail(error).message });
-  }
-  return snapshot;
-}
-async function readScanBasis(root) {
-  const rows = async (sql) => (await root.query({ sql })).rows.map((row) => row.map(String));
-  const chats = await rows(`SELECT parent_char_dbid,coalesce(chat_dbid,'') FROM ${CHATS}`);
-  return {
-    roles: (await rows(`SELECT char_dbid FROM ${ROLES} WHERE char_dbid IS NOT NULL`)).map((row) => row[0]),
-    chats: chats.filter((row) => row[1]).map((row) => [row[0], row[1]]),
-    chatParents: chats.map((row) => row[0]),
-    targets: (await rows(`SELECT scope,char_dbid,chat_dbid FROM ${TARGETS}`)).map(([scope, charDbId, chatDbId]) => ({
-      scope,
-      charDbId,
-      ...chatDbId ? { chatDbId } : {}
-    }))
-  };
-}
-async function scanFile(directory, charDbId, chatDbId) {
-  assertTarget(charDbId, chatDbId);
-  const file = {
-    charDbId,
-    ...chatDbId ? { chatDbId } : {},
-    relativePath: databasePath(charDbId, chatDbId),
-    status: "unknown"
-  };
-  try {
-    const metadata = await createStorage(directory, charDbId, chatDbId).metadata();
-    return { ...file, status: "exists", size: metadata.size };
-  } catch (error) {
-    return {
-      ...file,
-      status: missing(error) ? "missing" : "unknown",
-      ...missing(error) ? {} : { reason: detail(error).message }
-    };
-  }
-}
-async function entries2(directory) {
-  const result = [];
-  for await (const item of directory.entries())
-    result.push(item);
-  return result;
-}
-var SQLITE_HEADER = "SQLite format 3\x00";
-async function scanInventory(directory) {
-  const result = { entries: [], issues: [] };
-  if (indexedDbSource(directory)) {
-    try {
-      const directories = new Set;
-      for (const path of (await indexedDbFileKeys()).sort()) {
-        const parts = path.split("/");
-        for (let i = 1;i < parts.length; i++)
-          directories.add(parts.slice(0, i).join("/"));
-        const item = { relativePath: path, kind: "file" };
-        result.entries.push(item);
-        try {
-          const file = await readStorageFile(directory, path);
-          item.size = file.size;
-          const header = file.bytes.subarray(0, 16);
-          item.sqlite = header.length === 16 && String.fromCharCode(...header) === SQLITE_HEADER;
-        } catch (error) {
-          item.reason = detail(error).message;
-        }
-      }
-      result.entries.push(...[...directories].map((relativePath) => ({ relativePath, kind: "directory" })));
-      result.entries.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
-    } catch (error) {
-      result.issues.push({ relativePath: "", reason: detail(error).message });
-    }
-    return result;
-  }
-  const walk = async (handle, prefix, entry) => {
-    let children;
-    try {
-      children = await entries2(handle);
-    } catch (error) {
-      const reason = detail(error).message;
-      if (entry)
-        entry.reason = reason;
-      result.issues.push({ relativePath: prefix, reason });
-      return;
-    }
-    children.sort((a, b) => a[0].localeCompare(b[0]));
-    for (const [name, child] of children) {
-      const relativePath = prefix ? `${prefix}/${name}` : name;
-      if (child.kind === "file" && isTemporaryFileName(name)) {
-        if (entry)
-          entry.temporary = true;
-        continue;
-      }
-      if (child.kind === "directory") {
-        const item = { relativePath, kind: "directory" };
-        result.entries.push(item);
-        await walk(child, relativePath, item);
-        continue;
-      }
-      const item = { relativePath, kind: "file" };
-      result.entries.push(item);
-      try {
-        const file = await child.getFile();
-        item.size = file.size;
-        const header = new Uint8Array(await file.slice(0, 16).arrayBuffer());
-        item.sqlite = header.length === 16 && String.fromCharCode(...header) === SQLITE_HEADER;
-      } catch (error) {
-        item.reason = detail(error).message;
-      }
-    }
-  };
-  await walk(storageDirectory(directory), "");
-  return result;
-}
-async function scanDatabase(db, directory, charDbId, chatDbId) {
-  const file = await scanFile(directory, charDbId, chatDbId);
-  const result = {
-    charDbId,
-    ...chatDbId ? { chatDbId } : {},
-    relativePath: file.relativePath,
-    status: file.status === "exists" ? "checked" : file.status,
-    ...file.reason ? { reason: file.reason } : {},
-    meta: "absent",
-    dvs: []
-  };
-  if (result.status !== "checked")
-    return result;
-  try {
-    await db.openExisting();
-    const rows = async (sql, binds = []) => (await db.query({ sql, binds })).rows;
-    const tables = new Map((await rows("SELECT name,sql FROM sqlite_master WHERE type='table'")).map((row) => [
-      String(row[0]),
-      String(row[1])
-    ]));
-    const meta = tables.get("__stsh_meta");
-    if (meta !== undefined) {
-      result.meta = sameDefinition(meta, SCOPED_META_TABLE_SQL) ? "valid" : "invalid";
-      try {
-        const identity = (await rows("SELECT value FROM __stsh_meta WHERE key='identity'"))[0];
-        if (identity) {
-          const value = JSON.parse(String(identity[0]));
-          result.identity = value && typeof value === "object" && typeof value.scope === "string" && typeof value.charDbId === "string" && (value.chatDbId === undefined || typeof value.chatDbId === "string") ? {
-            scope: value.scope,
-            charDbId: value.charDbId,
-            ...value.chatDbId !== undefined ? { chatDbId: value.chatDbId } : {}
-          } : "invalid";
-        }
-      } catch {
-        result.identity = "invalid";
-      }
-    }
-    if ([...tables.keys()].some((name) => name.startsWith("_dvs_"))) {
-      for (const [name, sql] of [
-        ["_dvs_version", DVS_VERSION_TABLE_SQL],
-        ["_dvs_gc_counter", DVS_GC_COUNTER_TABLE_SQL]
-      ]) {
-        const stored = tables.get(name);
-        if (stored === undefined)
-          result.dvs.push(`缺少 DVS 系统表 ${name}。`);
-        else if (!sameDefinition(stored, sql))
-          result.dvs.push(`DVS 系统表 ${name} 的定义与当前版本不同。`);
-      }
-      for (const [name, sql] of tables)
-        if (name.startsWith("_dvs_index_") && !sameDefinition(sql, createIndexSql(name.slice("_dvs_index_".length))))
-          result.dvs.push(`DVS 索引表 ${name} 的定义与当前版本不同。`);
-    }
-  } catch (error) {
-    result.status = "unknown";
-    result.reason = detail(error).message;
-    result.failure = db.loadFailureStage ?? "database";
-  }
-  return result;
-}
-async function readScanFile(directory, relativePath) {
-  const segments = checkRelativePath(relativePath, "read");
-  if (typeof segments === "string")
-    throw new ServiceError({ code: "INVALID_REQUEST", message: segments });
-  return readStorageFile(directory, relativePath);
 }
 
 // src/worker/entity-deletion-records.ts
@@ -7231,7 +7537,32 @@ class RootEntities {
 }
 
 // src/scan-contracts.ts
-function scanEntryHasBasis(relativePath, kind, facts) {
+function scanFileKey(path, inventory) {
+  const lower = path.toLowerCase();
+  if (inventory?.mode === "opfs" || inventory?.mode === "indexeddb" || !lower.endsWith(".sqlite.br"))
+    return lower;
+  return parseDatabasePath(lower, "file")?.kind === "chat" ? lower.slice(0, -3) : lower;
+}
+function scanEntriesByPath(inventory) {
+  const result = new Map;
+  for (const entry of inventory?.entries ?? []) {
+    const physical = entry.relativePath.toLowerCase();
+    const key = entry.kind === "file" ? scanFileKey(physical, inventory) : physical;
+    const previous = result.get(key);
+    if (previous) {
+      if (previous.reason)
+        continue;
+      const timeDifference = (entry.lastModified ?? 0) - (previous.lastModified ?? 0);
+      if (!entry.reason && (timeDifference < 0 || timeDifference === 0 && physical !== key))
+        continue;
+    }
+    result.set(key, entry);
+  }
+  return result;
+}
+function scanEntryHasBasis(relativePath, kind, facts, mode) {
+  if (kind === "file" && mode && mode !== "directory" && relativePath.toLowerCase().endsWith(".br"))
+    return false;
   const part = parseDatabasePath(relativePath, kind);
   if (!part)
     return false;
@@ -8757,6 +9088,9 @@ function legacyMetadataSuffix(name) {
 
 // src/dvs2/lorebook-tags.ts
 function parseLorebookTags(name) {
+  const owned = /^\[DVS:(DDL|初始化):([^:\[\],;]+)\](?!.*\[DVS[:_])/i.exec(name);
+  if (owned)
+    return { stages: [], metadata: owned[1].toUpperCase() === "DDL" ? "ddl" : "init", owner: owned[2] };
   const blocks = [...name.matchAll(/\[DVS:([^\]]*)\]/gi)];
   if (!blocks.length)
     return parseLegacyLorebookTags(name);
@@ -8830,7 +9164,7 @@ function parseLorebookTags(name) {
   return tags;
 }
 function parseMetadataSuffix(name) {
-  return /^\[DVS:(?:DDL|初始化|版本)\](.*)$/i.exec(name)?.[1] ?? legacyMetadataSuffix(name);
+  return /^\[DVS:(?:(?:DDL|初始化)(?::[^:\[\],;]+)?|版本)\](.*)$/i.exec(name)?.[1] ?? legacyMetadataSuffix(name);
 }
 function isUserRule(tags) {
   return tags.user === "filter_rules" || tags.user === "lorebook_filter_rules" || tags.user === "table_filter_rules" || tags.user === "plot";
@@ -9088,7 +9422,7 @@ function decideDvsTables(facts) {
   const dvs = facts.objects.filter((object) => object.name.startsWith("_dvs_"));
   if (!dvs.length)
     return result;
-  if (dvs.some((object) => object.type === "table" && !["_dvs_version", "_dvs_gc_counter"].includes(object.name) && !object.name.startsWith("_dvs_index_")))
+  if (dvs.some((object) => object.type === "table" && !["_dvs_version", "_dvs_gc_counter", "_dvs_ext_version", "_dvs_pending_init"].includes(object.name) && !object.name.startsWith("_dvs_index_")))
     return { kind: "blocked", repairs: [], reasons: [reason("unknown-dvs-structure")] };
   for (const name of facts.expectedIndexes)
     if (!facts.tables.some((table) => table.name === name))
@@ -9103,6 +9437,14 @@ function decideDvsTables(facts) {
       return { kind: decision.kind, repairs: [], reasons: result.reasons };
     if (decision.kind === "repair")
       result.repairs.push({ name, columns, rows: decision.rows });
+  }
+  const ext = facts.tables.find((table) => table.name === "_dvs_ext_version");
+  if (ext && !ext.matches) {
+    const rows = project(ext, ["key", "version"]);
+    if (!rows || rows.some(([key, version]) => typeof key !== "string" || !key || typeof version !== "string") || new Set(rows.map((row) => row[0])).size !== rows.length)
+      return { kind: "blocked", repairs: [], reasons: [reason("dvs-version-conflict", ext.name)] };
+    result.repairs.push({ name: ext.name, columns: ["key", "version"], rows });
+    result.reasons.push(reason("rebuild-dvs-table", ext.name));
   }
   for (const table of facts.tables.filter((table) => table.name.startsWith("_dvs_index_"))) {
     const rows = project(table, ["fid", "rid"]);
@@ -9133,7 +9475,7 @@ function decideScopedRepair(facts, identity, options = {}) {
       repairs: [],
       reasons: [reason(facts.readFailure === "database" ? "sqlite-unreadable" : "file-unreadable")]
     };
-  const wrongObject = facts.objects.find((object) => (object.name === "__stsh_meta" || object.name === "_dvs_version" || object.name === "_dvs_gc_counter" || object.name.startsWith("_dvs_index_")) && object.type !== "table" && object.sql !== null);
+  const wrongObject = facts.objects.find((object) => (object.name === "__stsh_meta" || object.name === "_dvs_version" || object.name === "_dvs_ext_version" || object.name === "_dvs_gc_counter" || object.name.startsWith("_dvs_index_")) && object.type !== "table" && object.sql !== null);
   if (wrongObject)
     return { kind: "blocked", repairs: [], reasons: [reason("object-kind", wrongObject.name)] };
   const meta = facts.tables.find((table) => table.name === "__stsh_meta");
@@ -9163,6 +9505,8 @@ var quote4 = (value) => `"${value.replaceAll('"', '""')}"`;
 function definition(name) {
   if (name === "__stsh_meta")
     return { sql: SCOPED_META_TABLE_SQL, columns: ["key", "value"] };
+  if (name === "_dvs_ext_version")
+    return { sql: DVS_EXT_VERSION_TABLE_SQL, columns: ["key", "version"] };
   if (name === "_dvs_version")
     return { sql: DVS_VERSION_TABLE_SQL, columns: ["singleton", "version"] };
   if (name === "_dvs_gc_counter")
@@ -9392,6 +9736,7 @@ async function inspectDatabaseMaintenance(context, target, evidence) {
       const requireIdentity = registration?.origin === "generated" || records.records.some((r) => r.origin === "generated" && r.id === (target.scope === "chat" ? target.chatDbId : target.charDbId) && (r.scope === "char" || r.parent === target.charDbId));
       const repair = database.status === "checked" ? await inspectScopedRepair(db, target, { requireIdentity }) : undefined;
       const decision = decideDatabaseMaintenance(target, records, database, repair, evidence.observations);
+      decision.relativePath = database.relativePath;
       if (database.reason)
         decision.diagnostics = [
           ...decision.diagnostics ?? [],
@@ -9605,7 +9950,7 @@ async function inspect3(root, request, hooks, allocate = true) {
       const [parent, id] = JSON.parse(candidate);
       const database = await hooks.readDatabase(parent, id);
       databaseFacts.push(database);
-      preservedFiles.add(databasePath(parent, id));
+      preservedFiles.add(database.relativePath);
       const origin = snapshot.targets.find((target) => target.scope === "chat" && target.charDbId === parent && target.chatDbId === id)?.origin;
       if (repairDatabaseUsable(database, origin))
         usable++;
@@ -9763,6 +10108,83 @@ async function restartIdentity(root, request, hooks) {
   };
 }
 
+// src/dvs2/ext/tables/orphan-cleanup.ts
+var committedVersions = new WeakMap;
+function markVersionCommitted(payload, versionid) {
+  committedVersions.set(payload, versionid);
+}
+function takeCommittedVersion(payload) {
+  const version = committedVersions.get(payload);
+  committedVersions.delete(payload);
+  return version;
+}
+var orphanOperationCommand = () => ({
+  kind: "write",
+  sql: "UPDATE _dvs_gc_counter SET successful_updates = successful_updates + 1 WHERE singleton = 1",
+  expectChanges: 1
+});
+function compileOrphanPruneCommands(tables, references) {
+  const prefix = `_dvs_gc_${randomUuid().replaceAll("-", "")}`;
+  const keep = quoteIdentifier(`${prefix}_keep`), invalid = quoteIdentifier(`${prefix}_invalid`);
+  const commands = [
+    { kind: "write", sql: `CREATE TEMP TABLE ${keep} (fid BLOB PRIMARY KEY) WITHOUT ROWID` },
+    { kind: "write", sql: `CREATE TEMP TABLE ${invalid} (fid BLOB PRIMARY KEY) WITHOUT ROWID` }
+  ];
+  const ids = new Map(references.map((fid) => {
+    const bytes = identifierBytes(fid);
+    return [hex(bytes), bytes];
+  }));
+  for (const fid of ids.values())
+    commands.push({ kind: "write", sql: `INSERT INTO ${keep} (fid) VALUES (?)`, binds: [fid] });
+  for (const schema of tables) {
+    const index = quoteIdentifier(schema.indexName);
+    commands.push({
+      kind: "write",
+      sql: `INSERT OR IGNORE INTO ${invalid} (fid) SELECT DISTINCT fid FROM ${index}`
+    });
+  }
+  commands.push({ kind: "write", sql: `DELETE FROM ${invalid} WHERE fid IN (SELECT fid FROM ${keep})` });
+  for (const schema of tables)
+    commands.push({
+      kind: "write",
+      sql: `DELETE FROM ${quoteIdentifier(schema.indexName)} WHERE fid IN (SELECT fid FROM ${invalid})`
+    });
+  for (const schema of tables) {
+    const table = quoteIdentifier(schema.name), index = quoteIdentifier(schema.indexName);
+    commands.push({
+      kind: "write",
+      sql: `DELETE FROM ${table} WHERE rid IN (SELECT rid FROM ${table} EXCEPT SELECT rid FROM ${index})`
+    });
+  }
+  commands.push({ kind: "write", sql: `DROP TABLE ${invalid}` }, { kind: "write", sql: `DROP TABLE ${keep}` });
+  return commands;
+}
+async function recordOrphanOperation(helper) {
+  await confirmed(helper, [orphanOperationCommand()]);
+}
+async function confirmed(helper, commands) {
+  const result = await helper.checkedTransaction(commands);
+  if (result.committed !== true)
+    throw new ServiceError({
+      code: "RESULT_UNCONFIRMED",
+      message: "DVS 未取得清理提交事实。",
+      executionState: "unknown",
+      resultState: "unconfirmed"
+    });
+}
+async function cleanupOrphans(helper, schemas, references) {
+  const count = await helper.query("SELECT successful_updates FROM _dvs_gc_counter WHERE singleton = 1");
+  if (count.rows.length !== 1)
+    throw new Error("DVS 清理计数记录缺失。");
+  if (count.rows[0][0] < 10)
+    return;
+  const fids = typeof references === "function" ? references() : references;
+  await confirmed(helper, [
+    ...compileOrphanPruneCommands(Object.values(schemas), fids),
+    { kind: "write", sql: "UPDATE _dvs_gc_counter SET successful_updates = 0 WHERE singleton = 1", expectChanges: 1 }
+  ]);
+}
+
 // src/worker/storage-coordinator.ts
 function validateScopedTarget(binding) {
   if (!["char", "chat"].includes(binding.scope ?? ""))
@@ -9841,6 +10263,9 @@ class StorageCoordinator {
   source() {
     const configuration = this.configuration;
     return configuration.mode === "indexeddb" ? configuration : configuration.directory;
+  }
+  scanSource() {
+    return this.configuration;
   }
   enqueue(task) {
     const result = this.tail.then(task);
@@ -10161,7 +10586,7 @@ class StorageCoordinator {
     }
     const instruction = structuredClone(request);
     return this.queueChecked(binding, async (captured) => {
-      const directory = this.source();
+      const directory = this.scanSource();
       if (instruction.operation === "maintenance") {
         this.validateMaintenanceTarget(instruction.target);
         return (await inspectDatabaseMaintenance(this.maintenanceContext(captured), instruction.target, instruction)).plan;
@@ -10194,7 +10619,7 @@ class StorageCoordinator {
         return scanFile(directory, instruction.charDbId, instruction.chatDbId);
       if (instruction.operation === "database") {
         const { charDbId, chatDbId } = instruction;
-        const db = await this.createDatabase(directory, {
+        const db = await this.createDatabase(this.source(), {
           ...captured,
           scope: chatDbId ? "chat" : "char",
           charDbId,
@@ -10227,7 +10652,7 @@ class StorageCoordinator {
         const directory = this.source();
         const db = await this.createDatabase(directory, { ...binding, ...target }, this.mode);
         try {
-          return await scanDatabase(db, directory, target.charDbId, target.chatDbId);
+          return await scanDatabase(db, this.scanSource(), target.charDbId, target.chatDbId);
         } finally {
           await db.close();
         }
@@ -10241,7 +10666,16 @@ class StorageCoordinator {
         const parts = checkRelativePath(path, "read");
         if (typeof parts === "string" || record.id.includes("/") || typeof record.parent === "string" && record.parent.includes("/"))
           return "unknown";
-        return await storageEntryExists(this.source(), path, record.scope === "char" ? "directory" : "file") ? "present" : "absent";
+        if (record.scope === "char")
+          return await storageEntryExists(this.source(), path, "directory") ? "present" : "absent";
+        try {
+          await createStorage(this.scanSource(), record.parent, record.id).metadata();
+          return "present";
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "NotFoundError")
+            return "absent";
+          throw error;
+        }
       }
     };
   }
@@ -10393,7 +10827,7 @@ class StorageCoordinator {
         readDatabase: async (charDbId, chatDbId) => {
           const db = await this.createDatabase(this.source(), { ...captured, scope: chatDbId ? "chat" : "char", charDbId, ...chatDbId ? { chatDbId } : {} }, this.mode);
           try {
-            return await scanDatabase(db, this.source(), charDbId, chatDbId);
+            return await scanDatabase(db, this.scanSource(), charDbId, chatDbId);
           } finally {
             await db.close();
           }
@@ -10403,7 +10837,7 @@ class StorageCoordinator {
   }
   maintenanceContext(binding) {
     return {
-      directory: this.source(),
+      directory: this.scanSource(),
       root: this.database,
       managementOptions: this.managementRepairOptions(binding),
       create: (target) => this.createDatabase(this.source(), target.scope === "global" ? undefined : { ...binding, ...target }, this.mode)
@@ -10555,8 +10989,17 @@ class StorageCoordinator {
             }
           } else {
             if (plan.file === "present") {
-              await createStorage(this.source(), target.charDbId, target.scope === "chat" ? target.chatDbId : undefined, this.mode === "opfs").remove();
+              const segments = checkRelativePath(plan.relativePath, "remove");
+              if (typeof segments === "string")
+                throw new ServiceError({ code: "INVALID_REQUEST", message: segments });
+              await removeStorageEntry(this.source(), segments, "file");
               changedFile = true;
+              const remaining = await scanFile(this.scanSource(), target.charDbId, target.scope === "chat" ? target.chatDbId : undefined);
+              if (remaining.status !== "missing")
+                throw new ServiceError({
+                  code: "RESULT_UNCONFIRMED",
+                  message: remaining.status === "exists" ? `选中文件已删除，另一格式文件仍保留：${remaining.relativePath}；登记未重置，请重新扫描。` : "选中文件已删除，但无法确认是否仍有其他格式的文件；登记未重置，请重新扫描。"
+                });
             }
             const commands = [
               {
@@ -10591,7 +11034,7 @@ class StorageCoordinator {
             } finally {
               await savedRoot.close();
             }
-            if ((await scanFile(this.source(), target.charDbId, target.scope === "chat" ? target.chatDbId : undefined)).status !== "missing")
+            if ((await scanFile(this.scanSource(), target.charDbId, target.scope === "chat" ? target.chatDbId : undefined)).status !== "missing")
               throw new ServiceError({
                 code: "RESULT_UNCONFIRMED",
                 resultState: "unconfirmed",
@@ -10650,7 +11093,7 @@ class StorageCoordinator {
         const directory = this.source();
         const db = await this.createDatabase(directory, { ...captured, scope: chatDbId ? "chat" : "char", charDbId, ...chatDbId ? { chatDbId } : {} }, this.mode);
         try {
-          return await scanDatabase(db, directory, charDbId, chatDbId);
+          return await scanDatabase(db, this.scanSource(), charDbId, chatDbId);
         } finally {
           await db.close();
         }
@@ -10665,7 +11108,7 @@ class StorageCoordinator {
     if (!this.database)
       throw new ServiceError({ code: "INSTANCE_DISABLED", message: "管理数据库尚未恢复，拒绝删除扫描条目。" });
     await new RootTargets(this.database, true).ready();
-    return scanEntryHasBasis(relativePath, entry, await readScanBasis(this.database));
+    return scanEntryHasBasis(relativePath, entry, await readScanBasis(this.database), this.mode);
   }
   removeScanEntry(binding, request) {
     try {
@@ -10688,7 +11131,7 @@ class StorageCoordinator {
       return this.scanEntryBasis(relativePath, kind);
     };
     const part = kind === "file" ? parseDatabasePath(relativePath, "file") : undefined;
-    const fixed = part?.kind === "char" && isUuid(part.charDbId) ? { scope: "char", charDbId: part.charDbId } : part?.kind === "chat" && isUuid(part.charDbId) && isUuid(part.chatDbId) ? { scope: "chat", charDbId: part.charDbId, chatDbId: part.chatDbId } : undefined;
+    const fixed = part?.kind === "char" && isUuid(part.charDbId) ? { scope: "char", charDbId: part.charDbId } : part?.kind === "chat" && isUuid(part.charDbId) && isUuid(part.chatDbId) && (this.mode === "directory" || !relativePath.endsWith(".br")) ? { scope: "chat", charDbId: part.charDbId, chatDbId: part.chatDbId } : undefined;
     const target = fixed && {
       storageId: captured.storageId,
       configGeneration: captured.configGeneration,
@@ -10705,6 +11148,11 @@ class StorageCoordinator {
         return await this.enqueue(async () => {
           if (await check())
             return skipped(registered);
+          if (target) {
+            const current = await scanFile(this.scanSource(), target.charDbId, target.chatDbId);
+            if (!matchesScanFile(current, request.expectedFile ?? relativePath, request.expectedFileFormat))
+              return skipped("数据库文件或保存格式已改变，请重新扫描。");
+          }
           const outcome = await removeStorageEntry(this.source(), segments, kind);
           if (outcome === "not-empty")
             return skipped("目录不为空，未删除。");
@@ -10720,7 +11168,7 @@ class StorageCoordinator {
       }
     })();
   }
-  removeScanTarget(binding, target) {
+  removeScanTarget(binding, target, expectedFile, expectedFileFormat) {
     try {
       this.admit();
     } catch (error) {
@@ -10733,11 +11181,37 @@ class StorageCoordinator {
       if (!this.database || !this.targets)
         throw new ServiceError({ code: "INSTANCE_DISABLED", message: "管理数据库尚未恢复。" });
       await new RootTargets(this.database, true).ready();
+      const file = await scanFile(this.scanSource(), expected.charDbId, expected.chatDbId);
+      if (!matchesScanFile(file, expectedFile, expectedFileFormat))
+        return { status: "skipped", message: "数据库文件或保存格式已改变，请重新扫描。" };
       return await new RootEntities(this.database, this.targets).deletions.removeOrphanTarget(expected) ? { status: "removed", message: "初始化登记已删除并确认保存。" } : { status: "skipped", message: "登记已变化，未删除。" };
     });
   }
   execute(binding, task) {
     return this.schedule(binding, (db, lifecycle) => lifecycle ? lifecycle.read(task) : task(db));
+  }
+  async copyChat(source, chatDbId, fids) {
+    const bytes = await this.schedule(source, (_db, lifecycle) => lifecycle.snapshot());
+    if (!bytes)
+      return;
+    const target = { ...source, chatDbId };
+    await this.queueChecked(source, async () => {
+      const record = await this.targets.read(target);
+      if (!record || record.state !== "never" || record.origin !== "generated")
+        throw new ServiceError({ code: "IDENTITY_CONFLICT", message: "分支数据库目标已存在，未复制。" });
+      const db = await this.createDatabase(this.source(), target, this.mode);
+      await this.targets.transition(target, record, "creating");
+      await db.createFromSnapshot(bytes, { scope: "chat", charDbId: source.charDbId, chatDbId }, (copy) => {
+        const tables = (copy.exec("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB '_dvs_index_*'")[0]?.values ?? []).map((row) => ({ indexName: String(row[0]), name: String(row[0]).slice("_dvs_index_".length) }));
+        if (!tables.length)
+          return [];
+        const commands = compileOrphanPruneCommands(tables, fids);
+        if (copy.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='_dvs_gc_counter'").length)
+          commands.push({ sql: "UPDATE _dvs_gc_counter SET successful_updates=0 WHERE singleton=1" });
+        return commands;
+      });
+      await this.targets.transition(target, { ...record, state: "creating" }, "ready");
+    });
   }
   inspect(binding, task) {
     return this.schedule(binding, (db, lifecycle) => lifecycle ? lifecycle.inspect(task, new RootTargets(this.database, true)) : task(db));
@@ -10806,7 +11280,7 @@ class StorageCoordinator {
       this.scopedDatabases.delete(bindingKey(binding));
     }
   }
-  removeCleanupFile(binding, authorize = async () => {}) {
+  removeCleanupFile(binding, authorize = async () => {}, expectedFile, expectedFileFormat) {
     return this.queueChecked(binding, async () => {
       validateScopedTarget(binding);
       if (!this.cleanupSeals.has(bindingKey(binding)) || this.scopedDatabases.has(bindingKey(binding)))
@@ -10818,7 +11292,18 @@ class StorageCoordinator {
       if (!this.database || !this.targets)
         throw new ServiceError({ code: "INSTANCE_DISABLED", message: "root 尚未恢复，拒绝文件清理。" });
       await authorize(new RootEntities(this.database, this.targets));
-      await createStorage(this.source(), binding.charDbId, binding.chatDbId, this.mode === "opfs").remove();
+      if (expectedFile !== undefined) {
+        const current = await scanFile(this.scanSource(), binding.charDbId, binding.chatDbId);
+        if (!matchesScanFile(current, expectedFile, expectedFileFormat))
+          throw new ServiceError({ code: "STALE_IDENTITY", message: "数据库文件或保存格式已改变，请重新扫描。" });
+        if (expectedFile) {
+          const segments = checkRelativePath(expectedFile, "remove");
+          if (typeof segments === "string")
+            throw new ServiceError({ code: "INVALID_REQUEST", message: segments });
+          await removeStorageEntry(this.source(), segments, "file");
+        }
+      } else
+        await createStorage(this.source(), binding.charDbId, binding.chatDbId, this.mode === "opfs").remove();
     });
   }
   registerGenerated(binding) {
@@ -11591,7 +12076,8 @@ function createWorkerRuntime(options) {
       }
     }
   }
-  const storage = new StorageCoordinator(new IndexedDbConfiguration, async (source, binding, mode) => new SingleDatabase(await engine, createStorage(source, binding?.charDbId, binding?.chatDbId, mode === "opfs"), undefined, saveDebounceMs), (info) => {
+  const chatStorageOptions = { ...DEFAULT_CHAT_STORAGE_OPTIONS };
+  const storage = new StorageCoordinator(new IndexedDbConfiguration, async (source, binding, mode) => new SingleDatabase(await engine, createStorage(source, binding?.charDbId, binding?.chatDbId, mode === "opfs", chatStorageOptions), undefined, saveDebounceMs), (info) => {
     const event = { type: "storage-changed", instanceId, ...withEntityRevision(info) };
     broadcast(event);
   });
@@ -11771,6 +12257,14 @@ function createWorkerRuntime(options) {
       await verifyDrain();
       return { drained: true, buildId: BUILD_ID, protocolVersion: PROTOCOL_VERSION };
     }
+    const preferences = request.type === "chat-storage-settings" ? request.options : request.chatStorage;
+    if (preferences !== undefined || request.type === "chat-storage-settings") {
+      if (!isChatStorageOptions(preferences))
+        return invalidRequest();
+      Object.assign(chatStorageOptions, preferences);
+    }
+    if (request.type === "chat-storage-settings")
+      return {};
     if (request.type === "entity-delete-begin")
       return deletions.begin(request.kind, request.entity, request.operationId, request.deleteChats, request.binding);
     if (request.type === "entity-delete-pending")
@@ -11820,6 +12314,36 @@ function createWorkerRuntime(options) {
     }
     if (request.type === "identity-restore")
       return identity.restore(request);
+    if (request.type === "chat-fork-prepare" || request.type === "chat-fork-confirm") {
+      const b = request.binding;
+      if (b.scope !== "chat" || !isUuid(b.chatDbId) || !isUuid(request.chatDbId) || !chatCoordinate(request.targetEntity) || request.targetEntity === b.chatEntity || JSON.parse(request.targetEntity)[0] !== b.characterEntity)
+        return invalidRequest();
+      await entities.verify(b);
+      deletions.assertBinding(b);
+      const parent = {
+        ...b,
+        scope: "char",
+        chatDbId: undefined,
+        chatEntity: undefined,
+        chatIdentityGeneration: undefined,
+        chatReferenceId: undefined
+      };
+      if (request.type === "chat-fork-prepare") {
+        if (!Array.isArray(request.fids) || request.fids.some((fid) => !(fid instanceof Uint8Array) || fid.length !== 16))
+          return invalidRequest();
+        if (request.replacing === true)
+          await storage.registerGenerated({ ...parent, scope: "chat", chatDbId: request.chatDbId });
+        else
+          await entities.propose(parent, request.targetEntity, request.chatDbId);
+        await storage.copyChat(b, request.chatDbId, request.fids);
+      } else if (request.replacement) {
+        if (request.replacement.expectedId !== null && !isUuid(request.replacement.expectedId))
+          return invalidRequest();
+        await entities.replaceChat(parent, request.targetEntity, request.chatDbId, request.replacement.expectedId);
+      } else
+        await entities.confirm(parent, request.targetEntity, request.chatDbId, true);
+      return {};
+    }
     if (request.type === "chat-identity-acquire" || request.type === "chat-identity-settle")
       return identity.chat(request, port);
     if (request.type === "identity-acquire" || request.type === "identity-lookup")
@@ -11843,7 +12367,7 @@ function createWorkerRuntime(options) {
     if (request.type === "scan-remove-entry")
       return storage.removeScanEntry(request.binding, request.request);
     if (request.type === "scan-remove-target")
-      return storage.removeScanTarget(request.binding, request.target);
+      return storage.removeScanTarget(request.binding, request.target, request.expectedFile, request.expectedFileFormat);
     try {
       if ("binding" in request && request.binding) {
         deletions.assertBinding(request.binding);
@@ -11907,11 +12431,19 @@ function createWorkerRuntime(options) {
     }
     if (isWriteAction(request))
       return executeWrite(request, request.binding);
-    if (request.type === "viewer")
-      return storage.inspect(request.binding, (db) => db.viewer(request.request, () => {
+    if (request.type === "viewer") {
+      const operation = request.request;
+      const verify = () => {
         if (request.binding)
           entities.assertCached(request.binding);
-      }));
+      };
+      if (operation?.operation === "compression-sample") {
+        if (request.binding?.scope !== "chat")
+          return invalidRequest();
+        return storage.inspect(request.binding, (db) => db.committedSnapshot(verify));
+      }
+      return storage.inspect(request.binding, (db) => db.viewer(operation, verify));
+    }
     if (request.type === "query") {
       checkQueryPrefix(request.sql);
       const query = { sql: request.sql, binds: validateSerializedBinds(request.binds) };
@@ -11970,7 +12502,10 @@ function createWorkerRuntime(options) {
           };
         }
         try {
-          port.postMessage(response);
+          if (response.ok && request.type === "viewer" && request.request?.operation === "compression-sample" && response.result instanceof Uint8Array)
+            port.postMessage(response, [response.result.buffer]);
+          else
+            port.postMessage(response);
         } catch {
           removePort(port);
         }
@@ -12011,6 +12546,7 @@ function connectPageRuntime(port) {
 class WorkerClient {
   negotiateBuild;
   selectedMode;
+  chatStorageOptions;
   onRestart;
   onRestore;
   onRenameRecheck;
@@ -12602,10 +13138,10 @@ class WorkerClient {
       return Promise.reject(new ServiceError({ code: "NOT_INITIALIZED", message: "请先选择数据库目录。" }));
     return this.send({ type: "scan-remove-entry", request, binding });
   }
-  removeScanTarget(target, binding = this.captureBinding()) {
+  removeScanTarget(target, binding = this.captureBinding(), selection) {
     if (!binding)
       return Promise.reject(new ServiceError({ code: "NOT_INITIALIZED", message: "请先选择数据库目录。" }));
-    return this.send({ type: "scan-remove-target", target, binding });
+    return this.send({ type: "scan-remove-target", target, binding, ...selection });
   }
   scan(request, binding = this.captureBinding()) {
     if (!binding)
@@ -12718,7 +13254,13 @@ class WorkerClient {
         callId: isWriteAction(captured) && captured.type !== "batch" ? captured.callId : undefined
       });
       try {
-        this.port.postMessage({ ...captured, requestId, protocolVersion: PROTOCOL_VERSION });
+        const chatStorage = captured.type === "hello" || isWriteAction(captured) ? this.chatStorageOptions : undefined;
+        this.port.postMessage({
+          ...captured,
+          requestId,
+          protocolVersion: PROTOCOL_VERSION,
+          ...chatStorage && { chatStorage }
+        });
       } catch (error) {
         this.pending.delete(requestId);
         clearTimeout(timer);
@@ -15072,6 +15614,133 @@ class EntityDeleteCoordinator {
   }
 }
 
+// src/dvs2/message-references.ts
+function readMessageReferences(chat) {
+  const references = [];
+  for (const message of chat) {
+    if (message.is_user)
+      continue;
+    for (let i = 0;i < (message.swipes?.length ?? 1); i++) {
+      const fid = message.variables?.[i]?.dvs?.fid;
+      if (typeof fid === "string")
+        references.push(fid);
+    }
+  }
+  return references;
+}
+
+// src/tavern/chat-fork.ts
+class ChatForkCoordinator {
+  owner;
+  client;
+  diagnostics;
+  capture;
+  enabled;
+  installed = false;
+  prepared = new Map;
+  constructor(owner, client, diagnostics, capture, enabled) {
+    this.owner = owner;
+    this.client = client;
+    this.diagnostics = diagnostics;
+    this.capture = capture;
+    this.enabled = enabled;
+  }
+  install() {
+    if (this.installed || !this.owner.fetch)
+      return;
+    const original = this.owner.fetch, self2 = this;
+    this.owner.fetch = function(input, init) {
+      if (!init?.body || (init.method ?? "GET").toUpperCase() !== "POST")
+        return original.call(this, input, init);
+      const base = self2.owner.location?.href ?? "http://localhost/";
+      const url = new URL(input instanceof Request ? input.url : String(input), base);
+      if (url.pathname !== "/api/chats/save" || url.origin !== new URL(base).origin || !self2.enabled())
+        return original.call(this, input, init);
+      const context = self2.owner.SillyTavern?.getContext();
+      if (!context?.chatId || context.groupId || !context.chatMetadata)
+        return original.call(this, input, init);
+      const source = {
+        file: context.chatId,
+        avatar: context.characters[Number(context.characterId)]?.avatar,
+        integrity: context.chatMetadata.integrity
+      };
+      const prepare = self2.capture();
+      if (!prepare)
+        return original.call(this, input, init);
+      return self2.save(input, init, source, prepare, original).catch((error) => {
+        self2.diagnostics.error("chat-fork", error);
+        throw error;
+      });
+    };
+    this.installed = true;
+  }
+  async save(input, init, source, prepare, request) {
+    const headers = new Headers(init.headers);
+    const compressed = headers.get("Content-Encoding") === "gzip";
+    const text = compressed ? await new Response(new Response(init.body).body.pipeThrough(new DecompressionStream("gzip"))).text() : typeof init.body === "string" ? init.body : await new Response(init.body).text();
+    if (!text.includes('"main_chat"'))
+      return request.call(this.owner, input, init);
+    let body;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      return request.call(this.owner, input, init);
+    }
+    const metadata = body?.chat?.[0]?.chat_metadata;
+    if (!Array.isArray(body?.chat) || !source.avatar || body.avatar_url !== source.avatar || typeof body.file_name !== "string" || body.file_name === source.file || metadata?.main_chat !== source.file || typeof metadata.integrity !== "string" || !metadata.integrity || metadata.integrity === source.integrity)
+      return request.call(this.owner, input, init);
+    const targetEntity = JSON.stringify([source.avatar, body.file_name]);
+    const creationKey = JSON.stringify([targetEntity, metadata.integrity]);
+    let prepared = this.prepared.get(creationKey);
+    if (!prepared) {
+      const binding = await prepare();
+      if (!binding)
+        throw new ServiceError({ code: "NOT_INITIALIZED", message: "存储尚未就绪，未创建聊天分支；请先初始化存储。" });
+      const existing = await fixedChatFile(this.owner, { avatar: source.avatar, file: body.file_name }, request).document();
+      const replacement = existing.length ? { expectedId: chatIdentityValue(chatIdentityRaw(existing[0]?.chat_metadata)) } : undefined;
+      const chatDbId = randomUuid();
+      const fids = readMessageReferences(body.chat.slice(1)).map(parseUuid);
+      await this.client.send({
+        type: "chat-fork-prepare",
+        binding,
+        targetEntity,
+        chatDbId,
+        fids,
+        replacing: !!replacement
+      });
+      prepared = { binding, chatDbId, replacement };
+      this.prepared.set(creationKey, prepared);
+    }
+    const { binding, chatDbId, replacement } = prepared;
+    setChatIdentity(metadata, chatDbId);
+    headers.delete("Content-Encoding");
+    headers.delete("Content-Length");
+    const saved = await request.call(this.owner, input, { ...init, headers, body: JSON.stringify(body) });
+    if (!saved.ok)
+      return saved;
+    if (replacement && body.force !== true)
+      throw new ServiceError({
+        code: "IDENTITY_FAILED",
+        message: "目标聊天已存在，尚未确认原生覆盖，未重新登记检查点。"
+      });
+    const document2 = await fixedChatFile(this.owner, { avatar: source.avatar, file: body.file_name }, request).document();
+    if (document2[0]?.chat_metadata?.st_sle_helper?.chat_dbid !== chatDbId)
+      throw new ServiceError({
+        code: "IDENTITY_FAILED",
+        message: "分支聊天编号保存后读回不一致，未确认分支身份；请重新打开聊天并检查日志。"
+      });
+    await this.client.send({
+      type: "chat-fork-confirm",
+      binding,
+      targetEntity,
+      chatDbId,
+      ...replacement ? { replacement } : {}
+    });
+    this.prepared.delete(creationKey);
+    return saved;
+  }
+}
+
 // src/page/service.ts
 var enablements = new WeakMap;
 function getServiceEnablement(service) {
@@ -16008,10 +16677,15 @@ function createService(client, owner) {
   });
   authorizations.set(service, authorization);
   diagnostics.set(service, diagnostic);
+  const fork = owner ? new ChatForkCoordinator(owner, client, diagnostic, () => {
+    const captured = captureTargetWork("chat");
+    return captured ? () => captured.prepareIdentity() : undefined;
+  }, () => enabled && client.storage?.initialized === true && !configuring && preparation.state === "idle" && !globalAttempt) : undefined;
   if (owner)
     chatOpenings.set(service, {
       install() {
         chatOpeningInstalled = true;
+        fork?.install();
         const context = owner.SillyTavern?.getContext();
         if (chatChangedListenerInstalled || !context?.eventSource || !context.eventTypes?.CHAT_CHANGED)
           return;
@@ -16763,7 +17437,8 @@ var fieldNames = {
   businessDebugEnabled: "业务调试记录",
   dvsModelConfigs: "DVS 模型配置",
   dvsThemeMode: "DVS 配色设置",
-  dvsFloorDataEnabled: "楼层数据显示设置"
+  dvsFloorDataEnabled: "楼层数据显示设置",
+  chatStorage: "聊天库压缩设置"
 };
 var record2 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
 var failed3 = (message, cause) => new ServiceError({ code: "SETTINGS_FAILED", message, ...cause === undefined ? {} : { causeError: detail(cause) } });
@@ -16880,6 +17555,15 @@ class TavernEnableSettings {
     if (typeof enabled !== "boolean")
       throw failed3("楼层数据显示设置无效，本次尚未保存。");
     await this.write("dvsFloorDataEnabled", enabled);
+  }
+  readChatStorage() {
+    const value = this.fields().chatStorage;
+    return { ...isChatStorageOptions(value) ? value : DEFAULT_CHAT_STORAGE_OPTIONS };
+  }
+  async saveChatStorage(value) {
+    if (!isChatStorageOptions(value))
+      throw failed3("聊天库压缩设置无效，本次尚未保存。");
+    await this.write("chatStorage", { ...value });
   }
   write(key, value) {
     const work = this.pending.then(async () => {
@@ -17249,7 +17933,9 @@ function startExtension(owner = window) {
   extensionHost.enablement = new ExtensionEnablement({
     readLoaded: async () => {
       await localSettings.ready;
-      return settings.readLoaded();
+      const enabled = settings.readLoaded();
+      client.chatStorageOptions = settings.readChatStorage();
+      return enabled;
     },
     save: (enabled) => settings.save(enabled)
   }, () => {
@@ -27705,8 +28391,10 @@ var recordKey = (r) => `record:${r.scope}:${r.referenceId}`;
 function scanDiscoveryCandidates(input) {
   if (input.snapshot.management !== "valid")
     return [];
-  return (input.inventory?.entries ?? []).flatMap((entry) => {
+  return [...scanEntriesByPath(input.inventory).values()].flatMap((entry) => {
     if (entry.kind !== "file" || entry.reason || entry.temporary)
+      return [];
+    if (scanFileKey(entry.relativePath, input.inventory).endsWith(".br"))
       return [];
     const part = parseDatabasePath(entry.relativePath, "file");
     if (part?.kind !== "chat" || !isUuid(part.charDbId) || !isUuid(part.chatDbId))
@@ -27728,12 +28416,13 @@ function analyzeScanAssociations(input) {
   const { snapshot, observations, discovery } = input;
   const records = snapshot.records;
   const target = (parent, id) => snapshot.targets.find((t) => t.scope === (id ? "chat" : "char") && eq(t.charDbId, parent) && (!id || eq(t.chatDbId, id)));
-  const files = new Map((input.inventory?.entries ?? []).filter((e) => e.kind === "file").map((e) => [e.relativePath.toLowerCase(), e]));
+  const files = scanEntriesByPath(input.inventory);
+  const physical = (path) => files.get(path.toLowerCase())?.relativePath ?? path;
   const inspect = (parent, id) => {
     if (!isUuid(parent) || id !== undefined && !isUuid(id))
       return;
     const path = databasePath(parent, id).toLowerCase();
-    if (!files.has(path) || input.databases?.[path] || result.inspect.some((t) => eq(databasePath(t.charDbId, t.chatDbId), path)))
+    if (files.get(path)?.kind !== "file" || input.databases?.[path] || result.inspect.some((t) => eq(databasePath(t.charDbId, t.chatDbId), path)))
       return;
     result.inspect.push({ charDbId: parent, ...id ? { chatDbId: id } : {} });
   };
@@ -27843,7 +28532,7 @@ function analyzeScanAssociations(input) {
       },
       expectedRaw: obs.observedRaw,
       ...obs.localRaw ? { expectedLocalRaw: obs.localRaw } : {}
-    }, obs.identityStatus === "same" ? "聊天对应的数据仍在，将补全关联后继续使用。" : "聊天与已有数据的关联异常，将恢复关联。", [databasePath(parent, chosen)], registrationChanged || parentNeedsRepair);
+    }, obs.identityStatus === "same" ? "聊天对应的数据仍在，将补全关联后继续使用。" : "聊天与已有数据的关联异常，将恢复关联。", [physical(databasePath(parent, chosen))], registrationChanged || parentNeedsRepair);
   };
   for (const r of records) {
     if (r.scope !== "chat" || r.state === "deleted" || !r.parent || !r.file)
@@ -27896,7 +28585,7 @@ function analyzeScanAssociations(input) {
   for (const match of discovery?.matches ?? []) {
     if (usedCoordinates.has(JSON.stringify([match.avatar, match.file])))
       continue;
-    const path = databasePath(match.parent, match.chatId);
+    const path = physical(databasePath(match.parent, match.chatId));
     result.items.push({
       key: `unresolved:${JSON.stringify([match.avatar, match.file, match.parent])}`,
       rule: 11,
@@ -27916,7 +28605,7 @@ function analyzeScanAssociations(input) {
   if (candidates.length && !discovery?.complete) {
     result.complete = false;
     for (const candidate of candidates) {
-      const path = databasePath(candidate.parent, candidate.chatId);
+      const path = physical(databasePath(candidate.parent, candidate.chatId));
       protect(candidate.parent, candidate.chatId);
       if (!result.items.some((item) => item.files.some((f) => eq(f.relativePath, path))))
         result.items.push({
@@ -28153,7 +28842,13 @@ function planScan(input) {
     touchesManagement: false,
     ...extra
   });
-  const entries = new Map((inventory?.entries ?? []).map((entry) => [entry.relativePath.toLowerCase(), entry]));
+  const entries = scanEntriesByPath(inventory);
+  const selectedFile = (path) => {
+    if (!path || path.toLowerCase().endsWith(".br") || parseDatabasePath(path, "file")?.kind !== "chat" || !inventory)
+      return {};
+    const entry = entries.get(path.toLowerCase());
+    return { expectedFile: entry?.relativePath ?? "", ...entry?.format ? { expectedFileFormat: entry.format } : {} };
+  };
   const unreadable = [
     ...(inventory?.issues ?? []).map((issue) => issue.relativePath.toLowerCase()),
     ...(inventory?.entries ?? []).filter((e) => e.kind === "directory" && e.reason).map((e) => e.relativePath.toLowerCase())
@@ -28337,7 +29032,14 @@ function planScan(input) {
   };
   const reportItem = (f, found, note = "") => report(`record:${scanRecordKey(f.record)}`, found.rule, f.record.scope === "char" ? "角色库" : "聊天库", f.label, `${found.reason}${note}`, [blockOf(f, "report")], { coordinates: f.coordinates, files: fileOf(f, "keep") });
   let stepCount = 0;
-  const recordStep = (f, options) => ({ id: `s${++stepCount}`, kind: "record", expected: f.record, label: f.label, ...options });
+  const recordStep = (f, options) => ({
+    id: `s${++stepCount}`,
+    kind: "record",
+    expected: f.record,
+    label: f.label,
+    ...selectedFile(f.path),
+    ...options
+  });
   const renamedNote = (f) => f.record.state !== "deleted" ? `
 当前角色列表中没有登记的文件名 ${f.record.avatar}。插件停用期间改名，或改名登记完成前处理上下文丢失，可能使旧数据仍登记在旧文件名下，不会自动关联新名字。` : "";
   const normal = (f) => {
@@ -28363,7 +29065,7 @@ function planScan(input) {
     const key = `database:${lower}`;
     if (db.status === "checked" && !findings.length || items.some((item) => item.key === key))
       return;
-    report(key, db.status === "checked" ? 4 : 11, f.record.scope === "char" ? "角色库" : "聊天库", `数据库结构 · ${f.path}`, db.status === "checked" ? findings.join(" ") : db.status === "missing" ? "检查时数据库文件已不存在，请重新扫描。" : `数据库无法读取：${db.reason ?? "原因未知"}`, [{ name: f.name, source: f.coordinates.join("；"), entries: [{ text: f.path }] }], { coordinates: f.coordinates, files: fileOf(f, "keep") });
+    report(key, db.status === "checked" ? 4 : 11, f.record.scope === "char" ? "角色库" : "聊天库", `数据库结构 · ${f.file.relativePath}`, db.status === "checked" ? findings.join(" ") : db.status === "missing" ? "检查时数据库文件已不存在，请重新扫描。" : `数据库无法读取：${db.reason ?? "原因未知"}`, [{ name: f.name, source: f.coordinates.join("；"), entries: [{ text: f.file.relativePath }] }], { coordinates: f.coordinates, files: fileOf(f, "keep") });
   };
   const handled = new Set;
   for (const record of records) {
@@ -28514,13 +29216,21 @@ function planScan(input) {
         {
           relativePath: file.relativePath,
           size: file.size,
-          sqlite: entries.get(path.toLowerCase())?.sqlite === true,
+          sqlite: entries.get(path.toLowerCase())?.sqlite === true || !!entries.get(path.toLowerCase())?.format,
           action: "delete"
         }
       ] : [],
       steps: [
-        { id: `s${++stepCount}`, kind: "target", target },
-        ...file.status === "exists" ? [{ id: `s${++stepCount}`, kind: "entry", relativePath: file.relativePath, entry: "file" }] : []
+        { id: `s${++stepCount}`, kind: "target", target, ...selectedFile(path) },
+        ...file.status === "exists" ? [
+          {
+            id: `s${++stepCount}`,
+            kind: "entry",
+            relativePath: file.relativePath,
+            entry: "file",
+            ...selectedFile(path)
+          }
+        ] : []
       ],
       touchesManagement: true
     });
@@ -28529,7 +29239,10 @@ function planScan(input) {
     const basis = scanBasisFacts(snapshot);
     const all = inventory.entries;
     for (const entry of all) {
-      if (entry.kind !== "file" || scanEntryHasBasis(entry.relativePath, "file", basis) || protectedPath(entry.relativePath))
+      const logicalPath = scanFileKey(entry.relativePath, inventory);
+      if (entries.get(logicalPath) !== entry)
+        continue;
+      if (entry.kind !== "file" || scanEntryHasBasis(entry.relativePath, "file", basis, inventory.mode) || protectedPath(logicalPath))
         continue;
       if (entry.reason) {
         report(`entry:${entry.relativePath}`, 11, "文件", `文件 · ${entry.relativePath}`, `没有管理登记，但文件信息无法读取：${entry.reason}`, [{ entries: [{ text: entry.relativePath }] }], { files: [{ relativePath: entry.relativePath, sqlite: false, action: "keep" }] });
@@ -28541,15 +29254,28 @@ function planScan(input) {
         type: "文件",
         title: `文件 · ${entry.relativePath}`,
         reason: "还不能确定这份文件属于哪个角色或聊天，默认保留。",
-        ...entry.sqlite ? { impact: "没有登记的数据库也会删除，需要时先下载备份。" } : {},
+        ...entry.sqlite || entry.format ? { impact: "没有登记的数据库也会删除，需要时先下载备份。" } : {},
         objects: [
           { entries: [{ text: entry.relativePath, ...entry.size !== undefined ? { size: entry.size } : {} }] }
         ],
         coordinates: [],
         files: [
-          { relativePath: entry.relativePath, size: entry.size, sqlite: entry.sqlite === true, action: "delete" }
+          {
+            relativePath: entry.relativePath,
+            size: entry.size,
+            sqlite: entry.sqlite === true || !!entry.format,
+            action: "delete"
+          }
         ],
-        steps: [{ id: `s${++stepCount}`, kind: "entry", relativePath: entry.relativePath, entry: "file" }],
+        steps: [
+          {
+            id: `s${++stepCount}`,
+            kind: "entry",
+            relativePath: entry.relativePath,
+            entry: "file",
+            ...selectedFile(logicalPath)
+          }
+        ],
         touchesManagement: false
       });
     }
@@ -29560,7 +30286,7 @@ function createScanPanel(owner, host) {
             break;
           status.textContent = `正在检查数据库结构：${index + 1} / ${inspect.length}。`;
           const result = await host.client.scan({ operation: "database", ...target }, binding);
-          databases[result.relativePath.toLowerCase()] = result;
+          databases[databasePath(target.charDbId, target.chatDbId).toLowerCase()] = result;
         }
         if (!alive())
           return;
@@ -30046,6 +30772,8 @@ function createScanPanel(owner, host) {
             const result = await host.client.cleanScan({
               operationId: randomUuid(),
               expected: step.expected,
+              expectedFile: step.expectedFile,
+              expectedFileFormat: step.expectedFileFormat,
               observation,
               removeRecord: step.removeRecord,
               removeFile: step.removeFile,
@@ -30062,14 +30790,22 @@ function createScanPanel(owner, host) {
             }
             report(step, ok, line);
           } else if (step.kind === "target") {
-            const result = await host.client.removeScanTarget(step.target, binding);
+            const result = await host.client.removeScanTarget(step.target, binding, {
+              expectedFile: step.expectedFile,
+              expectedFileFormat: step.expectedFileFormat
+            });
             if (result.status === "removed")
               succeeded++;
             else
               halted = true;
             report(step, result.status === "removed", result.message);
           } else {
-            const result = await host.client.removeScanEntry({ relativePath: step.relativePath, entry: step.entry }, binding);
+            const result = await host.client.removeScanEntry({
+              relativePath: step.relativePath,
+              entry: step.entry,
+              expectedFile: step.expectedFile,
+              expectedFileFormat: step.expectedFileFormat
+            }, binding);
             if (result.status !== "skipped")
               succeeded++;
             report(step, result.status !== "skipped", result.message);
@@ -35057,11 +35793,209 @@ function render7(_ctx, _cache, $props, $setup, $data, $options) {
 __component6.render = render7;
 var AutoSetupDialog_default = __component6;
 
+// src/tavern/ui/CompressionBenchmarkDialog.vue
+var __component7 = /* @__PURE__ */ defineComponent({
+  __name: "CompressionBenchmarkDialog",
+  props: {
+    hasChat: { type: Function, required: true },
+    readChat: { type: Function, required: true }
+  },
+  emits: ["close", "apply"],
+  setup(__props, { expose: __expose, emit: __emit }) {
+    __expose();
+    const emit = __emit;
+    const props = __props;
+    const source = ref("standard");
+    const hasChat = ref(false);
+    const chatHint = ref("正在检查当前聊天库…");
+    const sourceOptions = computed2(() => [
+      { value: "standard", label: "标准测试库" },
+      { value: "chat", label: "当前聊天库", disabled: !hasChat.value }
+    ]);
+    const started = ref(false);
+    let disposed = false;
+    const status = ref("");
+    const sampleBytes = ref(0);
+    const results = ref([]);
+    const complete = ref(false);
+    const error = ref("");
+    const levelName = (quality) => COMPRESSION_LEVELS.find((level) => level.quality === quality).label;
+    const size = (bytes) => (bytes / 1048576).toFixed(2) + " MiB";
+    const recommended = computed2(() => complete.value ? results.value.reduce((best, row) => Math.abs(row.ms - 3000) < Math.abs(best.ms - 3000) ? row : best) : undefined);
+    let worker;
+    function stop2() {
+      worker?.terminate();
+      worker = undefined;
+    }
+    function fail(message) {
+      stop2();
+      error.value = message;
+    }
+    function progress(event) {
+      const step = event.data;
+      switch (step.phase) {
+        case "building":
+          status.value = `正在内存中构造测试库（${step.floor} / 300 楼）`;
+          break;
+        case "ready":
+          sampleBytes.value = step.bytes;
+          break;
+        case "cooldown":
+          status.value = `第 ${results.value.length + 1}/4 项 · ${levelName(step.quality)}档，冷却 ${step.seconds} 秒`;
+          break;
+        case "encoding":
+          status.value = `正在测试${levelName(step.quality)}档（第 ${results.value.length + 1}/4 项）`;
+          break;
+        case "result":
+          results.value.push(step.measurement);
+          break;
+        case "complete":
+          complete.value = true;
+          stop2();
+          break;
+        case "error":
+          fail(step.message);
+          break;
+      }
+    }
+    onMounted(async () => {
+      try {
+        hasChat.value = await props.hasChat();
+        chatHint.value = hasChat.value ? "" : "当前没有可用于测试的聊天库。";
+      } catch (cause) {
+        chatHint.value = cause instanceof Error ? cause.message : String(cause);
+      }
+    });
+    async function start() {
+      if (started.value)
+        return;
+      started.value = true;
+      try {
+        status.value = source.value === "standard" ? "正在内存中构造测试库（0 / 300 楼）" : "正在读取当前聊天库快照…";
+        const input = source.value === "standard" ? { source: "standard" } : { source: "chat", bytes: await props.readChat() };
+        if (disposed)
+          return;
+        worker = new Worker(`${EXTENSION_PATH}compression-benchmark.js`);
+        worker.onmessage = progress;
+        worker.onerror = (event) => fail(event.message || "无法运行压缩测试 Worker。");
+        worker.postMessage(input, input.source === "chat" ? [input.bytes.buffer] : []);
+      } catch (cause) {
+        fail(cause instanceof Error ? cause.message : String(cause));
+      }
+    }
+    onBeforeUnmount(() => {
+      disposed = true;
+      stop2();
+    });
+    const __returned__ = { emit, props, source, hasChat, chatHint, sourceOptions, started, get disposed() {
+      return disposed;
+    }, set disposed(v) {
+      disposed = v;
+    }, status, sampleBytes, results, complete, error, levelName, size, recommended, get worker() {
+      return worker;
+    }, set worker(v) {
+      worker = v;
+    }, stop: stop2, fail, progress, start, ConfigButton: ConfigButton_default, ConfigNotice: ConfigNotice_default, ConfigSegmented: ConfigSegmented_default, ModalDialog: ModalDialog_default };
+    Object.defineProperty(__returned__, "__isScriptSetup", { enumerable: false, value: true });
+    return __returned__;
+  }
+});
+var _hoisted_17 = { class: "dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-2" };
+var _hoisted_26 = {
+  key: 0,
+  class: "dvs:text-[0.9em]"
+};
+var _hoisted_34 = { key: 1 };
+var _hoisted_43 = {
+  key: 5,
+  class: "dvs:w-full dvs:text-start dvs:tabular-nums"
+};
+var _hoisted_53 = { class: "dvs:text-center" };
+function render8(_ctx, _cache, $props, $setup, $data, $options) {
+  return openBlock(), createBlock($setup["ModalDialog"], {
+    title: "测试推荐等级",
+    name: "compression-benchmark",
+    onClose: _cache[3] || (_cache[3] = ($event) => $setup.emit("close"))
+  }, {
+    actions: withCtx(() => [
+      createVNode($setup["ConfigButton"], {
+        label: $setup.started && !$setup.error && !$setup.complete ? "取消测试" : "关闭",
+        onClick: _cache[1] || (_cache[1] = ($event) => $setup.emit("close"))
+      }, null, 8, ["label"]),
+      !$setup.started ? (openBlock(), createBlock($setup["ConfigButton"], {
+        key: 0,
+        label: "开始测试",
+        variant: "primary",
+        onClick: $setup.start
+      })) : createCommentVNode("v-if", true),
+      $setup.recommended ? (openBlock(), createBlock($setup["ConfigButton"], {
+        key: 1,
+        label: "使用推荐等级",
+        variant: "primary",
+        onClick: _cache[2] || (_cache[2] = ($event) => $setup.emit("apply", $setup.recommended.quality))
+      })) : createCommentVNode("v-if", true)
+    ]),
+    default: withCtx(() => [
+      createBaseVNode("div", _hoisted_17, [
+        _cache[4] || (_cache[4] = createBaseVNode("span", null, "数据来源", -1)),
+        createVNode($setup["ConfigSegmented"], {
+          modelValue: $setup.source,
+          "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => $setup.source = $event),
+          label: "数据来源",
+          options: $setup.sourceOptions,
+          disabled: $setup.started
+        }, null, 8, ["modelValue", "options", "disabled"])
+      ]),
+      !$setup.started && $setup.chatHint ? (openBlock(), createElementBlock("p", _hoisted_26, toDisplayString($setup.chatHint), 1)) : createCommentVNode("v-if", true),
+      createBaseVNode("p", null, toDisplayString($setup.source === "standard" ? "标准库含 50 张表、300 楼。" : "使用开始测试时的聊天库快照。") + "依次测试四档压缩，每档先冷却 5 秒，推荐编码耗时最接近 3 秒的一档。", 1),
+      $setup.sampleBytes ? (openBlock(), createElementBlock("p", _hoisted_34, "测试库大小：" + toDisplayString($setup.size($setup.sampleBytes)), 1)) : createCommentVNode("v-if", true),
+      $setup.error ? (openBlock(), createBlock($setup["ConfigNotice"], {
+        key: 2,
+        kind: "error",
+        text: $setup.error
+      }, null, 8, ["text"])) : $setup.recommended ? (openBlock(), createBlock($setup["ConfigNotice"], {
+        key: 3,
+        kind: "success",
+        text: `推荐${$setup.levelName($setup.recommended.quality)}档，编码耗时 ${($setup.recommended.ms / 1000).toFixed(2)} 秒`
+      }, null, 8, ["text"])) : $setup.started ? (openBlock(), createBlock($setup["ConfigNotice"], {
+        key: 4,
+        kind: "busy",
+        text: $setup.status
+      }, null, 8, ["text"])) : createCommentVNode("v-if", true),
+      $setup.results.length ? (openBlock(), createElementBlock("table", _hoisted_43, [
+        _cache[5] || (_cache[5] = createBaseVNode("thead", null, [
+          createBaseVNode("tr", null, [
+            createBaseVNode("th", null, "档位"),
+            createBaseVNode("th", null, "编码耗时"),
+            createBaseVNode("th", null, "压缩后"),
+            createBaseVNode("th", null, "占原库")
+          ])
+        ], -1)),
+        createBaseVNode("tbody", _hoisted_53, [
+          (openBlock(true), createElementBlock(Fragment, null, renderList($setup.results, (row) => {
+            return openBlock(), createElementBlock("tr", {
+              key: row.quality
+            }, [
+              createBaseVNode("td", null, toDisplayString($setup.levelName(row.quality)), 1),
+              createBaseVNode("td", null, toDisplayString((row.ms / 1000).toFixed(2)) + " 秒", 1),
+              createBaseVNode("td", null, toDisplayString($setup.size(row.bytes)), 1),
+              createBaseVNode("td", null, toDisplayString((100 * row.bytes / $setup.sampleBytes).toFixed(1)) + "%", 1)
+            ]);
+          }), 128))
+        ])
+      ])) : createCommentVNode("v-if", true)
+    ]),
+    _: 1
+  });
+}
+__component7.render = render8;
+var CompressionBenchmarkDialog_default = __component7;
+
 // src/tavern/ui/SettingsPanel.vue
 var sectionTitle = "dvs:mb-2 dvs:flex dvs:items-center dvs:gap-2 dvs:text-[0.8em] dvs:font-semibold dvs:tracking-wide";
 var row = "dvs:px-3 dvs:py-2.5";
 var line = "dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-x-3 dvs:gap-y-1.5";
-var __component7 = /* @__PURE__ */ defineComponent({
+var __component8 = /* @__PURE__ */ defineComponent({
   __name: "SettingsPanel",
   props: { model: { type: Object, required: true } },
   setup(__props, { expose: __expose }) {
@@ -35095,6 +36029,18 @@ ${settingsErrorDetails(error)}` : "";
     const draft = reactive({ touched: false });
     const execution = computed2(() => draft.touched ? draft.execution : saved.value?.executionMode);
     const storage = computed2(() => draft.touched ? draft.storage : saved.value?.storageMode);
+    const strengthOptions = [
+      { value: "off", label: "不压缩" },
+      ...COMPRESSION_LEVELS.map(({ quality, label }) => ({ value: String(quality), label }))
+    ];
+    const compressionDraft = ref();
+    const compression = computed2(() => compressionDraft.value ?? view.value.chatStorage);
+    const selectedStrength = computed2(() => compression.value.compressed ? String(compression.value.quality) : "off");
+    const compressionChanged = computed2(() => compression.value.compressed !== view.value.chatStorage.compressed || compression.value.quality !== view.value.chatStorage.quality);
+    function chooseCompression(value) {
+      compressionDraft.value = value === "off" ? { ...compression.value, compressed: false } : { compressed: true, quality: Number(value) };
+      saveError.value = undefined;
+    }
     const saving = ref(false);
     const saveError = ref();
     function choose(kind, value) {
@@ -35142,12 +36088,14 @@ ${settingsErrorDetails(error)}` : "";
     const unavailableNotes = (options) => capabilities.value ? options.filter((option) => option.disabled).map((option) => modeTexts.unavailable(option.label, option.hint)) : [];
     const changed = computed2(() => execution.value !== saved.value?.executionMode || storage.value !== saved.value?.storageMode);
     const combinationOk = computed2(() => !!capabilities.value && !!execution.value && !!storage.value && combinationAvailable(capabilities.value, execution.value, storage.value));
-    const canSave = computed2(() => local.value.loaded && changed.value && combinationOk.value && !saving.value);
+    const canSave = computed2(() => local.value.loaded && !saving.value && (changed.value ? combinationOk.value : !!storage.value && compressionChanged.value));
     const modeHint = computed2(() => {
       if (!capabilities.value)
         return modeTexts.notDetected;
       if (changed.value && (execution.value || storage.value))
         return modeTexts.modified;
+      if (compressionChanged.value)
+        return "已修改，保存后从下次写入聊天库起生效";
       if (!local.value.configured)
         return modeTexts.notConfigured;
       const actualExecution = view.value.runtime.workerMode, actualStorage = view.value.storage?.mode;
@@ -35162,9 +36110,15 @@ ${settingsErrorDetails(error)}` : "";
       saving.value = true;
       saveError.value = undefined;
       try {
-        await actions.save({ executionMode: execution.value, storageMode: storage.value });
-        draft.touched = false;
-        dialog.value = "saved";
+        if (compressionChanged.value) {
+          await actions.saveChatStorage({ ...compression.value });
+          compressionDraft.value = undefined;
+        }
+        if (changed.value) {
+          await actions.save({ executionMode: execution.value, storageMode: storage.value });
+          draft.touched = false;
+          dialog.value = "saved";
+        }
       } catch (error) {
         saveError.value = errorData(error);
       } finally {
@@ -35188,9 +36142,9 @@ ${settingsErrorDetails(error)}` : "";
       requestedDebug.value = value === "on";
       actions.setBusinessDebug(value === "on");
     }
-    const __returned__ = { props, look, actions, view, local, capabilities, saved, sectionTitle, row, line, onOff, requestedEnabled, enabledValue, setEnabled, status, startupDetails, storageErrorDetails, unsaved, draft, execution, storage, saving, saveError, choose, executionReason, storageReason, storageAvailable, executionOptions, storageOptions, unavailableNotes, changed, combinationOk, canSave, modeHint, actualDirectory, save, dialog, useRecommended, reloadTarget, requestedDebug, debugValue, setDebug, get PhCaretDown() {
+    const __returned__ = { props, look, actions, view, local, capabilities, saved, sectionTitle, row, line, onOff, requestedEnabled, enabledValue, setEnabled, status, startupDetails, storageErrorDetails, unsaved, draft, execution, storage, strengthOptions, compressionDraft, compression, selectedStrength, compressionChanged, chooseCompression, saving, saveError, choose, executionReason, storageReason, storageAvailable, executionOptions, storageOptions, unavailableNotes, changed, combinationOk, canSave, modeHint, actualDirectory, save, dialog, useRecommended, reloadTarget, requestedDebug, debugValue, setDebug, get PhCaretDown() {
       return G6;
-    }, ConfigButton: ConfigButton_default, ConfigNotice: ConfigNotice_default, ConfigSegmented: ConfigSegmented_default, AutoSetupDialog: AutoSetupDialog_default, CapabilityGrid: CapabilityGrid_default, ModalDialog: ModalDialog_default, get settingsErrorDetails() {
+    }, ConfigButton: ConfigButton_default, ConfigNotice: ConfigNotice_default, ConfigSegmented: ConfigSegmented_default, AutoSetupDialog: AutoSetupDialog_default, CompressionBenchmarkDialog: CompressionBenchmarkDialog_default, CapabilityGrid: CapabilityGrid_default, ModalDialog: ModalDialog_default, get settingsErrorDetails() {
       return settingsErrorDetails;
     }, get advancedTexts() {
       return advancedTexts;
@@ -35213,22 +36167,22 @@ ${settingsErrorDetails(error)}` : "";
     return __returned__;
   }
 });
-var _hoisted_17 = { "aria-label": "SQLite 服务" };
-var _hoisted_26 = {
+var _hoisted_18 = { "aria-label": "SQLite 服务" };
+var _hoisted_27 = {
   key: 0,
   class: "dvs:text-[0.9em]",
   "data-enable-details": ""
 };
-var _hoisted_34 = {
+var _hoisted_35 = {
   class: "dvs:m-0 dvs:mt-1 dvs:font-dvs-mono dvs:text-[0.92em] dvs:whitespace-pre-wrap dvs:break-words",
   "data-enable-error-detail": ""
 };
-var _hoisted_43 = {
+var _hoisted_44 = {
   key: 1,
   class: "dvs:text-[0.9em]",
   "data-storage-error-details": ""
 };
-var _hoisted_53 = { class: "dvs:m-0 dvs:mt-1 dvs:font-dvs-mono dvs:text-[0.92em] dvs:whitespace-pre-wrap dvs:break-words" };
+var _hoisted_54 = { class: "dvs:m-0 dvs:mt-1 dvs:font-dvs-mono dvs:text-[0.92em] dvs:whitespace-pre-wrap dvs:break-words" };
 var _hoisted_62 = { "aria-label": "模式选择" };
 var _hoisted_72 = {
   class: "dvs:group",
@@ -35250,7 +36204,7 @@ var _hoisted_142 = {
 var _hoisted_152 = { class: "dvs:flex dvs:flex-wrap dvs:gap-2 dvs:pt-1" };
 var _hoisted_162 = { "aria-label": "维护与调试" };
 var _hoisted_172 = { class: "dvs:font-medium" };
-var _hoisted_18 = {
+var _hoisted_182 = {
   key: 0,
   class: "dvs:space-y-1"
 };
@@ -35282,7 +36236,7 @@ var _hoisted_262 = {
   class: "dvs:min-w-0 dvs:break-all",
   "data-host-environment": ""
 };
-var _hoisted_27 = {
+var _hoisted_272 = {
   class: "dvs:min-w-0 dvs:break-all",
   "data-page-version": ""
 };
@@ -35301,13 +36255,13 @@ var _hoisted_30 = {
 var _hoisted_31 = { class: "dvs:flex dvs:flex-wrap dvs:gap-2" };
 var _hoisted_322 = { class: "dvs:cursor-pointer" };
 var _hoisted_332 = { class: "dvs:m-0 dvs:mt-1 dvs:font-dvs-mono dvs:whitespace-pre-wrap dvs:break-words" };
-function render8(_ctx, _cache, $props, $setup, $data, $options) {
+function render9(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("div", {
     class: normalizeClass(["dvs:@container dvs-config-native dvs:space-y-5 dvs:pb-2", $setup.look.text]),
     "data-sqlite-helper-settings-panel": ""
   }, [
     createCommentVNode(" 服务 "),
-    createBaseVNode("section", _hoisted_17, [
+    createBaseVNode("section", _hoisted_18, [
       createBaseVNode("h5", {
         class: normalizeClass([$setup.sectionTitle, $setup.look.muted])
       }, "服务", 2),
@@ -35320,7 +36274,7 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
           createBaseVNode("div", {
             class: normalizeClass($setup.line)
           }, [
-            _cache[18] || (_cache[18] = createBaseVNode("span", { class: "dvs:font-medium" }, "SQLite 服务", -1)),
+            _cache[21] || (_cache[21] = createBaseVNode("span", { class: "dvs:font-medium" }, "SQLite 服务", -1)),
             createVNode($setup["ConfigSegmented"], {
               "data-enabled": "",
               label: "SQLite 服务",
@@ -35335,16 +36289,16 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
             "data-enable-status": "",
             role: "status"
           }, toDisplayString($setup.status), 3),
-          $setup.startupDetails ? (openBlock(), createElementBlock("details", _hoisted_26, [
+          $setup.startupDetails ? (openBlock(), createElementBlock("details", _hoisted_27, [
             createBaseVNode("summary", {
               class: normalizeClass(["dvs:cursor-pointer", $setup.look.muted])
             }, toDisplayString($setup.serviceTexts.details), 3),
-            createBaseVNode("pre", _hoisted_34, toDisplayString($setup.startupDetails), 1)
-          ])) : $setup.storageErrorDetails ? (openBlock(), createElementBlock("details", _hoisted_43, [
+            createBaseVNode("pre", _hoisted_35, toDisplayString($setup.startupDetails), 1)
+          ])) : $setup.storageErrorDetails ? (openBlock(), createElementBlock("details", _hoisted_44, [
             createBaseVNode("summary", {
               class: normalizeClass(["dvs:cursor-pointer", $setup.look.muted])
             }, "查看详情", 2),
-            createBaseVNode("pre", _hoisted_53, toDisplayString($setup.storageErrorDetails), 1)
+            createBaseVNode("pre", _hoisted_54, toDisplayString($setup.storageErrorDetails), 1)
           ])) : createCommentVNode("v-if", true),
           $setup.unsaved ? (openBlock(), createBlock($setup["ConfigNotice"], {
             key: 2,
@@ -35388,7 +36342,7 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
           createBaseVNode("div", {
             class: normalizeClass($setup.line)
           }, [
-            _cache[19] || (_cache[19] = createBaseVNode("span", { class: "dvs:w-16 dvs:shrink-0 dvs:font-medium" }, "工作模式", -1)),
+            _cache[22] || (_cache[22] = createBaseVNode("span", { class: "dvs:w-16 dvs:shrink-0 dvs:font-medium" }, "工作模式", -1)),
             createVNode($setup["ConfigSegmented"], {
               "data-execution-mode": "",
               label: "工作模式",
@@ -35417,7 +36371,7 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
           createBaseVNode("div", {
             class: normalizeClass($setup.line)
           }, [
-            _cache[20] || (_cache[20] = createBaseVNode("span", { class: "dvs:w-16 dvs:shrink-0 dvs:font-medium" }, "存储模式", -1)),
+            _cache[23] || (_cache[23] = createBaseVNode("span", { class: "dvs:w-16 dvs:shrink-0 dvs:font-medium" }, "存储模式", -1)),
             createVNode($setup["ConfigSegmented"], {
               "data-storage-mode": "",
               label: "存储模式",
@@ -35444,6 +36398,36 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
             class: normalizeClass(["dvs:text-[0.88em]", $setup.look.muted]),
             "data-directory-hint": ""
           }, toDisplayString($setup.modeTexts.directoryAfterRefresh), 3)) : createCommentVNode("v-if", true)
+        ]),
+        createBaseVNode("div", {
+          class: normalizeClass([$setup.row, "dvs:space-y-1.5"])
+        }, [
+          createBaseVNode("div", {
+            class: normalizeClass($setup.line)
+          }, [
+            _cache[24] || (_cache[24] = createBaseVNode("span", { class: "dvs:w-16 dvs:shrink-0 dvs:font-medium" }, "压缩等级", -1)),
+            createVNode($setup["ConfigSegmented"], {
+              "data-compression-strength": "",
+              label: "压缩等级",
+              options: $setup.strengthOptions,
+              "model-value": $setup.selectedStrength,
+              disabled: !$setup.storage || $setup.saving,
+              "onUpdate:modelValue": $setup.chooseCompression
+            }, null, 8, ["model-value", "disabled"]),
+            createVNode($setup["ConfigButton"], {
+              label: "推荐",
+              disabled: $setup.saving,
+              onClick: _cache[4] || (_cache[4] = ($event) => $setup.dialog = "compression-benchmark")
+            }, null, 8, ["disabled"])
+          ]),
+          createBaseVNode("p", {
+            class: normalizeClass(["dvs:text-[0.88em]", $setup.look.faint])
+          }, [
+            _cache[25] || (_cache[25] = createTextVNode(" 下次保存聊天库时生效。 ", -1)),
+            !$setup.strengthOptions.some((option) => option.value === $setup.selectedStrength) ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
+              createTextVNode("当前使用原有等级 " + toDisplayString($setup.compression.quality) + "。", 1)
+            ], 64)) : createCommentVNode("v-if", true)
+          ], 2)
         ]),
         createBaseVNode("div", {
           class: normalizeClass([$setup.row, "dvs:space-y-2"])
@@ -35504,7 +36488,7 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
                   options: $setup.onOff,
                   "model-value": $setup.view.storageMode.autoReloadEnabled ? "on" : "off",
                   disabled: $setup.view.storageMode.changing || $setup.view.storage?.switching === true,
-                  "onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.actions.setAutoReload($event === "on"))
+                  "onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.actions.setAutoReload($event === "on"))
                 }, null, 8, ["label", "model-value", "disabled"])
               ]),
               createBaseVNode("p", {
@@ -35516,7 +36500,7 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
                 class: normalizeClass($setup.line)
               }, [
                 withDirectives(createBaseVNode("select", {
-                  "onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.reloadTarget = $event),
+                  "onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.reloadTarget = $event),
                   class: normalizeClass([$setup.look.select, "dvs:w-64! dvs:max-w-full"]),
                   "aria-label": "重新加载目标",
                   "data-reload-target": ""
@@ -35534,7 +36518,7 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
                   label: $setup.directoryTexts.reload,
                   "data-action": "reload",
                   disabled: !$setup.view.actionsAllowed,
-                  onClick: _cache[6] || (_cache[6] = ($event) => $setup.actions.run("reload", $setup.reloadTarget))
+                  onClick: _cache[7] || (_cache[7] = ($event) => $setup.actions.run("reload", $setup.reloadTarget))
                 }, null, 8, ["label", "disabled"])
               ]),
               createBaseVNode("p", {
@@ -35553,7 +36537,7 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
                   label: $setup.directoryTexts.permission,
                   "data-action": "permission",
                   disabled: !$setup.view.directory.permissionEnabled,
-                  onClick: _cache[7] || (_cache[7] = ($event) => $setup.actions.run("permission"))
+                  onClick: _cache[8] || (_cache[8] = ($event) => $setup.actions.run("permission"))
                 }, null, 8, ["label", "disabled"]), [
                   [vShow, $setup.view.directory.permissionShown]
                 ]),
@@ -35561,7 +36545,7 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
                   label: $setup.view.directory.manageLabel,
                   "data-action": "manage",
                   disabled: !$setup.view.directory.manageEnabled,
-                  onClick: _cache[8] || (_cache[8] = ($event) => $setup.actions.run("manage"))
+                  onClick: _cache[9] || (_cache[9] = ($event) => $setup.actions.run("manage"))
                 }, null, 8, ["label", "disabled"])
               ])
             ])
@@ -35586,7 +36570,7 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
             label: $setup.maintenanceTexts.scan,
             "data-action": "scan",
             disabled: !$setup.view.actionsAllowed,
-            onClick: _cache[9] || (_cache[9] = ($event) => $setup.actions.run("scan"))
+            onClick: _cache[10] || (_cache[10] = ($event) => $setup.actions.run("scan"))
           }, null, 8, ["label", "disabled"]),
           createBaseVNode("span", {
             class: normalizeClass(["dvs:min-w-0 dvs:flex-1 dvs:text-[0.88em]", $setup.look.faint])
@@ -35619,13 +36603,13 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
         ])
       ], 2)
     ]),
-    $setup.view.management.message || $setup.view.management.detail ? (openBlock(), createElementBlock("div", _hoisted_18, [
+    $setup.view.management.message || $setup.view.management.detail ? (openBlock(), createElementBlock("div", _hoisted_182, [
       createBaseVNode("div", {
         class: normalizeClass(["dvs:rounded-lg dvs:px-2.5 dvs:py-1.5 dvs:text-[0.92em]", $setup.view.management.detail ? $setup.look.notice.error : $setup.look.notice.info])
       }, [
         createBaseVNode("p", _hoisted_19, toDisplayString($setup.view.management.message), 1),
         $setup.view.management.detail ? (openBlock(), createElementBlock("details", _hoisted_20, [
-          _cache[21] || (_cache[21] = createBaseVNode("summary", { class: "dvs:cursor-pointer" }, "查看详细原因", -1)),
+          _cache[26] || (_cache[26] = createBaseVNode("summary", { class: "dvs:cursor-pointer" }, "查看详细原因", -1)),
           createBaseVNode("pre", _hoisted_21, toDisplayString($setup.view.management.detail), 1)
         ])) : createCommentVNode("v-if", true)
       ], 2)
@@ -35664,7 +36648,7 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
           createBaseVNode("dt", {
             class: normalizeClass($setup.look.muted)
           }, "页面接口", 2),
-          createBaseVNode("dd", _hoisted_27, toDisplayString($setup.view.versions.pageVersion), 1),
+          createBaseVNode("dd", _hoisted_272, toDisplayString($setup.view.versions.pageVersion), 1),
           createBaseVNode("dt", {
             class: normalizeClass($setup.look.muted)
           }, "页面构建", 2),
@@ -35683,35 +36667,45 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
             label: $setup.advancedTexts.reconnect,
             "data-action": "reconnect",
             disabled: !$setup.view.actionsAllowed,
-            onClick: _cache[10] || (_cache[10] = ($event) => $setup.actions.run("reconnect"))
+            onClick: _cache[11] || (_cache[11] = ($event) => $setup.actions.run("reconnect"))
           }, null, 8, ["label", "disabled"]),
           createVNode($setup["ConfigButton"], {
             label: $setup.advancedTexts.restart,
             "data-action": "restart",
             disabled: !$setup.view.actionsAllowed,
-            onClick: _cache[11] || (_cache[11] = ($event) => $setup.actions.run("restart"))
+            onClick: _cache[12] || (_cache[12] = ($event) => $setup.actions.run("restart"))
           }, null, 8, ["label", "disabled"])
         ])
       ], 2)
     ], 2),
-    $setup.dialog === "auto-setup" ? (openBlock(), createBlock($setup["AutoSetupDialog"], {
+    $setup.dialog === "compression-benchmark" ? (openBlock(), createBlock($setup["CompressionBenchmarkDialog"], {
       key: 1,
+      "has-chat": $setup.actions.hasBenchmarkChat,
+      "read-chat": $setup.actions.readBenchmarkChat,
+      onClose: _cache[13] || (_cache[13] = ($event) => $setup.dialog = undefined),
+      onApply: _cache[14] || (_cache[14] = (quality) => {
+        $setup.chooseCompression(String(quality));
+        $setup.dialog = undefined;
+      })
+    }, null, 8, ["has-chat", "read-chat"])) : createCommentVNode("v-if", true),
+    $setup.dialog === "auto-setup" ? (openBlock(), createBlock($setup["AutoSetupDialog"], {
+      key: 2,
       local: $setup.local,
       detect: $setup.actions.detect,
       apply: $setup.useRecommended,
       unsaved: $setup.unsaved,
-      onClose: _cache[12] || (_cache[12] = ($event) => $setup.dialog = undefined)
+      onClose: _cache[15] || (_cache[15] = ($event) => $setup.dialog = undefined)
     }, null, 8, ["local", "detect", "unsaved"])) : $setup.dialog === "details" ? (openBlock(), createBlock($setup["ModalDialog"], {
-      key: 2,
+      key: 3,
       title: $setup.dialogTexts.detailsTitle,
       name: "details",
-      onClose: _cache[14] || (_cache[14] = ($event) => $setup.dialog = undefined)
+      onClose: _cache[17] || (_cache[17] = ($event) => $setup.dialog = undefined)
     }, {
       actions: withCtx(() => [
         createVNode($setup["ConfigButton"], {
           label: $setup.dialogTexts.close,
           "data-modal-action": "close",
-          onClick: _cache[13] || (_cache[13] = ($event) => $setup.dialog = undefined)
+          onClick: _cache[16] || (_cache[16] = ($event) => $setup.dialog = undefined)
         }, null, 8, ["label"])
       ]),
       default: withCtx(() => [
@@ -35731,23 +36725,23 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
       ]),
       _: 1
     }, 8, ["title"])) : $setup.dialog === "saved" ? (openBlock(), createBlock($setup["ModalDialog"], {
-      key: 3,
+      key: 4,
       title: $setup.dialogTexts.savedTitle,
       name: "saved",
       "return-to": "#st-sqlite-helper-settings [data-save-modes]",
-      onClose: _cache[17] || (_cache[17] = ($event) => $setup.dialog = undefined)
+      onClose: _cache[20] || (_cache[20] = ($event) => $setup.dialog = undefined)
     }, {
       actions: withCtx(() => [
         createVNode($setup["ConfigButton"], {
           label: $setup.dialogTexts.reloadPage,
           variant: "primary",
           "data-modal-action": "reload",
-          onClick: _cache[15] || (_cache[15] = ($event) => $setup.actions.reloadPage())
+          onClick: _cache[18] || (_cache[18] = ($event) => $setup.actions.reloadPage())
         }, null, 8, ["label"]),
         createVNode($setup["ConfigButton"], {
           label: $setup.dialogTexts.close,
           "data-modal-action": "close",
-          onClick: _cache[16] || (_cache[16] = ($event) => $setup.dialog = undefined)
+          onClick: _cache[19] || (_cache[19] = ($event) => $setup.dialog = undefined)
         }, null, 8, ["label"])
       ]),
       default: withCtx(() => [
@@ -35762,8 +36756,8 @@ function render8(_ctx, _cache, $props, $setup, $data, $options) {
     }, 8, ["title"])) : createCommentVNode("v-if", true)
   ], 2);
 }
-__component7.render = render8;
-var SettingsPanel_default = __component7;
+__component8.render = render9;
+var SettingsPanel_default = __component8;
 
 // src/tavern/storage-panel.ts
 var panelKey = Symbol.for("st-sqlite-helper.storage-panel-cleanup");
@@ -35949,6 +36943,7 @@ ${{ "authorization-wait": "等待授权", "recovery-started": "开始恢复连�
     return {
       enablement: state,
       local: host.localSettings.getStatus(),
+      chatStorage: host.client.chatStorageOptions ?? DEFAULT_CHAT_STORAGE_OPTIONS,
       storageMode: mode,
       debug: host.businessDebug.getStatus(),
       storage: storage ? structuredClone(storage) : undefined,
@@ -36213,6 +37208,34 @@ ${{ "authorization-wait": "等待授权", "recovery-started": "开始恢复连�
       },
       detect: (signal) => host.localSettings.detect(signal),
       save: (preferences) => host.localSettings.save(preferences),
+      async hasBenchmarkChat() {
+        if (!host.enablement.getStatus().pageActive || !host.client.storage?.initialized)
+          return false;
+        const chat = host.service.captureTarget("chat");
+        if (!chat)
+          return false;
+        try {
+          await chat.execute({ type: "viewer", request: { operation: "tables" } });
+          return true;
+        } catch (error) {
+          if (errorData(error).code === "DATABASE_NOT_INITIALIZED")
+            return false;
+          throw error;
+        }
+      },
+      async readBenchmarkChat() {
+        const chat = host.service.captureTarget("chat");
+        if (!chat)
+          throw new Error("请先打开有数据库的聊天。");
+        return await chat.execute({ type: "viewer", request: { operation: "compression-sample" } });
+      },
+      async saveChatStorage(options) {
+        await host.settings.saveChatStorage(options);
+        host.client.chatStorageOptions = options;
+        renderManagement();
+        if (host.enablement.getStatus().pageActive)
+          await host.client.send({ type: "chat-storage-settings", options });
+      },
       run: (action, reloadTarget) => run(action, reloadTarget),
       reloadPage: () => owner.location.reload()
     }
@@ -40366,6 +41389,110 @@ function stringify3(value, replacer, options) {
     return value.toString(options);
   return new Document2(value, _replacer, options).toString(options);
 }
+// src/dvs2/ext/tables/internal.ts
+var groups = new WeakMap;
+var originalPayload = Symbol("DVS shared payload");
+var views = new WeakMap;
+function sharedPayload(payload) {
+  return payload[originalPayload] ?? payload;
+}
+function publishInternal(payload, entries) {
+  const ordinary = payload.tables;
+  for (const group of entries.values()) {
+    const isPrivate = (name) => Object.hasOwn(group.schemas, name);
+    const owner = (name) => isPrivate(name) ? group.work : ordinary.tables;
+    const visible = new Proxy(Object.create(null), {
+      get: (_, name) => Reflect.get(owner(name), name),
+      set: (_, name, rows) => Reflect.set(owner(name), name, rows),
+      deleteProperty: (_, name) => Reflect.deleteProperty(owner(name), name),
+      has: (_, name) => Object.hasOwn(owner(name), name),
+      ownKeys: () => [
+        ...Reflect.ownKeys(ordinary.tables).filter((name) => !isPrivate(name)),
+        ...Reflect.ownKeys(group.work)
+      ],
+      getOwnPropertyDescriptor: (_, name) => {
+        const descriptor = Object.getOwnPropertyDescriptor(owner(name), name);
+        return descriptor && { ...descriptor, configurable: true };
+      }
+    });
+    Object.defineProperty(group.data, "filterGroups", {
+      enumerable: true,
+      get: () => ordinary.filterGroups,
+      set(value) {
+        ordinary.filterGroups = value;
+      }
+    });
+    Object.defineProperty(group.data, "tables", {
+      enumerable: true,
+      get: () => visible,
+      set(next) {
+        const rows = Object.entries(next);
+        ordinary.tables = Object.fromEntries(rows.filter(([name]) => !isPrivate(name)));
+        group.work = Object.fromEntries(rows.filter(([name]) => isPrivate(name)));
+      }
+    });
+  }
+  groups.set(sharedPayload(payload), entries);
+}
+function groupFor(payload, key) {
+  const group = groups.get(sharedPayload(payload))?.get(key);
+  if (!group)
+    throw new Error(`DVS 当前聊天未引入内部表组：${key}`);
+  return group;
+}
+function resetWorkForAi(payload) {
+  if (!payload.tables)
+    return;
+  payload.tables.tables = structuredClone(payload.tables.rawTables);
+  for (const group of groups.get(sharedPayload(payload))?.values() ?? []) {
+    group.work = Object.fromEntries(Object.keys(group.schemas).map((name) => [name, structuredClone(group.data.rawTables[name])]));
+  }
+}
+function internalRows(payload, owner, table) {
+  const group = groupFor(payload, owner);
+  if (!Object.hasOwn(group.schemas, table) || !Object.hasOwn(group.data.tables, table))
+    throw new Error(`DVS 内部表不存在：${owner} / ${table}`);
+  return group.data.tables[table];
+}
+function internalState(payload, key) {
+  return promptGroup(groups.get(sharedPayload(payload)), key);
+}
+function promptGroup(available, key) {
+  const group = available?.get(key);
+  if (!group)
+    throw new Error(`DVS 当前聊天未引入内部表组：${key}`);
+  return { state: group.data.state, schemas: group.schemas };
+}
+function extensionPayload(payload, key) {
+  let byKey = views.get(payload);
+  if (!byKey)
+    views.set(payload, byKey = new Map);
+  const cached = byKey.get(key);
+  if (cached)
+    return cached;
+  let previous;
+  let scoped;
+  const view = new Proxy(payload, {
+    get(target, prop, receiver) {
+      if (prop === originalPayload)
+        return target;
+      if (prop !== "tables" || !target.tables)
+        return Reflect.get(target, prop, receiver);
+      if (target.tables === previous)
+        return scoped;
+      previous = target.tables;
+      scoped = new Proxy(target.tables, {
+        get(tables, field, tableReceiver) {
+          return field === "internal" ? groupFor(target, key).data : Reflect.get(tables, field, tableReceiver);
+        }
+      });
+      return scoped;
+    }
+  });
+  byKey.set(key, view);
+  return view;
+}
+
 // src/dvs2/model-sse.ts
 class ModelSseParser {
   line = "";
@@ -41137,6 +42264,7 @@ function extensionContext(input, extension, name, onWrite) {
   };
   return {
     ...context,
+    payload: extension.definition.internalTables?.length ? extensionPayload(context.payload, extension.definition.key) : context.payload,
     get lorebook() {
       return context.lorebook;
     },
@@ -41279,7 +42407,7 @@ function isPreNarrativeUiRecord(input) {
   return record.key === null ? Object.keys(record).length === 1 : typeof record.key === "string" && !!record.key.trim() && Object.entries(record).every(([field, value]) => field === "key" || (field === "params" || field === "result") && isJsonValue(value));
 }
 // src/dvs2/ui/components/record/ActionButton.vue
-var __component8 = /* @__PURE__ */ defineComponent({
+var __component9 = /* @__PURE__ */ defineComponent({
   __name: "ActionButton",
   props: {
     icon: { type: null, required: false },
@@ -41306,7 +42434,7 @@ var __component8 = /* @__PURE__ */ defineComponent({
   }
 });
 var _hoisted_110 = ["disabled", "title"];
-function render9(_ctx, _cache, $props, $setup, $data, $options) {
+function render10(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("button", {
     type: "button",
     class: normalizeClass(["dvs:inline-flex dvs:h-7 dvs:shrink-0 dvs:cursor-pointer dvs:items-center dvs:justify-center dvs:gap-1.5 dvs:rounded-lg dvs:border dvs:px-2.5 dvs:text-[0.9em] dvs:font-medium dvs:whitespace-nowrap dvs:transition dvs:disabled:cursor-not-allowed dvs:disabled:opacity-45", $setup.variants[$props.variant]]),
@@ -41326,11 +42454,11 @@ function render9(_ctx, _cache, $props, $setup, $data, $options) {
     createTextVNode(" " + toDisplayString($props.label), 1)
   ], 10, _hoisted_110);
 }
-__component8.render = render9;
-var ActionButton_default = __component8;
+__component9.render = render10;
+var ActionButton_default = __component9;
 
 // src/dvs2/ui/components/record/StatusLine.vue
-var __component9 = /* @__PURE__ */ defineComponent({
+var __component10 = /* @__PURE__ */ defineComponent({
   __name: "StatusLine",
   props: {
     kind: { type: String, required: true },
@@ -41352,7 +42480,7 @@ var __component9 = /* @__PURE__ */ defineComponent({
 });
 var _hoisted_111 = ["role"];
 var _hoisted_210 = { class: "dvs:whitespace-pre-wrap" };
-function render10(_ctx, _cache, $props, $setup, $data, $options) {
+function render11(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("p", {
     role: $props.kind === "error" ? "alert" : "status",
     class: normalizeClass(["dvs:flex dvs:items-start dvs:gap-2 dvs:rounded-lg dvs:px-2.5 dvs:py-1.5 dvs:text-[0.92em] dvs:ring-1", $setup.look.cls])
@@ -41365,11 +42493,11 @@ function render10(_ctx, _cache, $props, $setup, $data, $options) {
     createBaseVNode("span", _hoisted_210, toDisplayString($props.text), 1)
   ], 10, _hoisted_111);
 }
-__component9.render = render10;
-var StatusLine_default = __component9;
+__component10.render = render11;
+var StatusLine_default = __component10;
 
 // src/dvs2/ui/components/record/CapsuleActions.vue
-var __component10 = /* @__PURE__ */ defineComponent({
+var __component11 = /* @__PURE__ */ defineComponent({
   __name: "CapsuleActions",
   props: {
     type: { type: String, required: true },
@@ -41431,7 +42559,7 @@ var __component10 = /* @__PURE__ */ defineComponent({
   }
 });
 var _hoisted_112 = { class: "dvs:contents" };
-function render11(_ctx, _cache, $props, $setup, $data, $options) {
+function render12(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("span", _hoisted_112, [
     $setup.confirming ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
       _cache[2] || (_cache[2] = createBaseVNode("span", { class: "dvs:text-[0.9em] dvs:whitespace-nowrap dvs:text-dvs-remove dvs:@max-[30rem]:basis-full" }, "确认清除这条记录？", -1)),
@@ -41478,8 +42606,8 @@ function render11(_ctx, _cache, $props, $setup, $data, $options) {
     }, null, 8, ["kind", "text"])) : createCommentVNode("v-if", true)
   ]);
 }
-__component10.render = render11;
-var CapsuleActions_default = __component10;
+__component11.render = render12;
+var CapsuleActions_default = __component11;
 
 // src/dvs2/ui/display-widgets.ts
 var displayProps = { ctx: { type: Object, required: true } };
@@ -41491,7 +42619,7 @@ var RecordActions = defineComponent({
 });
 
 // src/dvs2/ui/components/record/LazyBody.vue
-var __component11 = /* @__PURE__ */ defineComponent({
+var __component12 = /* @__PURE__ */ defineComponent({
   __name: "LazyBody",
   props: {
     lines: { type: Number, required: false, default: 3 }
@@ -41527,7 +42655,7 @@ var _hoisted_211 = {
   key: 1,
   class: "dvs-reveal"
 };
-function render12(_ctx, _cache, $props, $setup, $data, $options) {
+function render13(_ctx, _cache, $props, $setup, $data, $options) {
   return !$setup.ready ? (openBlock(), createElementBlock("div", _hoisted_113, [
     (openBlock(true), createElementBlock(Fragment, null, renderList($props.lines, (index) => {
       return openBlock(), createElementBlock("div", {
@@ -41540,8 +42668,8 @@ function render12(_ctx, _cache, $props, $setup, $data, $options) {
     renderSlot(_ctx.$slots, "default")
   ]));
 }
-__component11.render = render12;
-var LazyBody_default = __component11;
+__component12.render = render13;
+var LazyBody_default = __component12;
 
 // src/dvs2/ui/pin-scroll.ts
 var PIN_MS = 600;
@@ -41585,7 +42713,7 @@ function pinWhileToggling(anchor) {
 }
 
 // src/dvs2/ui/components/record/DvsSection.vue
-var __component12 = /* @__PURE__ */ defineComponent({
+var __component13 = /* @__PURE__ */ defineComponent({
   __name: "DvsSection",
   props: {
     icon: { type: null, required: true },
@@ -41621,19 +42749,19 @@ var __component12 = /* @__PURE__ */ defineComponent({
 });
 var _hoisted_114 = ["open"];
 var _hoisted_212 = { class: "dvs:font-medium" };
-var _hoisted_35 = {
+var _hoisted_36 = {
   key: 0,
   class: "dvs:rounded-md dvs:bg-dvs-raised dvs:px-1.5 dvs:text-[0.8em] dvs:leading-5 dvs:text-dvs-muted dvs:tabular-nums dvs:ring-1 dvs:ring-dvs-border"
 };
-var _hoisted_44 = {
+var _hoisted_45 = {
   key: 1,
   class: "dvs:ms-auto dvs:truncate dvs:text-[0.82em] dvs:text-dvs-faint"
 };
-var _hoisted_54 = {
+var _hoisted_55 = {
   key: 0,
   class: "dvs:pt-0.5 dvs:pr-2 dvs:pb-3 dvs:pl-[2.1rem]"
 };
-function render13(_ctx, _cache, $props, $setup, $data, $options) {
+function render14(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("details", {
     open: $setup.open,
     onToggle: _cache[1] || (_cache[1] = ($event) => $setup.open = $event.target.open)
@@ -41652,10 +42780,10 @@ function render13(_ctx, _cache, $props, $setup, $data, $options) {
         class: "dvs:shrink-0 dvs:text-dvs-muted"
       })),
       createBaseVNode("span", _hoisted_212, toDisplayString($props.title), 1),
-      $props.count !== undefined ? (openBlock(), createElementBlock("span", _hoisted_35, toDisplayString($props.count), 1)) : createCommentVNode("v-if", true),
-      $props.hint ? (openBlock(), createElementBlock("span", _hoisted_44, toDisplayString($props.hint), 1)) : createCommentVNode("v-if", true)
+      $props.count !== undefined ? (openBlock(), createElementBlock("span", _hoisted_36, toDisplayString($props.count), 1)) : createCommentVNode("v-if", true),
+      $props.hint ? (openBlock(), createElementBlock("span", _hoisted_45, toDisplayString($props.hint), 1)) : createCommentVNode("v-if", true)
     ]),
-    $setup.open ? (openBlock(), createElementBlock("div", _hoisted_54, [
+    $setup.open ? (openBlock(), createElementBlock("div", _hoisted_55, [
       createVNode($setup["LazyBody"], { lines: 2 }, {
         default: withCtx(() => [
           renderSlot(_ctx.$slots, "default")
@@ -41665,11 +42793,11 @@ function render13(_ctx, _cache, $props, $setup, $data, $options) {
     ])) : createCommentVNode("v-if", true)
   ], 40, _hoisted_114);
 }
-__component12.render = render13;
-var DvsSection_default = __component12;
+__component13.render = render14;
+var DvsSection_default = __component13;
 
 // src/dvs2/ui/components/record/EmptyState.vue
-var __component13 = /* @__PURE__ */ defineComponent({
+var __component14 = /* @__PURE__ */ defineComponent({
   __name: "EmptyState",
   props: {
     text: { type: String, required: true }
@@ -41684,7 +42812,7 @@ var __component13 = /* @__PURE__ */ defineComponent({
   }
 });
 var _hoisted_115 = { class: "dvs:flex dvs:items-center dvs:gap-1.5 dvs:py-0.5 dvs:text-[0.92em] dvs:text-dvs-faint" };
-function render14(_ctx, _cache, $props, $setup, $data, $options) {
+function render15(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("p", _hoisted_115, [
     createVNode($setup["PhCircleDashed"], {
       size: 14,
@@ -41693,11 +42821,11 @@ function render14(_ctx, _cache, $props, $setup, $data, $options) {
     createTextVNode(toDisplayString($props.text), 1)
   ]);
 }
-__component13.render = render14;
-var EmptyState_default = __component13;
+__component14.render = render15;
+var EmptyState_default = __component14;
 
 // src/dvs2/ui/components/record/Thinking.vue
-var __component14 = /* @__PURE__ */ defineComponent({
+var __component15 = /* @__PURE__ */ defineComponent({
   __name: "Thinking",
   props: {
     text: { type: String, required: false }
@@ -41720,7 +42848,7 @@ var __component14 = /* @__PURE__ */ defineComponent({
   }
 });
 var _hoisted_116 = { key: 0 };
-function render15(_ctx, _cache, $props, $setup, $data, $options) {
+function render16(_ctx, _cache, $props, $setup, $data, $options) {
   return $props.text ? (openBlock(), createElementBlock("div", _hoisted_116, [
     createBaseVNode("div", {
       ref: "body",
@@ -41737,11 +42865,11 @@ function render15(_ctx, _cache, $props, $setup, $data, $options) {
     text: "模型没有提供思维链。"
   }));
 }
-__component14.render = render15;
-var Thinking_default = __component14;
+__component15.render = render16;
+var Thinking_default = __component15;
 
 // src/dvs2/ui/components/record/SavedAnalyses.vue
-var __component15 = /* @__PURE__ */ defineComponent({
+var __component16 = /* @__PURE__ */ defineComponent({
   __name: "SavedAnalyses",
   props: {
     ctx: { type: Object, required: true },
@@ -41759,7 +42887,7 @@ var __component15 = /* @__PURE__ */ defineComponent({
     return __returned__;
   }
 });
-function render16(_ctx, _cache, $props, $setup, $data, $options) {
+function render17(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(true), createElementBlock(Fragment, null, renderList($setup.texts, (text, index) => {
     return openBlock(), createBlock($setup["DvsSection"], {
       key: index,
@@ -41773,11 +42901,11 @@ function render16(_ctx, _cache, $props, $setup, $data, $options) {
     }, 1032, ["icon", "title"]);
   }), 128);
 }
-__component15.render = render16;
-var SavedAnalyses_default = __component15;
+__component16.render = render17;
+var SavedAnalyses_default = __component16;
 
 // src/dvs2/ui/components/record/PreNarrativeResult.vue
-var __component16 = /* @__PURE__ */ defineComponent({
+var __component17 = /* @__PURE__ */ defineComponent({
   __name: "PreNarrativeResult",
   props: {
     ctx: { type: Object, required: true },
@@ -41839,18 +42967,18 @@ var _hoisted_117 = {
   ref: "container",
   class: "dvs2-pre-narrative-result dvs:min-w-0 dvs:max-w-full dvs:overflow-x-auto"
 };
-function render17(_ctx, _cache, $props, $setup, $data, $options) {
+function render18(_ctx, _cache, $props, $setup, $data, $options) {
   return !$setup.component ? (openBlock(), createBlock($setup["StatusLine"], {
     key: 0,
     kind: "error",
     text: `生成拦截组件“${$props.record.key}”尚未注册，无法显示已保存结果。`
   }, null, 8, ["text"])) : $setup.active ? (openBlock(), createElementBlock("div", _hoisted_117, null, 512)) : createCommentVNode("v-if", true);
 }
-__component16.render = render17;
-var PreNarrativeResult_default = __component16;
+__component17.render = render18;
+var PreNarrativeResult_default = __component17;
 
 // src/dvs2/ui/components/record/PreNarrativeRecord.vue
-var __component17 = /* @__PURE__ */ defineComponent({
+var __component18 = /* @__PURE__ */ defineComponent({
   __name: "PreNarrativeRecord",
   props: {
     ctx: { type: Object, required: true }
@@ -41888,7 +43016,7 @@ var __component17 = /* @__PURE__ */ defineComponent({
   }
 });
 var _hoisted_118 = { class: "dvs2-pre-narrative-record" };
-function render18(_ctx, _cache, $props, $setup, $data, $options) {
+function render19(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("div", _hoisted_118, [
     createVNode($setup["SavedAnalyses"], {
       ctx: $props.ctx,
@@ -41935,8 +43063,8 @@ function render18(_ctx, _cache, $props, $setup, $data, $options) {
     }, 8, ["icon"])
   ]);
 }
-__component17.render = render18;
-var PreNarrativeRecord_default = __component17;
+__component18.render = render19;
+var PreNarrativeRecord_default = __component18;
 
 // src/dvs2/ext/pre_narr_ui/display.ts
 var PreNarrativeSummary = defineComponent({
@@ -41962,10 +43090,10 @@ var preNarrativeUiDisplay = {
 // src/dvs2/ext/pre_narr_ui/registrations.ts
 var registrations = new WeakMap;
 function setPreNarrativeRegistrations(payload, items) {
-  registrations.set(payload, items);
+  registrations.set(sharedPayload(payload), items);
 }
 function preNarrativeRegistrations(payload) {
-  return registrations.get(payload) ?? [];
+  return registrations.get(sharedPayload(payload)) ?? [];
 }
 
 // src/dvs2/ext/pre_narr_ui/prompt.ts
@@ -42607,6 +43735,8 @@ class Controller {
         return;
       } catch (error) {
         capture.record(error, response);
+        if (stage === "aiReq")
+          await this.discardCommittedVersion();
         this.restoreResponse(stage);
         if (this.abort.signal.aborted || error instanceof ModelRequestError && ["cancelled", "stale"].includes(error.kind)) {
           throw error;
@@ -42622,6 +43752,36 @@ class Controller {
   createVersion() {
     return this.options.createVersion?.() ?? formatUuid2(uuidV72());
   }
+  async discardCommittedVersion() {
+    if (!takeCommittedVersion(this.runtime.payload))
+      return;
+    try {
+      await recordOrphanOperation(this.options.helper.sql);
+    } catch (error) {
+      this.options.host.reportError(error);
+    }
+  }
+  async afterAssociation(previous, versionid) {
+    if (!this.tablesEnabled)
+      return;
+    if (previous && previous !== versionid) {
+      try {
+        await recordOrphanOperation(this.options.helper.sql);
+      } catch (cause) {
+        this.options.host.reportError(cause);
+      }
+    }
+    try {
+      await this.options.preparation.cleanupOrphans(this.options.host.readReferences ?? (() => []));
+    } catch (cause) {
+      this.options.host.reportError(cause);
+    }
+    try {
+      await this.options.host.onUpdate?.();
+    } catch (cause) {
+      this.options.host.reportError(cause);
+    }
+  }
   async processAi(ai) {
     this.runtime.ai = structuredClone(ai);
     this.runtime.curr.ai = structuredClone(ai);
@@ -42630,6 +43790,7 @@ class Controller {
     try {
       this.assertRunning();
       this.status("preparing");
+      resetWorkForAi(this.runtime.payload);
       this.runtime.variableScan = await this.options.preparation.scanVariableLorebook();
       this.runtime.versionid = this.tablesEnabled ? this.createVersion() : undefined;
       await this.runStage("aiReq", ["aiReq.pre", "aiReq"]);
@@ -42638,6 +43799,7 @@ class Controller {
       error = cause;
     }
     if (error !== undefined) {
+      await this.discardCommittedVersion();
       this.options.host.reportError(error);
       if (this.capsuleSaveUnconfirmed)
         return { success: false, associated: false, capsuleSaved: false, error };
@@ -42649,6 +43811,7 @@ class Controller {
       if (this.tablesEnabled)
         await this.options.host.associateVersion(versionid);
     } catch (cause) {
+      await this.discardCommittedVersion();
       this.options.host.reportError(cause);
       return { success: false, associated: false, capsuleSaved: false, versionid, error: cause };
     }
@@ -42657,14 +43820,8 @@ class Controller {
       versionid: this.tablesEnabled ? versionid : ai.versionid,
       capsule: structuredClone(this.runtime.exchange.capsules.ai)
     };
-    if (this.tablesEnabled && this.runtime.payload.tables) {
-      try {
-        await this.options.preparation.cleanupOrphans(this.options.host.readReferences ?? (() => []));
-        await this.options.host.onUpdate?.();
-      } catch (cause) {
-        this.options.host.reportError(cause);
-      }
-    }
+    takeCommittedVersion(this.runtime.payload);
+    await this.afterAssociation(ai.versionid, versionid);
     try {
       await this.options.host.saveCapsule("ai", this.document("ai"), [...this.capsuleWrites.ai], this.tablesEnabled);
       return { success: true, associated: this.tablesEnabled, capsuleSaved: true, versionid };
@@ -42685,6 +43842,7 @@ class Controller {
       this.options.host.reportError(cause);
       return { success: false, associated: false, capsuleSaved: false, error: cause };
     }
+    await this.afterAssociation(this.runtime.ai.versionid, versionid);
     try {
       await this.options.host.saveCapsule("ai", { records: {} }, this.extensions.map((extension) => extension.definition.key));
       return { success: false, associated: this.tablesEnabled, capsuleSaved: true, versionid, error };
@@ -42711,7 +43869,6 @@ var addressProperties = {
   table: { type: "string", minLength: 1 },
   keys: {
     type: "object",
-    propertyNames: { minLength: 1 },
     additionalProperties: { anyOf: [{ type: "string" }, { type: "number" }] }
   }
 };
@@ -43088,19 +44245,7 @@ function createTavernAdapter(owner, prepareWorldbook) {
     getWorldbook: (book) => owner.TavernHelper.getWorldbook(book),
     prepareWorldbook
   };
-  const readReferences = () => {
-    const references = [];
-    for (const message of context().chat) {
-      if (message.is_user)
-        continue;
-      for (let i = 0;i < (message.swipes?.length ?? 1); i++) {
-        const fid = message.variables?.[i]?.dvs?.fid;
-        if (typeof fid === "string")
-          references.push(fid);
-      }
-    }
-    return references;
-  };
+  const readReferences = () => readMessageReferences(context().chat);
   return {
     context,
     avatar,
@@ -43443,11 +44588,31 @@ async function captureSnapshot(helper, schemas, fid) {
   }
   return { tables, rids };
 }
+function inheritTableIndex(schema, source, target, count) {
+  const index = quoteIdentifier(schema.indexName);
+  const commands = [check2(`NOT EXISTS (SELECT 1 FROM ${index} WHERE fid = ?)`, [target])];
+  if (source)
+    commands.push({
+      kind: "write",
+      sql: `INSERT INTO ${index} (fid,rid) SELECT ?,rid FROM ${index} WHERE fid = ?`,
+      binds: [target, source],
+      expectChanges: count
+    });
+  return commands;
+}
 function check2(sql, binds = []) {
   return { kind: "check", sql: `SELECT CASE WHEN (${sql}) THEN 1 ELSE 0 END`, binds };
 }
+function finalTableChecks(schema, sourceFid, newFid, count) {
+  const index = quoteIdentifier(schema.indexName), table = quoteIdentifier(schema.name);
+  const fids = sourceFid ? [sourceFid, newFid] : [newFid];
+  return [
+    check2(`NOT EXISTS (SELECT 1 FROM ${index} AS idx JOIN ${table} AS data ON data.rid = idx.rid WHERE idx.fid IN (${fids.map(() => "?").join(",")}) GROUP BY idx.fid,${schema.keys.map((key) => `data.${quoteIdentifier(key)}`).join(",")} HAVING count(*) > 1)`, fids),
+    check2(`(SELECT count(*) FROM ${index} WHERE fid = ?) = ? AND NOT EXISTS (SELECT 1 FROM ${index} AS idx LEFT JOIN ${table} AS data ON data.rid = idx.rid WHERE idx.fid = ? AND data.rid IS NULL)`, [newFid, count, newFid])
+  ];
+}
 function compileVariableCommands(input) {
-  const { schemas, sourceFid, newFid, rids, oldTables, incrementCount } = input;
+  const { schemas, sourceFid, newFid, rids, oldTables } = input;
   identifierBytes(newFid);
   if (sourceFid)
     identifierBytes(sourceFid);
@@ -43459,15 +44624,7 @@ function compileVariableCommands(input) {
     if (ids.length !== old.length || new Set(ids.map(hex)).size !== ids.length || sourceFid === null && ids.length)
       throw new Error("DVS 起点业务行与 rid 集合不一致。");
     const start = commands.length;
-    commands.push(check2(`NOT EXISTS (SELECT 1 FROM ${index} WHERE fid = ?)`, [newFid]));
-    if (sourceFid) {
-      commands.push({
-        kind: "write",
-        sql: `INSERT INTO ${index} (fid,rid) SELECT ?,rid FROM ${index} WHERE fid = ?`,
-        binds: [newFid, sourceFid],
-        expectChanges: ids.length
-      });
-    }
+    commands.push(...inheritTableIndex(schema, sourceFid, newFid, ids.length));
     const reused = new Set;
     const writable = schema.columns.filter((column) => column.hidden === 0 && column.name !== "rid");
     for (const [position, row] of final.entries()) {
@@ -43504,19 +44661,13 @@ function compileVariableCommands(input) {
     }
     for (let i = start;i < commands.length; i++)
       commands[i].statementGroup = schema.name;
-    const fids = sourceFid ? [sourceFid, newFid] : [newFid];
-    finalChecks.push(check2(`NOT EXISTS (SELECT 1 FROM ${index} AS idx JOIN ${table} AS data ON data.rid = idx.rid WHERE idx.fid IN (${fids.map(() => "?").join(",")}) GROUP BY idx.fid,${schema.keys.map((key) => `data.${quoteIdentifier(key)}`).join(",")} HAVING count(*) > 1)`, fids));
-    finalChecks.push(check2(`(SELECT count(*) FROM ${index} WHERE fid = ?) = ? AND NOT EXISTS (SELECT 1 FROM ${index} AS idx LEFT JOIN ${table} AS data ON data.rid = idx.rid WHERE idx.fid = ? AND data.rid IS NULL)`, [newFid, final.length, newFid]));
+    finalChecks.push(...finalTableChecks(schema, sourceFid, newFid, final.length));
   }
-  commands.push(...finalChecks);
-  if (incrementCount) {
-    commands.push({
-      kind: "write",
-      sql: "UPDATE _dvs_gc_counter SET successful_updates = successful_updates + 1 WHERE singleton = 1",
-      expectChanges: 1
-    });
+  for (const { schema, count } of input.inheritedTables ?? []) {
+    commands.push(...inheritTableIndex(schema, sourceFid, newFid, count));
+    finalChecks.push(...finalTableChecks(schema, sourceFid, newFid, count));
   }
-  return commands;
+  return commands.concat(finalChecks);
 }
 
 // src/dvs2/ext/tables/state.ts
@@ -43873,7 +45024,10 @@ class State {
       try {
         await this.writable();
         sent = true;
-        const result = await this.options.helper.checkedTransaction(entries.flatMap((entry) => managementCommands(entry.operation, this.fixedFid)));
+        const commands = entries.flatMap((entry) => managementCommands(entry.operation, this.fixedFid));
+        if (entries.some((entry) => entry.operation.kind !== "insert"))
+          commands.push(orphanOperationCommand());
+        const result = await this.options.helper.checkedTransaction(commands);
         if (result?.committed !== true)
           throw new ServiceError({
             code: "RESULT_UNCONFIRMED",
@@ -43980,7 +45134,7 @@ async function createState(options) {
 function project2(row) {
   return copyValues(row.toJSON());
 }
-function createPromptState(state, assertCurrent, onError) {
+function createPromptState(state, assertCurrent, onError, lookup) {
   const fail = (error) => {
     try {
       onError(error);
@@ -44013,7 +45167,22 @@ function createPromptState(state, assertCurrent, onError) {
     query: (condition, ...values) => check(() => table(source.query(condition, ...values))),
     orderBy: (...columns) => check(() => table(source.orderBy(...columns)))
   });
-  return Object.freeze({ table: (name) => check(() => table(state.table(name))) });
+  return Object.freeze({
+    table: (name) => check(() => table(state.table(name))),
+    internal: (key) => check(() => {
+      if (!lookup)
+        throw new Error(`DVS 当前聊天未引入内部表组：${key}`);
+      const group = lookup(key);
+      const view = createPromptState(group.state, assertCurrent, onError);
+      return Object.freeze({
+        table(name) {
+          if (!Object.hasOwn(group.schemas, name))
+            return fail(new Error(`DVS 内部表不存在：${key} / ${name}`));
+          return view.table(name);
+        }
+      });
+    })
+  });
 }
 async function createUpdateSourceState(options) {
   const { assertCurrent } = options;
@@ -44230,8 +45399,14 @@ function dataMarker(body) {
   if (!match)
     throw new Error(`DVS 数据宏格式无效：[[${body}]]`);
   const parts = match[2]?.split(":") ?? [], format = parts[0] ?? "md";
-  if (format !== "md" && format !== "yaml")
-    throw new Error(`DVS 不支持提示词格式：${format}`);
+  if (format !== "md" && format !== "yaml") {
+    if (!match[1]?.trim() || !format.trim())
+      throw new Error(`DVS 不支持提示词格式：${format}`);
+    const output = parts[1] ?? "md";
+    if (parts.length > 2 || output !== "md" && output !== "yaml")
+      throw new Error(`DVS 内部表宏格式无效：[[${body}]]`);
+    return { table: match[1], owner: format, format: output };
+  }
   if (parts.length === 2)
     throw new Error("DVS 数据筛选宏必须填写表名、格式、key 和条件，不支持三段写法。");
   if (parts.length >= 3) {
@@ -44260,7 +45435,7 @@ function extractInputInjectCondition(text) {
     ...opening ? { condition: opening[1] } : {}
   };
 }
-function preparePromptFormats(input, serializer, keyFields = {}, includeKeyFields = false, selectedRows) {
+function preparePromptFormats(input, serializer, keyFields = {}, includeKeyFields = false, selectedRows, internalRows) {
   if (typeof serializer?.stringify !== "function")
     throw new ServiceError({
       code: "INTERNAL_ERROR",
@@ -44296,6 +45471,12 @@ function preparePromptFormats(input, serializer, keyFields = {}, includeKeyField
       return "";
     try {
       const marker = dataMarker(body);
+      if (marker.owner !== undefined) {
+        if (!internalRows)
+          throw new Error(`DVS 当前没有内部表组：${marker.owner}`);
+        const rows = capturePromptTables({ selected: internalRows(marker.owner, marker.table) }).selected;
+        return marker.format === "yaml" ? yaml(rows) : markdownRows(rows);
+      }
       if (marker.table !== undefined && !Object.hasOwn(tables, marker.table))
         throw new Error(`DVS 提示词数据中没有表：${marker.table}`);
       if (references) {
@@ -44337,11 +45518,11 @@ function preparePromptFormats(input, serializer, keyFields = {}, includeKeyField
 var selected = new WeakSet;
 var filtering = new WeakSet;
 function isTableFiltering(payload) {
-  return filtering.has(payload);
+  return filtering.has(sharedPayload(payload));
 }
 function enableTableFiltering(payload) {
-  filtering.add(payload);
-  selected.delete(payload);
+  filtering.add(sharedPayload(payload));
+  selected.delete(sharedPayload(payload));
 }
 var promptRowIdentity = (keys, row) => JSON.stringify(keys.map((key) => row[key]));
 function validateTableGroups(payload, indexes = new Map) {
@@ -44406,8 +45587,8 @@ function narrativeRows(payload, table, key) {
   if (!source)
     throw new Error(`DVS 提示词数据中没有表：${table}`);
   const rows = capturePromptTables({ [table]: source })[table];
-  const selection = selected.has(payload) ? payload.tables_opt?.[table]?.[key] : undefined;
-  if (selected.has(payload) && filtering.has(payload) && selection === undefined)
+  const selection = selected.has(sharedPayload(payload)) ? payload.tables_opt?.[table]?.[key] : undefined;
+  if (selected.has(sharedPayload(payload)) && filtering.has(sharedPayload(payload)) && selection === undefined)
     throw new Error(`DVS 本次表筛选缺少选择：${table} / ${key}`);
   if (selection === undefined)
     return structuredClone(rows);
@@ -44419,7 +45600,7 @@ function createTablesPromptBridge(getPayload, serializer, options = {}) {
   let formatSource, formatSelection, formatGroups;
   return {
     prepareNarrativeTables(entries) {
-      const payload = getPayload();
+      const payload = sharedPayload(getPayload());
       narrativeFormats = undefined;
       if (!payload.tables)
         return;
@@ -44442,7 +45623,7 @@ function createTablesPromptBridge(getPayload, serializer, options = {}) {
       payload.tables.filterGroups = [...groups.values()];
     },
     applyNarrativeTables(skip = false) {
-      const payload = getPayload();
+      const payload = sharedPayload(getPayload());
       narrativeFormats = undefined;
       if (skip) {
         selected.delete(payload);
@@ -44455,14 +45636,14 @@ function createTablesPromptBridge(getPayload, serializer, options = {}) {
     replacePrompt(text, narrative = false) {
       if (!text.includes("[[DVS_DATA"))
         return withoutTablePromptData(text);
-      const payload = getPayload();
+      const payload = sharedPayload(getPayload());
       if (!payload.tables)
         return withoutTablePromptData(text);
       let failure;
       const stable = narrative && selected.has(payload);
       if (!stable || formatSource !== payload.tables.tables || formatSelection !== payload.tables_opt || formatGroups !== payload.tables.filterGroups)
         narrativeFormats = undefined;
-      const formats = narrativeFormats ?? preparePromptFormats(payload.tables.tables, serializer, { ...payload.tables.uniqueKeys }, false, narrative ? (table, key) => narrativeRows(payload, table, key) : undefined);
+      const formats = narrativeFormats ?? preparePromptFormats(payload.tables.tables, serializer, { ...payload.tables.uniqueKeys }, false, narrative ? (table, key) => narrativeRows(payload, table, key) : undefined, (owner, table) => internalRows(payload, owner, table));
       if (stable) {
         narrativeFormats = formats;
         formatSource = payload.tables.tables;
@@ -44517,7 +45698,7 @@ function isBlockValue(value) {
 }
 
 // src/dvs2/ui/components/record/OpCounts.vue
-var __component18 = /* @__PURE__ */ defineComponent({
+var __component19 = /* @__PURE__ */ defineComponent({
   __name: "OpCounts",
   props: /* @__PURE__ */ mergeModels({
     counts: { type: Object, required: true },
@@ -44547,7 +45728,7 @@ var __component18 = /* @__PURE__ */ defineComponent({
   }
 });
 var _hoisted_119 = ["role", "aria-label"];
-function render19(_ctx, _cache, $props, $setup, $data, $options) {
+function render20(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("span", {
     class: "dvs:inline-flex dvs:items-center dvs:gap-1",
     role: $props.interactive ? "group" : undefined,
@@ -44575,11 +45756,11 @@ function render19(_ctx, _cache, $props, $setup, $data, $options) {
     }), 128))
   ], 8, _hoisted_119);
 }
-__component18.render = render19;
-var OpCounts_default = __component18;
+__component19.render = render20;
+var OpCounts_default = __component19;
 
 // src/dvs2/ui/components/record/KeyPath.vue
-var __component19 = /* @__PURE__ */ defineComponent({
+var __component20 = /* @__PURE__ */ defineComponent({
   __name: "KeyPath",
   props: {
     table: { type: String, required: true },
@@ -44599,18 +45780,18 @@ var __component19 = /* @__PURE__ */ defineComponent({
 });
 var _hoisted_120 = { class: "dvs:inline-flex dvs:flex-wrap dvs:items-center dvs:gap-x-1 dvs:gap-y-0.5 dvs:align-middle" };
 var _hoisted_213 = { class: "dvs:text-dvs-muted" };
-var _hoisted_36 = {
+var _hoisted_37 = {
   key: 0,
   class: "dvs:font-medium"
 };
-var _hoisted_45 = {
+var _hoisted_46 = {
   key: 1,
   class: "dvs:inline-flex dvs:flex-wrap dvs:items-center dvs:gap-1"
 };
-var _hoisted_55 = { class: "dvs:text-dvs-faint" };
+var _hoisted_56 = { class: "dvs:text-dvs-faint" };
 var _hoisted_63 = { class: "dvs:font-medium" };
 var _hoisted_73 = { class: "dvs:font-semibold" };
-function render20(_ctx, _cache, $props, $setup, $data, $options) {
+function render21(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("span", _hoisted_120, [
     createBaseVNode("span", _hoisted_213, toDisplayString($props.table), 1),
     $setup.keys.length ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
@@ -44619,13 +45800,13 @@ function render20(_ctx, _cache, $props, $setup, $data, $options) {
         weight: "bold",
         class: "dvs:text-dvs-faint"
       }),
-      $setup.keys.length === 1 ? (openBlock(), createElementBlock("span", _hoisted_36, toDisplayString($setup.keys[0][1]), 1)) : (openBlock(), createElementBlock("span", _hoisted_45, [
+      $setup.keys.length === 1 ? (openBlock(), createElementBlock("span", _hoisted_37, toDisplayString($setup.keys[0][1]), 1)) : (openBlock(), createElementBlock("span", _hoisted_46, [
         (openBlock(true), createElementBlock(Fragment, null, renderList($setup.keys, ([name, value]) => {
           return openBlock(), createElementBlock("span", {
             key: name,
             class: "dvs:rounded dvs:bg-dvs-raised dvs:px-1 dvs:ring-1 dvs:ring-dvs-border"
           }, [
-            createBaseVNode("span", _hoisted_55, toDisplayString(name) + "=", 1),
+            createBaseVNode("span", _hoisted_56, toDisplayString(name) + "=", 1),
             createBaseVNode("span", _hoisted_63, toDisplayString(value), 1)
           ]);
         }), 128))
@@ -44641,11 +45822,11 @@ function render20(_ctx, _cache, $props, $setup, $data, $options) {
     ], 64)) : createCommentVNode("v-if", true)
   ]);
 }
-__component19.render = render20;
-var KeyPath_default = __component19;
+__component20.render = render21;
+var KeyPath_default = __component20;
 
 // src/dvs2/ui/components/record/OpBadge.vue
-var __component20 = /* @__PURE__ */ defineComponent({
+var __component21 = /* @__PURE__ */ defineComponent({
   __name: "OpBadge",
   props: {
     op: { type: String, required: true },
@@ -44663,7 +45844,7 @@ var __component20 = /* @__PURE__ */ defineComponent({
     return __returned__;
   }
 });
-function render21(_ctx, _cache, $props, $setup, $data, $options) {
+function render22(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("span", {
     class: normalizeClass(["dvs:inline-flex dvs:h-5 dvs:min-w-[4.2em] dvs:shrink-0 dvs:items-center dvs:justify-center dvs:gap-1 dvs:rounded-md dvs:px-2 dvs:text-[0.8em] dvs:leading-none dvs:font-medium", $setup.opLook[$props.op].cls])
   }, [
@@ -44674,11 +45855,11 @@ function render21(_ctx, _cache, $props, $setup, $data, $options) {
     createTextVNode(toDisplayString($setup.label), 1)
   ], 2);
 }
-__component20.render = render21;
-var OpBadge_default = __component20;
+__component21.render = render22;
+var OpBadge_default = __component21;
 
 // src/dvs2/ui/components/record/YamlBlock.vue
-var __component21 = /* @__PURE__ */ defineComponent({
+var __component22 = /* @__PURE__ */ defineComponent({
   __name: "YamlBlock",
   props: {
     value: { type: null, required: false },
@@ -44694,16 +45875,16 @@ var __component21 = /* @__PURE__ */ defineComponent({
   }
 });
 var _hoisted_121 = { class: "dvs-scroll dvs:m-0 dvs:overflow-x-auto dvs:rounded-lg dvs:bg-dvs-sunken dvs:px-3 dvs:py-2 dvs:font-dvs-mono dvs:text-[0.86em] dvs:leading-relaxed dvs:whitespace-pre-wrap dvs:ring-1 dvs:ring-dvs-border" };
-function render22(_ctx, _cache, $props, $setup, $data, $options) {
+function render23(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("pre", _hoisted_121, [
     createBaseVNode("code", null, toDisplayString($setup.text), 1)
   ]);
 }
-__component21.render = render22;
-var YamlBlock_default = __component21;
+__component22.render = render23;
+var YamlBlock_default = __component22;
 
 // src/dvs2/ui/components/record/ValueView.vue
-var __component22 = /* @__PURE__ */ defineComponent({
+var __component23 = /* @__PURE__ */ defineComponent({
   __name: "ValueView",
   props: {
     op: { type: String, required: true },
@@ -44723,7 +45904,7 @@ var _hoisted_123 = {
   key: 2,
   class: "dvs:rounded-md dvs:bg-dvs-sunken dvs:px-1.5 dvs:py-px dvs:font-dvs-mono dvs:text-[0.9em] dvs:ring-1 dvs:ring-dvs-border"
 };
-function render23(_ctx, _cache, $props, $setup, $data, $options) {
+function render24(_ctx, _cache, $props, $setup, $data, $options) {
   return $props.op === "delta" && typeof $props.value === "number" ? (openBlock(), createElementBlock("span", {
     key: 0,
     class: normalizeClass(["dvs:font-dvs-mono dvs:text-[1.05em] dvs:font-semibold dvs:tabular-nums", $props.value >= 0 ? "dvs:text-dvs-up" : "dvs:text-dvs-down"])
@@ -44732,11 +45913,11 @@ function render23(_ctx, _cache, $props, $setup, $data, $options) {
     value: $props.value
   }, null, 8, ["value"])) : (openBlock(), createElementBlock("code", _hoisted_123, toDisplayString($setup.text), 1));
 }
-__component22.render = render23;
-var ValueView_default = __component22;
+__component23.render = render24;
+var ValueView_default = __component23;
 
 // src/dvs2/ui/components/record/TablesRecord.vue
-var __component23 = /* @__PURE__ */ defineComponent({
+var __component24 = /* @__PURE__ */ defineComponent({
   __name: "TablesRecord",
   props: {
     ctx: { type: Object, required: true }
@@ -44784,12 +45965,12 @@ var _hoisted_214 = {
   key: 1,
   class: "dvs:divide-y dvs:divide-dvs-border/70"
 };
-var _hoisted_37 = { class: "dvs:mt-0.5 dvs:text-[0.92em] dvs:whitespace-pre-wrap dvs:text-dvs-muted" };
-var _hoisted_46 = {
+var _hoisted_38 = { class: "dvs:mt-0.5 dvs:text-[0.92em] dvs:whitespace-pre-wrap dvs:text-dvs-muted" };
+var _hoisted_47 = {
   key: 0,
   class: "dvs:mb-1.5 dvs:flex dvs:items-center dvs:gap-1.5 dvs:text-[0.88em] dvs:text-dvs-muted"
 };
-var _hoisted_56 = { class: "dvs:space-y-1" };
+var _hoisted_57 = { class: "dvs:space-y-1" };
 var _hoisted_64 = { class: "dvs:min-w-0 dvs:flex-1" };
 var _hoisted_74 = { class: "dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-x-1.5 dvs:gap-y-1" };
 var _hoisted_83 = {
@@ -44798,7 +45979,7 @@ var _hoisted_83 = {
 };
 var _hoisted_92 = { class: "dvs:mt-0.5 dvs:text-[0.92em] dvs:whitespace-pre-wrap dvs:text-dvs-muted" };
 var _hoisted_102 = { class: "dvs:mx-2 dvs:mt-1 dvs:mb-1 dvs:flex dvs:items-start dvs:gap-1.5 dvs:text-[0.82em] dvs:text-dvs-faint" };
-function render24(_ctx, _cache, $props, $setup, $data, $options) {
+function render25(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("div", _hoisted_124, [
     $setup.data ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
       createVNode($setup["SavedAnalyses"], {
@@ -44825,7 +46006,7 @@ function render24(_ctx, _cache, $props, $setup, $data, $options) {
                   keys: item.keys,
                   field: item.field
                 }, null, 8, ["table", "keys", "field"]),
-                createBaseVNode("p", _hoisted_37, toDisplayString(item.reason), 1)
+                createBaseVNode("p", _hoisted_38, toDisplayString(item.reason), 1)
               ]);
             }), 128))
           ]))
@@ -44846,7 +46027,7 @@ function render24(_ctx, _cache, $props, $setup, $data, $options) {
             key: 0,
             text: "这一轮没有更新命令。"
           })) : (openBlock(), createElementBlock(Fragment, { key: 1 }, [
-            $setup.filter ? (openBlock(), createElementBlock("p", _hoisted_46, [
+            $setup.filter ? (openBlock(), createElementBlock("p", _hoisted_47, [
               _cache[3] || (_cache[3] = createTextVNode(" 只显示 ", -1)),
               createBaseVNode("span", {
                 class: normalizeClass(["dvs:rounded dvs:px-1 dvs:font-medium", $setup.opLook[$setup.filter].cls])
@@ -44863,7 +46044,7 @@ function render24(_ctx, _cache, $props, $setup, $data, $options) {
                 _cache[2] || (_cache[2] = createTextVNode("显示全部 ", -1))
               ])
             ])) : createCommentVNode("v-if", true),
-            createBaseVNode("ol", _hoisted_56, [
+            createBaseVNode("ol", _hoisted_57, [
               (openBlock(true), createElementBlock(Fragment, null, renderList($setup.commands, (item, index) => {
                 return openBlock(), createElementBlock("li", {
                   key: index,
@@ -44930,8 +46111,8 @@ function render24(_ctx, _cache, $props, $setup, $data, $options) {
     }))
   ]);
 }
-__component23.render = render24;
-var TablesRecord_default = __component23;
+__component24.render = render25;
+var TablesRecord_default = __component24;
 
 // src/dvs2/ui/popup.ts
 var nativeImport = (path) => import(path);
@@ -54702,7 +55883,7 @@ function matchesColumn(text, filter, exact) {
 }
 
 // src/dvs2/ui/components/floor-data/CellText.vue
-var __component24 = /* @__PURE__ */ defineComponent({
+var __component25 = /* @__PURE__ */ defineComponent({
   __name: "CellText",
   props: {
     value: { type: null, required: true }
@@ -54719,7 +55900,7 @@ var __component24 = /* @__PURE__ */ defineComponent({
     return __returned__;
   }
 });
-function render25(_ctx, _cache, $props, $setup, $data, $options) {
+function render26(_ctx, _cache, $props, $setup, $data, $options) {
   return $setup.shown.changed ? (openBlock(), createElementBlock("button", {
     key: 0,
     type: "button",
@@ -54730,14 +55911,14 @@ function render25(_ctx, _cache, $props, $setup, $data, $options) {
     createTextVNode(toDisplayString($setup.shown.text), 1)
   ], 64));
 }
-__component24.render = render25;
-var CellText_default = __component24;
+__component25.render = render26;
+var CellText_default = __component25;
 
 // src/dvs2/ui/components/floor-data/ColumnFilter.vue
 var LIMIT = 100;
 var boxClass = "dvs:flex dvs:h-6.5 dvs:w-full dvs:min-w-[7.5em] dvs:items-center dvs:rounded-md dvs:border dvs:border-dvs-border dvs:bg-dvs-sunken dvs:pl-1.5 dvs:focus-within:border-dvs-accent";
 var inputClass = "dvs:h-full dvs:w-0 dvs:min-w-0 dvs:flex-1 dvs:border-0 dvs:bg-transparent dvs:p-0 dvs:text-[0.92em] dvs:font-normal dvs:text-dvs-text dvs:outline-none dvs:placeholder:text-dvs-faint";
-var __component25 = /* @__PURE__ */ defineComponent({
+var __component26 = /* @__PURE__ */ defineComponent({
   __name: "ColumnFilter",
   props: {
     mode: { type: String, required: true },
@@ -54799,7 +55980,7 @@ var _hoisted_215 = {
   key: 0,
   class: "dvs:border-t dvs:border-dvs-border dvs:px-2 dvs:pt-1.5 dvs:pb-1 dvs:text-[0.9em] dvs:text-dvs-faint"
 };
-function render26(_ctx, _cache, $props, $setup, $data, $options) {
+function render27(_ctx, _cache, $props, $setup, $data, $options) {
   return $props.mode === "input" ? (openBlock(), createElementBlock("label", {
     key: 0,
     class: normalizeClass([$setup.boxClass, $props.value && "dvs:border-dvs-accent/60", "dvs:pr-1"])
@@ -54910,13 +56091,13 @@ function render26(_ctx, _cache, $props, $setup, $data, $options) {
     _: 1
   }, 8, ["modelValue"]));
 }
-__component25.render = render26;
-var ColumnFilter_default = __component25;
+__component26.render = render27;
+var ColumnFilter_default = __component26;
 
 // src/dvs2/ui/components/floor-data/DataView.vue
 var selectClass = "dvs:h-7 dvs:cursor-pointer dvs:appearance-none dvs:rounded-lg dvs:border dvs:border-dvs-border dvs:bg-dvs-solid dvs:pr-7 dvs:pl-2.5 dvs:text-dvs-text dvs:hover:border-dvs-border-strong";
 var selectArrowClass = "dvs:pointer-events-none dvs:absolute dvs:top-1/2 dvs:right-2.5 dvs:-translate-y-1/2 dvs:text-dvs-faint";
-var __component26 = /* @__PURE__ */ defineComponent({
+var __component27 = /* @__PURE__ */ defineComponent({
   __name: "DataView",
   props: {
     columns: { type: Array, required: true },
@@ -55032,9 +56213,9 @@ var __component26 = /* @__PURE__ */ defineComponent({
 });
 var _hoisted_127 = { class: "dvs:flex dvs:min-h-0 dvs:flex-1 dvs:flex-col" };
 var _hoisted_216 = { class: "dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-2 dvs:border-b dvs:border-dvs-border dvs:px-3 dvs:py-2" };
-var _hoisted_38 = { class: "dvs:ms-auto dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-2" };
-var _hoisted_47 = { class: "dvs:flex dvs:h-7 dvs:w-56 dvs:items-center dvs:gap-1.5 dvs:rounded-lg dvs:border dvs:border-dvs-border dvs:bg-dvs-sunken dvs:px-2 dvs:focus-within:border-dvs-accent" };
-var _hoisted_57 = { class: "dvs:flex dvs:items-center dvs:gap-1" };
+var _hoisted_39 = { class: "dvs:ms-auto dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-2" };
+var _hoisted_48 = { class: "dvs:flex dvs:h-7 dvs:w-56 dvs:items-center dvs:gap-1.5 dvs:rounded-lg dvs:border dvs:border-dvs-border dvs:bg-dvs-sunken dvs:px-2 dvs:focus-within:border-dvs-accent" };
+var _hoisted_58 = { class: "dvs:flex dvs:items-center dvs:gap-1" };
 var _hoisted_65 = { class: "dvs:relative dvs:inline-flex" };
 var _hoisted_75 = ["value"];
 var _hoisted_84 = ["value"];
@@ -55053,7 +56234,7 @@ var _hoisted_163 = {
   class: "dvs:p-6 dvs:text-center dvs:text-dvs-faint"
 };
 var _hoisted_173 = { class: "dvs:w-full dvs:border-collapse" };
-var _hoisted_182 = { class: "dvs:sticky dvs:top-0 dvs:z-10 dvs:bg-dvs-solid" };
+var _hoisted_183 = { class: "dvs:sticky dvs:top-0 dvs:z-10 dvs:bg-dvs-solid" };
 var _hoisted_192 = ["title", "onClick"];
 var _hoisted_202 = {
   key: 1,
@@ -55066,18 +56247,18 @@ var _hoisted_233 = { class: "dvs:w-full dvs:border-collapse" };
 var _hoisted_243 = { class: "dvs:sticky dvs:top-0 dvs:z-10 dvs:bg-dvs-solid" };
 var _hoisted_253 = { class: "dvs-scroll dvs:max-h-[min(20em,50vh)] dvs:overflow-auto dvs:px-3 dvs:py-2 dvs:leading-relaxed dvs:whitespace-pre-wrap dvs:text-dvs-text" };
 var _hoisted_263 = { class: "dvs:flex dvs:items-center dvs:gap-3 dvs:border-t dvs:border-dvs-border dvs:px-3 dvs:py-1.5 dvs:text-[0.92em] dvs:text-dvs-muted" };
-var _hoisted_272 = { class: "dvs:tabular-nums" };
+var _hoisted_273 = { class: "dvs:tabular-nums" };
 var _hoisted_282 = { class: "dvs:ms-auto dvs:flex dvs:items-center dvs:gap-1" };
 var _hoisted_292 = ["disabled"];
 var _hoisted_302 = { class: "dvs:px-1 dvs:tabular-nums" };
 var _hoisted_312 = ["disabled"];
-function render27(_ctx, _cache, $props, $setup, $data, $options) {
+function render28(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("div", _hoisted_127, [
     createCommentVNode(" 工具栏：左侧子页，右侧搜索、翻页、行列翻转 "),
     createBaseVNode("div", _hoisted_216, [
       renderSlot(_ctx.$slots, "tabs"),
-      createBaseVNode("div", _hoisted_38, [
-        createBaseVNode("label", _hoisted_47, [
+      createBaseVNode("div", _hoisted_39, [
+        createBaseVNode("label", _hoisted_48, [
           createVNode($setup["PhMagnifyingGlass"], {
             size: 13,
             class: "dvs:shrink-0 dvs:text-dvs-faint"
@@ -55103,7 +56284,7 @@ function render27(_ctx, _cache, $props, $setup, $data, $options) {
             })
           ])) : createCommentVNode("v-if", true)
         ]),
-        createBaseVNode("div", _hoisted_57, [
+        createBaseVNode("div", _hoisted_58, [
           createCommentVNode(" 隐藏原生箭头（位置由浏览器决定、贴边），改用图标并留出右内边距。 "),
           createBaseVNode("span", _hoisted_65, [
             createBaseVNode("select", {
@@ -55195,7 +56376,7 @@ function render27(_ctx, _cache, $props, $setup, $data, $options) {
       !$props.rows.length ? (openBlock(), createElementBlock("div", _hoisted_163, "此表在这一楼层没有有效数据。")) : !$setup.flipped ? (openBlock(), createElementBlock(Fragment, { key: 1 }, [
         createCommentVNode(" 各列按内容定宽；末尾占位列吃掉剩余宽度，避免多余宽度平摊到每列。 "),
         createBaseVNode("table", _hoisted_173, [
-          createBaseVNode("thead", _hoisted_182, [
+          createBaseVNode("thead", _hoisted_183, [
             createBaseVNode("tr", null, [
               (openBlock(true), createElementBlock(Fragment, null, renderList($props.columns, (column) => {
                 return openBlock(), createElementBlock("th", {
@@ -55364,7 +56545,7 @@ function render27(_ctx, _cache, $props, $setup, $data, $options) {
     }, 8, ["open"]),
     createCommentVNode(" 底部翻页栏 "),
     createBaseVNode("div", _hoisted_263, [
-      createBaseVNode("span", _hoisted_272, [
+      createBaseVNode("span", _hoisted_273, [
         createTextVNode(" 共 " + toDisplayString($props.rows.length) + " 行", 1),
         $setup.filteredCount !== $props.rows.length ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
           createTextVNode("，筛选后 " + toDisplayString($setup.filteredCount) + " 行", 1)
@@ -55406,11 +56587,11 @@ function render27(_ctx, _cache, $props, $setup, $data, $options) {
     ])
   ]);
 }
-__component26.render = render27;
-var DataView_default = __component26;
+__component27.render = render28;
+var DataView_default = __component27;
 
 // src/dvs2/ui/components/floor-data/FloorDataWindow.vue
-var __component27 = /* @__PURE__ */ defineComponent({
+var __component28 = /* @__PURE__ */ defineComponent({
   __name: "FloorDataWindow",
   props: {
     messageId: { type: Number, required: true },
@@ -55559,15 +56740,15 @@ var __component27 = /* @__PURE__ */ defineComponent({
 });
 var _hoisted_129 = { class: "dvs:flex dvs:items-center dvs:gap-3 dvs:border-b dvs:border-dvs-border dvs:px-4 dvs:py-2.5" };
 var _hoisted_218 = { class: "dvs:grid dvs:size-6 dvs:place-items-center dvs:rounded-full dvs:bg-dvs-accent-soft dvs:text-dvs-accent" };
-var _hoisted_39 = {
+var _hoisted_310 = {
   class: "dvs:text-dvs-muted dvs:tabular-nums",
   "data-floor-info": ""
 };
-var _hoisted_48 = {
+var _hoisted_49 = {
   key: 0,
   class: "dvs:rounded-md dvs:bg-dvs-raised dvs:px-1.5 dvs:text-[0.85em] dvs:leading-5 dvs:text-dvs-muted dvs:ring-1 dvs:ring-dvs-border"
 };
-var _hoisted_58 = { class: "dvs:ms-auto dvs:flex dvs:items-center dvs:gap-3" };
+var _hoisted_59 = { class: "dvs:ms-auto dvs:flex dvs:items-center dvs:gap-3" };
 var _hoisted_66 = {
   class: "dvs:flex dvs:rounded-lg dvs:bg-dvs-sunken dvs:p-0.5 dvs:ring-1 dvs:ring-dvs-border",
   role: "radiogroup",
@@ -55606,7 +56787,7 @@ var _hoisted_164 = {
   role: "tablist"
 };
 var _hoisted_174 = ["aria-selected", "onClick"];
-var _hoisted_183 = {
+var _hoisted_184 = {
   class: "dvs:flex dvs:items-center dvs:gap-1 dvs:border-b dvs:border-dvs-border dvs:px-3 dvs:py-2",
   role: "tablist"
 };
@@ -55642,7 +56823,7 @@ var _hoisted_264 = {
   class: "dvs:flex dvs:items-start dvs:gap-2 dvs:p-4 dvs:text-dvs-remove",
   role: "alert"
 };
-function render28(_ctx, _cache, $props, $setup, $data, $options) {
+function render29(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("div", {
     ref: "root",
     class: normalizeClass([$setup.DVS_UI_ROOT_CLASS, "dvs2-floor-data-window dvs:flex dvs:h-[85dvh] dvs:flex-col dvs:overflow-hidden dvs:rounded-xl dvs:border dvs:border-dvs-border-strong dvs:bg-dvs-solid dvs:text-left dvs:text-dvs-text"]),
@@ -55659,14 +56840,14 @@ function render28(_ctx, _cache, $props, $setup, $data, $options) {
       ]),
       _cache[1] || (_cache[1] = createBaseVNode("span", { class: "dvs:font-medium" }, "楼层数据", -1)),
       _cache[2] || (_cache[2] = createBaseVNode("span", { class: "dvs:text-dvs-faint" }, "·", -1)),
-      createBaseVNode("span", _hoisted_39, [
+      createBaseVNode("span", _hoisted_310, [
         createTextVNode(" 第 " + toDisplayString($props.messageId) + " 楼", 1),
         $setup.data ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
           createTextVNode(" · 版本 " + toDisplayString($props.swipeId + 1) + "/" + toDisplayString($setup.data.swipeCount), 1)
         ], 64)) : createCommentVNode("v-if", true)
       ]),
-      $setup.side === "before" && $setup.data?.before.messageId !== undefined ? (openBlock(), createElementBlock("span", _hoisted_48, " 来自第 " + toDisplayString($setup.data.before.messageId) + " 楼 ", 1)) : createCommentVNode("v-if", true),
-      createBaseVNode("div", _hoisted_58, [
+      $setup.side === "before" && $setup.data?.before.messageId !== undefined ? (openBlock(), createElementBlock("span", _hoisted_49, " 来自第 " + toDisplayString($setup.data.before.messageId) + " 楼 ", 1)) : createCommentVNode("v-if", true),
+      createBaseVNode("div", _hoisted_59, [
         createBaseVNode("div", _hoisted_66, [
           (openBlock(), createElementBlock(Fragment, null, renderList($setup.sides, (item) => {
             return createBaseVNode("button", {
@@ -55770,7 +56951,7 @@ function render28(_ctx, _cache, $props, $setup, $data, $options) {
           }, 8, ["columns", "rows"]))
         ], 4)) : createCommentVNode("v-if", true),
         !$setup.showDataView ? (openBlock(), createElementBlock(Fragment, { key: 1 }, [
-          createBaseVNode("div", _hoisted_183, [
+          createBaseVNode("div", _hoisted_184, [
             (openBlock(), createElementBlock(Fragment, null, renderList($setup.tabs, (item) => {
               return createBaseVNode("button", {
                 key: item.value,
@@ -55823,8 +57004,8 @@ function render28(_ctx, _cache, $props, $setup, $data, $options) {
     ]))
   ], 2);
 }
-__component27.render = render28;
-var FloorDataWindow_default = __component27;
+__component28.render = render29;
+var FloorDataWindow_default = __component28;
 
 // src/dvs2/ext/tables/floor-data-display.ts
 function openFloorDataWindow(owner, data) {
@@ -56035,12 +57216,57 @@ function replaceInitUser(content, substitute) {
   const escaped = sqlLiteral(name).slice(1, -1);
   return content.replaceAll("{{user}}", () => escaped);
 }
+function prepareTableGroups(options, current, versions) {
+  const definitions = options.definitions?.filter((def) => def.internalTables?.length) ?? [];
+  const groups = new Map;
+  for (const entry of options.entries) {
+    const tags = parseLorebookTags(entry.name);
+    if (!tags.metadata)
+      continue;
+    if (tags.owner !== undefined && !definitions.some((def) => def.key === tags.owner))
+      throw new Error(`DVS 未知内部表扩展：${tags.owner}（${entry.book} / ${entry.name}）`);
+    const entries = groups.get(tags.owner) ?? [];
+    entries.push(entry);
+    groups.set(tags.owner, entries);
+  }
+  const plan = migrations(groups.get(undefined) ?? [], current).map((entry) => ({ entry }));
+  const keys = validateUniqueKeys(options.uniqueKeys);
+  const owners = new Map(Object.keys(keys).map((name) => [name.toLowerCase(), "普通表"]));
+  const groupTables = new Map;
+  for (const owner of versions.keys()) {
+    if (!definitions.some((def) => def.key === owner))
+      throw new Error(`DVS 聊天已有内部表组但缺少扩展声明：${owner}`);
+  }
+  for (const def of definitions) {
+    const entries = groups.get(def.key) ?? [];
+    if (!entries.length && !versions.has(def.key))
+      continue;
+    if (["md", "yaml"].includes(def.key))
+      throw new Error(`DVS 内部表扩展 key 是宏格式保留字：${def.key}`);
+    if (!versions.has(def.key) || entries.some((entry) => parseLorebookTags(entry.name).metadata === "ddl")) {
+      for (const entry of migrations(entries, versions.get(def.key) ?? null))
+        plan.push({ entry, owner: def.key });
+    }
+    const names = [];
+    for (const { name, uniqueKeys } of def.internalTables) {
+      const folded = name.toLowerCase();
+      if (owners.has(folded))
+        throw new Error(`DVS 表名冲突：${name}（${owners.get(folded)} / ${def.key}）`);
+      owners.set(folded, def.key);
+      names.push(name);
+      keys[name] = typeof uniqueKeys === "string" ? [uniqueKeys] : uniqueKeys;
+    }
+    groupTables.set(def.key, names);
+  }
+  validateUniqueKeys(keys);
+  return { plan, keys, groupTables };
+}
 async function prepareDatabase(options) {
   const { chat, helper, assertCurrent, greeting } = options;
   assertCurrent();
   let facts;
   try {
-    facts = await helper.query("SELECT name FROM sqlite_schema WHERE type = 'table' AND (name = '_dvs_version' OR name GLOB '_dvs_index_*')");
+    facts = await helper.query("SELECT name FROM sqlite_schema WHERE type = 'table' AND (name IN ('_dvs_version','_dvs_ext_version','_dvs_pending_init') OR name GLOB '_dvs_index_*')");
   } catch (error) {
     if (error?.data?.code !== "DATABASE_NOT_INITIALIZED")
       throw error;
@@ -56056,9 +57282,31 @@ async function prepareDatabase(options) {
       throw new Error("聊天 DVS 成功版本记录格式错误。");
     current = result.rows[0]?.[0] ?? null;
   }
-  const plan = migrations(options.entries, current);
-  const recovering = !!greeting && !greeting.fid && hasFacts && !greeting.otherFids.length, tables = Object.keys(options.uniqueKeys);
-  let initialSql = [], recoveredFid;
+  if (!greeting && current === null && (options.lastFid || options.hasHistoricalFid?.()))
+    throw new Error("当前聊天已有历史消息，但所选聊天库没有 DVS 版本记录。请核对存储模式和原聊天库。");
+  const versions = new Map;
+  if (facts.rows.some((row) => row[0] === "_dvs_ext_version")) {
+    const saved = await helper.query('SELECT key,version FROM "_dvs_ext_version"');
+    assertCurrent();
+    for (const [key, version] of saved.rows) {
+      if (typeof key !== "string" || typeof version !== "string")
+        throw new Error("DVS 扩展 DDL 版本记录无效。");
+      versions.set(key, version);
+    }
+  }
+  const { plan, keys, groupTables } = prepareTableGroups(options, current, versions);
+  if (!greeting && !plan.length) {
+    const storedTables = new Set(facts.rows.map(([name]) => name));
+    const missing = Object.keys(keys).map(indexTableName).filter((name) => !storedTables.has(name));
+    if (missing.length)
+      throw new Error(`当前聊天库缺少楼层索引表：${missing.join("、")}。请核对原聊天使用的存储或备份。`);
+  }
+  const firstGreeting = !!greeting && !greeting.fid && !greeting.otherFids.length;
+  const pendingInit = firstGreeting && (!hasFacts || facts.rows.some((row) => row[0] === "_dvs_pending_init"));
+  const recovering = firstGreeting && !pendingInit, tables = Object.keys(keys);
+  const initializedTables = new Set;
+  const initialSql = [];
+  let recoveredFid;
   if (greeting) {
     const stored = await options.readServerFids();
     assertCurrent();
@@ -56073,8 +57321,25 @@ async function prepareDatabase(options) {
     if (greeting.fid && (!hasFacts || current === null))
       throw new Error("开场白已有 fid，但对应 DVS 数据库版本缺失。");
     if (recovering) {
-      const indexes = tables.map(indexTableName);
-      if (indexes.some((name) => !facts.rows.some((row) => row[0] === name)))
+      const storedIndexes = new Set(facts.rows.map(([name]) => name));
+      const indexes = Object.keys(options.uniqueKeys).map(indexTableName);
+      const lastMigration = new Map(plan.map((step) => [step.owner, step]));
+      for (const owner of versions.keys()) {
+        const upgrade = lastMigration.get(owner);
+        for (const name of groupTables.get(owner)) {
+          const index = indexTableName(name);
+          if (upgrade && !storedIndexes.has(index)) {
+            const physical = await helper.query("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=? COLLATE NOCASE", [name]);
+            assertCurrent();
+            if (!physical.rows.length) {
+              (upgrade.newTables ??= []).push(name);
+              continue;
+            }
+          }
+          indexes.push(index);
+        }
+      }
+      if (indexes.some((name) => !storedIndexes.has(name)))
         throw new Error("聊天 DVS 数据库缺少已注册业务表的楼层索引，无法恢复开场白关联，请核对数据库结构。");
       const candidates = indexes.length ? (await helper.query(`${indexes.map((name) => `SELECT DISTINCT fid FROM ${quoteIdentifier(name)}`).join(" UNION ")} LIMIT 2`)).rows : [];
       assertCurrent();
@@ -56085,21 +57350,32 @@ async function prepareDatabase(options) {
       if (recoveredFid && current === null)
         throw new Error("开场白原状态已有 fid，但对应 DVS 数据库版本缺失。");
     } else if (!greeting.fid) {
-      initialSql = initializationEntry(options.entries, greeting.welcomeId).map((initial) => replaceInitUser(replaceLastFid(initial.content, options.lastFid), options.substitudeMacros));
+      for (const initial of initializationEntry(options.entries, greeting.welcomeId)) {
+        const owner = parseLorebookTags(initial.name).owner;
+        for (const name of owner === undefined ? Object.keys(options.uniqueKeys) : groupTables.get(owner))
+          initializedTables.add(name);
+        initialSql.push(replaceInitUser(replaceLastFid(initial.content, options.lastFid), options.substitudeMacros));
+      }
     }
   }
-  for (const entry of plan) {
+  for (const item of plan) {
+    const { entry, owner } = item;
     assertCurrent();
     await chat.runSql([
-      DVS_VERSION_TABLE_SQL,
-      ...!hasFacts && entry === plan[0] ? [DVS_GC_COUNTER_TABLE_SQL, 'INSERT INTO "_dvs_gc_counter" (singleton,successful_updates) VALUES (1,0)'] : [],
+      owner === undefined ? DVS_VERSION_TABLE_SQL : DVS_EXT_VERSION_TABLE_SQL,
+      ...!hasFacts && item === plan[0] ? [DVS_GC_COUNTER_TABLE_SQL, 'INSERT INTO "_dvs_gc_counter" (singleton,successful_updates) VALUES (1,0)'] : [],
+      ...!hasFacts && firstGreeting && item === plan[0] ? ["CREATE TABLE _dvs_pending_init (singleton INTEGER PRIMARY KEY)"] : [],
       replaceLastFid(entry.content, recoveredFid ?? options.lastFid),
-      `INSERT INTO "_dvs_version" (singleton, version) VALUES (1, ${sqlLiteral(entry.version)}) ON CONFLICT(singleton) DO UPDATE SET version = excluded.version`
+      ...(item.newTables ?? []).map((name) => `SELECT idx.fid FROM ${quoteIdentifier(indexTableName(name))} AS idx JOIN ${quoteIdentifier(name)} AS data ON data.rid=idx.rid LIMIT 0`),
+      owner !== undefined ? `INSERT INTO "_dvs_ext_version" (key, version) VALUES (${sqlLiteral(owner)},${sqlLiteral(entry.version)}) ON CONFLICT(key) DO UPDATE SET version = excluded.version` : `INSERT INTO "_dvs_version" (singleton, version) VALUES (1, ${sqlLiteral(entry.version)}) ON CONFLICT(singleton) DO UPDATE SET version = excluded.version`
     ]);
     assertCurrent();
   }
+  const inspected = await inspectSchemas(helper, keys);
+  const select = (names) => Object.fromEntries(names.map((name) => [name, inspected[name]]));
+  const schemas = select(Object.keys(options.uniqueKeys));
+  const internalSchemas = Object.fromEntries([...groupTables].map(([key, names]) => [key, select(names)]));
   if (greeting && !greeting.fid) {
-    await inspectSchemas(helper, options.uniqueKeys);
     assertCurrent();
     const fid = recoveredFid ?? uuidV7();
     if (recovering) {
@@ -56111,9 +57387,11 @@ async function prepareDatabase(options) {
       }
     } else {
       const statements = [...initialSql];
+      if (pendingInit)
+        statements.push("DROP TABLE _dvs_pending_init");
       for (const name of tables) {
         statements.push(createIndexSql(name));
-        if (initialSql.length)
+        if (initializedTables.has(name))
           statements.push(`INSERT INTO ${quoteIdentifier(indexTableName(name))} (fid, rid) SELECT ${blobLiteral(fid)}, data.rid FROM ${quoteIdentifier(name)} AS data WHERE NOT EXISTS (SELECT 1 FROM ${quoteIdentifier(indexTableName(name))} AS idx WHERE idx.rid = data.rid)`);
       }
       assertCurrent();
@@ -56127,13 +57405,11 @@ async function prepareDatabase(options) {
       failedAssociations.set(options.targetKey, error);
       throw error;
     }
-    const schemas = await inspectSchemas(helper, options.uniqueKeys);
     assertCurrent();
-    return { fid, schemas };
+    return { fid, schemas, internalSchemas };
   }
-  const schemas = await inspectSchemas(helper, options.uniqueKeys);
   assertCurrent();
-  return { fid: greeting?.fid ?? options.lastFid, schemas };
+  return { fid: greeting?.fid ?? options.lastFid, schemas, internalSchemas };
 }
 // src/dvs2/ext/tables/query.ts
 function check3(input) {
@@ -56165,7 +57441,16 @@ async function openState(input) {
   return state;
 }
 async function openPromptState(input) {
-  return createPromptState(await openState(input), () => check3(input), () => {});
+  const ordinary = await openState(input);
+  const groups = new Map;
+  for (const [key, schemas] of Object.entries(input.internalSchemas ?? {}))
+    groups.set(key, { state: await openState({ ...input, schemas }), schemas });
+  return createPromptState(ordinary, () => check3(input), () => {}, (key) => {
+    const group = groups.get(key);
+    if (!group)
+      throw new Error(`DVS 当前聊天未引入内部表组：${key}`);
+    return group;
+  });
 }
 var openFloorData = async (input) => {
   check3(input.current);
@@ -56177,7 +57462,7 @@ var openFloorData = async (input) => {
         throw new Error("没有变量关联。");
       check3(context);
       const schema = context.schemas[table];
-      if (!schema)
+      if (!Object.hasOwn(context.schemas, table))
         throw new Error(`DVS 未注册业务表：${table}`);
       const snapshot = await captureSnapshot(context.sql, { [table]: schema }, parseUuid(context.versionid));
       check3(context);
@@ -56206,83 +57491,18 @@ var openFloorData = async (input) => {
     }
   };
 };
-// src/dvs2/ext/tables/orphan-cleanup.ts
-async function cleanupOrphans(helper, schemas, references) {
-  const count = await helper.query("SELECT successful_updates FROM _dvs_gc_counter WHERE singleton = 1");
-  if (count.rows.length !== 1)
-    throw new Error("DVS 清理计数记录缺失。");
-  const value = count.rows[0][0];
-  if (value <= 10)
-    return;
-  const fids = typeof references === "function" ? references() : references;
-  const ids = [
-    ...new Map(fids.map((fid) => {
-      const bytes = identifierBytes(fid);
-      return [hex(bytes), bytes];
-    })).values()
-  ];
-  const prefix = `_dvs_gc_${randomUuid().replaceAll("-", "")}`, keep = quoteIdentifier(`${prefix}_fids`);
-  const commands = [
-    {
-      kind: "check",
-      sql: "SELECT CASE WHEN (SELECT successful_updates FROM _dvs_gc_counter WHERE singleton = 1) > 10 THEN 1 ELSE 0 END"
-    },
-    { kind: "write", sql: `CREATE TEMP TABLE ${keep} (fid BLOB PRIMARY KEY) WITHOUT ROWID` }
-  ];
-  for (const fid of ids)
-    commands.push({ kind: "write", sql: `INSERT INTO ${keep} (fid) VALUES (?)`, binds: [fid], expectChanges: 1 });
-  const tables = Object.values(schemas).map((schema, i) => ({
-    schema,
-    index: quoteIdentifier(schema.indexName),
-    table: quoteIdentifier(schema.name),
-    savedIndex: quoteIdentifier(`${prefix}_index_${i}`),
-    savedRows: quoteIdentifier(`${prefix}_rows_${i}`)
-  }));
-  for (const { index, table, savedIndex, savedRows } of tables)
-    commands.push({
-      kind: "write",
-      sql: `CREATE TEMP TABLE ${savedIndex} AS SELECT idx.fid,idx.rid FROM ${index} AS idx JOIN ${keep} AS keep ON keep.fid = idx.fid JOIN ${table} AS data ON data.rid = idx.rid`
-    }, {
-      kind: "write",
-      sql: `CREATE TEMP TABLE ${savedRows} AS SELECT data.* FROM ${table} AS data WHERE EXISTS (SELECT 1 FROM ${savedIndex} AS idx WHERE idx.rid = data.rid)`
-    });
-  for (const { index, table } of tables)
-    commands.push({
-      kind: "write",
-      sql: `DELETE FROM ${index} WHERE NOT EXISTS (SELECT 1 FROM ${keep} AS keep WHERE keep.fid = ${index}.fid) OR NOT EXISTS (SELECT 1 FROM ${table} AS data WHERE data.rid = ${index}.rid)`
-    });
-  for (const { index, table } of tables)
-    commands.push({
-      kind: "write",
-      sql: `DELETE FROM ${table} WHERE NOT EXISTS (SELECT 1 FROM ${index} AS idx WHERE idx.rid = ${table}.rid)`
-    });
-  for (const { schema, index, table, savedIndex, savedRows } of tables) {
-    const equal = schema.columns.map((column) => {
-      const field = quoteIdentifier(column.name);
-      return `typeof(saved.${field}) = typeof(actual.${field}) AND saved.${field} IS actual.${field} COLLATE BINARY`;
-    }).join(" AND ");
-    commands.push({
-      kind: "check",
-      sql: `SELECT CASE WHEN NOT EXISTS (SELECT fid,rid FROM ${index} EXCEPT SELECT fid,rid FROM ${savedIndex}) AND NOT EXISTS (SELECT fid,rid FROM ${savedIndex} EXCEPT SELECT fid,rid FROM ${index}) THEN 1 ELSE 0 END`
-    }, {
-      kind: "check",
-      sql: `SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM ${savedRows} AS saved WHERE NOT EXISTS (SELECT 1 FROM ${table} AS actual WHERE actual.rid = saved.rid AND ${equal})) THEN 1 ELSE 0 END`
-    });
-  }
-  for (const { savedIndex, savedRows } of tables)
-    commands.push({ kind: "write", sql: `DROP TABLE ${savedIndex}` }, { kind: "write", sql: `DROP TABLE ${savedRows}` });
-  commands.push({ kind: "write", sql: `DROP TABLE ${keep}` }, { kind: "write", sql: "UPDATE _dvs_gc_counter SET successful_updates = 0 WHERE singleton = 1", expectChanges: 1 });
-  const result = await helper.checkedTransaction(commands);
-  if (result.committed !== true)
-    throw new ServiceError({
-      code: "RESULT_UNCONFIRMED",
-      message: "DVS 未取得清理提交事实。",
-      executionState: "unknown",
-      resultState: "unconfirmed"
-    });
-}
 
 // src/dvs2/ext/tables/index.ts
+function buildTables(schemas, state, tables, raw, filterGroups) {
+  return {
+    state,
+    tables,
+    rawTables: raw,
+    uniqueKeys: Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, schema.keys])),
+    filterGroups
+  };
+}
+
 class DvsTables {
   helper;
   static summarize(type, data) {
@@ -56296,36 +57516,52 @@ class DvsTables {
   }
   static dependencies = { aiReq: [{ type: "weak", key: "dvs_pre" }] };
   schemas;
+  internalSchemas = {};
+  groupOrigin = new Map;
   origin;
   sourceFid = null;
   sourceState;
   constructor(helper) {
     this.helper = helper;
   }
+  async publishGroups(payload, ordinary, makeState, snapshot) {
+    const groups = new Map;
+    for (const [key, schemas] of Object.entries(this.internalSchemas)) {
+      const visible = { ...this.schemas, ...schemas };
+      const working = await snapshot(key, schemas);
+      const raw = { ...ordinary.rawTables, ...structuredClone(this.groupOrigin.get(key).tables) };
+      const data = buildTables(visible, await makeState(visible), working, raw, ordinary.filterGroups);
+      groups.set(key, { schemas, data, work: working });
+    }
+    publishInternal(payload, groups);
+    return groups;
+  }
   async collectPre(ctx) {
     const fixed = ctx.helper;
     fixed.assertCurrent();
-    this.schemas = await inspectSchemas(fixed.sql, fixed.registration.uniqueKeys);
+    this.internalSchemas = fixed.internalSchemas ?? {};
+    this.schemas = fixed.schemas ?? await inspectSchemas(fixed.sql, fixed.registration.uniqueKeys);
     this.sourceFid = ctx.prev?.versionid ? parseUuid(ctx.prev.versionid) : null;
     this.origin = await captureSnapshot(fixed.sql, this.schemas, this.sourceFid);
-    this.sourceState = await createUpdateSourceState({
+    const startState = (schemas) => createUpdateSourceState({
       char: fixed.char,
       chat: fixed.chat,
       helper: fixed.sql,
       source: this.sourceFid ? { kind: "fid", fid: this.sourceFid } : { kind: "empty" },
-      schemas: this.schemas,
+      schemas,
       uniqueKeys: fixed.registration.uniqueKeys,
       assertCurrent: () => fixed.assertCurrent()
     });
+    this.sourceState = await startState(this.schemas);
+    const ordinary = buildTables(this.schemas, this.sourceState, structuredClone(this.origin.tables), structuredClone(this.origin.tables), []);
+    ctx.payload.tables = ordinary;
+    const groups = await this.publishGroups(ctx.payload, ordinary, startState, async (key, schemas) => {
+      const origin = await captureSnapshot(fixed.sql, schemas, this.sourceFid);
+      this.groupOrigin.set(key, origin);
+      return structuredClone(origin.tables);
+    });
     fixed.assertCurrent();
-    ctx.payload.tables = {
-      state: this.sourceState,
-      tables: structuredClone(this.origin.tables),
-      rawTables: structuredClone(this.origin.tables),
-      uniqueKeys: fixed.registration.uniqueKeys,
-      filterGroups: []
-    };
-    ctx.setEjs("dvs_state", createPromptState(this.sourceState, () => fixed.assertCurrent(), () => {}));
+    ctx.setEjs("dvs_state", createPromptState(this.sourceState, () => fixed.assertCurrent(), () => {}, (key) => promptGroup(groups, key)));
     ctx.setEjs("dvs_narrative", {
       rows: (table, key) => {
         fixed.assertCurrent();
@@ -56343,7 +57579,7 @@ class DvsTables {
       throw new Error("DVS 变量起点尚未准备。");
     const entries = sortWorldbookEntries(await ctx.helper.readLorebook());
     ctx.helper.assertCurrent();
-    const formats = preparePromptFormats(payload.tables, { stringify: stringify3 });
+    const formats = preparePromptFormats(payload.tables, { stringify: stringify3 }, {}, false, undefined, (owner, table) => internalRows(ctx.payload, owner, table));
     const expand = (text) => {
       let failure;
       const result = formats.replace(text, (error) => {
@@ -56382,6 +57618,11 @@ class DvsTables {
     const calculated = applyPatch(this.origin.tables, requestSchemas(this.schemas, fixed.registration.virtualTables), patch);
     const finalTables = fixed.registration.preUpdate ? await fixed.registration.preUpdate(this.sourceState, calculated.tables, structuredClone(this.origin.tables)) : calculated.tables;
     fixed.assertCurrent();
+    const newFid = parseUuid(versionid);
+    const inheritedTables = Object.entries(this.internalSchemas).flatMap(([key, schemas]) => {
+      const { rids } = this.groupOrigin.get(key);
+      return Object.values(schemas).map((schema) => ({ schema, count: rids[schema.name].length }));
+    });
     const commands = compileVariableCommands({
       schemas: this.schemas,
       sourceFid: this.sourceFid,
@@ -56389,20 +57630,21 @@ class DvsTables {
       oldTables: this.origin.tables,
       finalTables,
       newKeys: calculated.newKeys,
-      newFid: parseUuid(versionid),
-      incrementCount: true
+      newFid,
+      inheritedTables
     });
     fixed.signal.throwIfAborted();
     const result = await fixed.sql.checkedTransaction(commands);
     if (result.committed !== true)
       throw new Error("DVS 默认变量事务的提交结果无法确认，未重发 SQL。");
+    markVersionCommitted(ctx.payload, versionid);
     fixed.assertCurrent();
-    const state = await createState({
+    const targetState = (schemas) => createState({
       char: fixed.char,
       chat: fixed.chat,
       helper: fixed.sql,
-      fid: parseUuid(versionid),
-      schemas: this.schemas,
+      fid: newFid,
+      schemas,
       uniqueKeys: fixed.registration.uniqueKeys,
       assertReadable: () => fixed.assertCurrent(),
       assertWritable: () => {
@@ -56412,9 +57654,12 @@ class DvsTables {
       },
       notify: () => {}
     });
-    const actual = await captureSnapshot(fixed.sql, this.schemas, parseUuid(versionid));
+    const actual = await captureSnapshot(fixed.sql, this.schemas, newFid);
+    const previous = ctx.payload.tables;
+    const ordinary = buildTables(this.schemas, await targetState(this.schemas), actual.tables, previous.rawTables, previous.filterGroups);
+    ctx.payload.tables = ordinary;
+    await this.publishGroups(ctx.payload, ordinary, targetState, async (_key, schemas) => (await captureSnapshot(fixed.sql, schemas, newFid)).tables);
     fixed.assertCurrent();
-    ctx.payload.tables = { ...ctx.payload.tables, state, tables: actual.tables };
     ctx.setCapsule(JSON.parse(JSON.stringify(patch)));
   }
 }
@@ -56533,14 +57778,14 @@ Identify listed entries by their original lorebook and numeric uid, using only s
 // src/dvs2/ext/lb_opt/sources.ts
 var sources = new WeakMap;
 function setLorebookSources(payload, entries, narrative, rules = []) {
-  sources.set(payload, {
+  sources.set(sharedPayload(payload), {
     entries,
     rules,
     narrativeContent: new Map(narrative.map((entry) => [JSON.stringify([entry.book, entry.uid]), entry.content]))
   });
 }
 function lorebookSources(payload) {
-  return sources.get(payload);
+  return sources.get(sharedPayload(payload));
 }
 
 // src/dvs2/ui/components/record/world-entry.ts
@@ -56574,7 +57819,7 @@ function worldLight(entry) {
 }
 
 // src/dvs2/ui/components/record/EntryPreview.vue
-var __component28 = /* @__PURE__ */ defineComponent({
+var __component29 = /* @__PURE__ */ defineComponent({
   __name: "EntryPreview",
   props: {
     entry: { type: null, required: true },
@@ -56634,12 +57879,12 @@ var __component28 = /* @__PURE__ */ defineComponent({
 });
 var _hoisted_130 = { class: "dvs:flex dvs:items-start dvs:gap-3 dvs:px-4 dvs:pt-3.5 dvs:pb-2" };
 var _hoisted_220 = { class: "dvs:min-w-0 dvs:flex-1" };
-var _hoisted_310 = { class: "dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-x-2.5 dvs:gap-y-1" };
-var _hoisted_49 = {
+var _hoisted_311 = { class: "dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-x-2.5 dvs:gap-y-1" };
+var _hoisted_410 = {
   id: "dvs-entry-title",
   class: "dvs:m-0 dvs:text-[1.1em] dvs:leading-snug dvs:font-semibold"
 };
-var _hoisted_59 = { class: "dvs:inline-flex dvs:h-5 dvs:items-center dvs:gap-1.5 dvs:rounded-md dvs:bg-dvs-raised dvs:px-1.5 dvs:text-[0.82em] dvs:font-medium dvs:ring-1 dvs:ring-dvs-border" };
+var _hoisted_510 = { class: "dvs:inline-flex dvs:h-5 dvs:items-center dvs:gap-1.5 dvs:rounded-md dvs:bg-dvs-raised dvs:px-1.5 dvs:text-[0.82em] dvs:font-medium dvs:ring-1 dvs:ring-dvs-border" };
 var _hoisted_67 = { class: "dvs:mt-0.5 dvs:text-[0.86em] dvs:text-dvs-muted" };
 var _hoisted_77 = { class: "dvs:tabular-nums" };
 var _hoisted_86 = {
@@ -56672,11 +57917,11 @@ var _hoisted_175 = {
   tabindex: "0",
   "aria-label": "条目内容"
 };
-var _hoisted_184 = {
+var _hoisted_185 = {
   key: 1,
   class: "dvs:px-4 dvs:pb-3"
 };
-function render29(_ctx, _cache, $props, $setup, $data, $options) {
+function render30(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock(Fragment, null, [
     createCommentVNode(" 高度随内容增长，最高接近满屏；超出后只有内容框在框内滚动。 "),
     createBaseVNode("div", {
@@ -56689,8 +57934,8 @@ function render29(_ctx, _cache, $props, $setup, $data, $options) {
     }, [
       createBaseVNode("header", _hoisted_130, [
         createBaseVNode("div", _hoisted_220, [
-          createBaseVNode("div", _hoisted_310, [
-            createBaseVNode("h3", _hoisted_49, toDisplayString($setup.current ? $setup.entryName($setup.current.comment) || "（未命名条目）" : $props.entry.name || "（未命名条目）"), 1),
+          createBaseVNode("div", _hoisted_311, [
+            createBaseVNode("h3", _hoisted_410, toDisplayString($setup.current ? $setup.entryName($setup.current.comment) || "（未命名条目）" : $props.entry.name || "（未命名条目）"), 1),
             $setup.current && $setup.light ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
               createBaseVNode("span", {
                 class: normalizeClass([
@@ -56704,7 +57949,7 @@ function render29(_ctx, _cache, $props, $setup, $data, $options) {
                 })),
                 createTextVNode(" " + toDisplayString($setup.current.disable ? "已禁用" : "已启用"), 1)
               ], 2),
-              createBaseVNode("span", _hoisted_59, [
+              createBaseVNode("span", _hoisted_510, [
                 $setup.light.dot ? (openBlock(), createElementBlock("span", {
                   key: 0,
                   class: normalizeClass(["dvs:size-2 dvs:rounded-full dvs:ring-3", $setup.light.dot])
@@ -56790,7 +58035,7 @@ function render29(_ctx, _cache, $props, $setup, $data, $options) {
             createBaseVNode("dd", _hoisted_165, toDisplayString($setup.insertionLabel($setup.current)), 1)
           ])
         ]),
-        $setup.current.content ? (openBlock(), createElementBlock("div", _hoisted_175, toDisplayString($setup.current.content), 1)) : (openBlock(), createElementBlock("div", _hoisted_184, [
+        $setup.current.content ? (openBlock(), createElementBlock("div", _hoisted_175, toDisplayString($setup.current.content), 1)) : (openBlock(), createElementBlock("div", _hoisted_185, [
           createVNode($setup["EmptyState"], { text: "条目内容为空。" })
         ]))
       ], 64)),
@@ -56798,11 +58043,11 @@ function render29(_ctx, _cache, $props, $setup, $data, $options) {
     ], 2)
   ], 2112);
 }
-__component28.render = render29;
-var EntryPreview_default = __component28;
+__component29.render = render30;
+var EntryPreview_default = __component29;
 
 // src/dvs2/ui/components/record/LorebookRecord.vue
-var __component29 = /* @__PURE__ */ defineComponent({
+var __component30 = /* @__PURE__ */ defineComponent({
   __name: "LorebookRecord",
   props: {
     ctx: { type: Object, required: true }
@@ -56849,10 +58094,10 @@ var _hoisted_221 = {
   key: 1,
   class: "dvs:flex dvs:flex-wrap dvs:gap-1.5"
 };
-var _hoisted_311 = ["title"];
-var _hoisted_410 = { class: "dvs:text-dvs-muted dvs:line-through dvs:decoration-dvs-faint" };
-var _hoisted_510 = ["aria-label", "onClick"];
-function render30(_ctx, _cache, $props, $setup, $data, $options) {
+var _hoisted_313 = ["title"];
+var _hoisted_411 = { class: "dvs:text-dvs-muted dvs:line-through dvs:decoration-dvs-faint" };
+var _hoisted_511 = ["aria-label", "onClick"];
+function render31(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("div", _hoisted_131, [
     createVNode($setup["SavedAnalyses"], {
       ctx: $props.ctx,
@@ -56880,7 +58125,7 @@ function render30(_ctx, _cache, $props, $setup, $data, $options) {
                 size: 13,
                 class: "dvs:shrink-0 dvs:text-dvs-faint"
               }),
-              createBaseVNode("span", _hoisted_410, toDisplayString(entry.name || "（未命名条目）"), 1),
+              createBaseVNode("span", _hoisted_411, toDisplayString(entry.name || "（未命名条目）"), 1),
               createBaseVNode("button", {
                 type: "button",
                 class: "dvs:grid dvs:size-5.5 dvs:cursor-pointer dvs:place-items-center dvs:rounded dvs:text-dvs-faint dvs:hover:bg-dvs-hover dvs:hover:text-dvs-accent",
@@ -56892,8 +58137,8 @@ function render30(_ctx, _cache, $props, $setup, $data, $options) {
                   size: 14,
                   weight: "bold"
                 })
-              ], 8, _hoisted_510)
-            ], 8, _hoisted_311);
+              ], 8, _hoisted_511)
+            ], 8, _hoisted_313);
           }), 128))
         ]))
       ]),
@@ -56909,8 +58154,8 @@ function render30(_ctx, _cache, $props, $setup, $data, $options) {
     }, null, 8, ["text"])) : createCommentVNode("v-if", true)
   ]);
 }
-__component29.render = render30;
-var LorebookRecord_default = __component29;
+__component30.render = render31;
+var LorebookRecord_default = __component30;
 
 // src/dvs2/ext/lb_opt/display.ts
 var LorebookSummary = defineComponent({
@@ -57052,14 +58297,14 @@ var lorebookOptimize = {
 // src/dvs2/ext/plot_plan/sources.ts
 var sources2 = new WeakMap;
 function setPlotSources(payload, entries) {
-  sources2.set(payload, entries);
+  sources2.set(sharedPayload(payload), entries);
 }
 function plotSources(payload) {
-  return sources2.get(payload) ?? [];
+  return sources2.get(sharedPayload(payload)) ?? [];
 }
 
 // src/dvs2/ui/components/record/DataTables.vue
-var __component30 = /* @__PURE__ */ defineComponent({
+var __component31 = /* @__PURE__ */ defineComponent({
   __name: "DataTables",
   props: {
     tables: { type: Object, required: true }
@@ -57096,9 +58341,9 @@ var _hoisted_136 = {
   class: "dvs:space-y-1.5"
 };
 var _hoisted_225 = ["onToggle"];
-var _hoisted_313 = ["title"];
-var _hoisted_411 = ["aria-pressed", "title", "onClick"];
-var _hoisted_511 = {
+var _hoisted_314 = ["title"];
+var _hoisted_412 = ["aria-pressed", "title", "onClick"];
+var _hoisted_512 = {
   key: 0,
   class: "dvs:border-t dvs:border-dvs-border dvs:px-3 dvs:py-2"
 };
@@ -57115,7 +58360,7 @@ var _hoisted_96 = {
   key: 1,
   class: "dvs:w-max dvs:min-w-full dvs:border-collapse dvs:text-[0.92em]"
 };
-function render31(_ctx, _cache, $props, $setup, $data, $options) {
+function render32(_ctx, _cache, $props, $setup, $data, $options) {
   return !$setup.entries.length ? (openBlock(), createBlock($setup["EmptyState"], {
     key: 0,
     text: "本次没有保存有效数据。"
@@ -57143,7 +58388,7 @@ function render31(_ctx, _cache, $props, $setup, $data, $options) {
           createBaseVNode("span", {
             class: "dvs:min-w-0 dvs:truncate dvs:font-medium",
             title: table.name
-          }, toDisplayString(table.name), 9, _hoisted_313),
+          }, toDisplayString(table.name), 9, _hoisted_314),
           table.rows.length ? (openBlock(), createElementBlock("button", {
             key: 0,
             type: "button",
@@ -57157,7 +58402,7 @@ function render31(_ctx, _cache, $props, $setup, $data, $options) {
               weight: "bold"
             }),
             _cache[1] || (_cache[1] = createTextVNode("行列翻转 ", -1))
-          ], 10, _hoisted_411)) : createCommentVNode("v-if", true),
+          ], 10, _hoisted_412)) : createCommentVNode("v-if", true),
           createBaseVNode("span", {
             class: normalizeClass(["dvs:text-[0.88em] dvs:whitespace-nowrap dvs:text-dvs-muted dvs:tabular-nums", !table.rows.length && "dvs:ms-auto"])
           }, [
@@ -57172,7 +58417,7 @@ function render31(_ctx, _cache, $props, $setup, $data, $options) {
           lines: 2
         }, {
           default: withCtx(() => [
-            !table.rows.length ? (openBlock(), createElementBlock("div", _hoisted_511, [
+            !table.rows.length ? (openBlock(), createElementBlock("div", _hoisted_512, [
               createVNode($setup["EmptyState"], { text: "此表没有有效数据。" })
             ])) : (openBlock(), createElementBlock("div", {
               key: 1,
@@ -57249,11 +58494,11 @@ function render31(_ctx, _cache, $props, $setup, $data, $options) {
     }), 128))
   ]));
 }
-__component30.render = render31;
-var DataTables_default = __component30;
+__component31.render = render32;
+var DataTables_default = __component31;
 
 // src/dvs2/ui/components/record/TablesFilterRecord.vue
-var __component31 = /* @__PURE__ */ defineComponent({
+var __component32 = /* @__PURE__ */ defineComponent({
   __name: "TablesFilterRecord",
   props: {
     ctx: { type: Object, required: true }
@@ -57270,7 +58515,7 @@ var __component31 = /* @__PURE__ */ defineComponent({
   }
 });
 var _hoisted_137 = { class: "dvs2-table-filter-record" };
-function render32(_ctx, _cache, $props, $setup, $data, $options) {
+function render33(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("div", _hoisted_137, [
     createVNode($setup["SavedAnalyses"], {
       ctx: $props.ctx,
@@ -57295,8 +58540,8 @@ function render32(_ctx, _cache, $props, $setup, $data, $options) {
     }))
   ]);
 }
-__component31.render = render32;
-var TablesFilterRecord_default = __component31;
+__component32.render = render33;
+var TablesFilterRecord_default = __component32;
 
 // src/dvs2/ext/tables_opt/display.ts
 var TablesFilterSummary = defineComponent({
@@ -57381,10 +58626,10 @@ Identify rows using only that table's keys/field name fields, copying complete o
 // src/dvs2/ext/tables_opt/sources.ts
 var sources3 = new WeakMap;
 function setTableRuleSources(payload, entries) {
-  sources3.set(payload, entries);
+  sources3.set(sharedPayload(payload), entries);
 }
 function tableRuleSources(payload) {
-  return sources3.get(payload) ?? [];
+  return sources3.get(sharedPayload(payload)) ?? [];
 }
 
 // src/dvs2/ext/tables_opt/index.ts
@@ -57625,7 +58870,7 @@ ${description}
 }
 
 // src/dvs2/ui/components/record/PlotValue.vue
-var __component32 = /* @__PURE__ */ defineComponent({
+var __component33 = /* @__PURE__ */ defineComponent({
   ...{ name: "PlotValue" },
   __name: "PlotValue",
   props: {
@@ -57655,15 +58900,15 @@ var _hoisted_226 = {
   key: 1,
   class: "dvs:whitespace-pre-wrap"
 };
-var _hoisted_314 = {
+var _hoisted_315 = {
   key: 2,
   class: "dvs:font-dvs-mono dvs:text-[0.92em] dvs:text-dvs-delta"
 };
-var _hoisted_412 = {
+var _hoisted_413 = {
   key: 0,
   class: "dvs:text-dvs-faint"
 };
-var _hoisted_512 = {
+var _hoisted_513 = {
   key: 1,
   class: "dvs:space-y-2.5"
 };
@@ -57693,10 +58938,10 @@ var _hoisted_139 = {
   class: "dvs:space-y-1.5"
 };
 var _hoisted_146 = { class: "dvs:shrink-0 dvs:text-[0.92em] dvs:font-medium dvs:text-dvs-muted" };
-function render33(_ctx, _cache, $props, $setup, $data, $options) {
+function render34(_ctx, _cache, $props, $setup, $data, $options) {
   const _component_PlotValue = resolveComponent("PlotValue", true);
-  return $setup.kind === "empty" ? (openBlock(), createElementBlock("span", _hoisted_138, "（空）")) : $setup.kind === "text" ? (openBlock(), createElementBlock("p", _hoisted_226, toDisplayString($props.value), 1)) : $setup.kind === "scalar" ? (openBlock(), createElementBlock("code", _hoisted_314, toDisplayString(JSON.stringify($props.value)), 1)) : $setup.kind === "array" ? (openBlock(), createElementBlock(Fragment, { key: 3 }, [
-    !$setup.items.length ? (openBlock(), createElementBlock("span", _hoisted_412, "（空）")) : $props.variant === "steps" ? (openBlock(), createElementBlock("ol", _hoisted_512, [
+  return $setup.kind === "empty" ? (openBlock(), createElementBlock("span", _hoisted_138, "（空）")) : $setup.kind === "text" ? (openBlock(), createElementBlock("p", _hoisted_226, toDisplayString($props.value), 1)) : $setup.kind === "scalar" ? (openBlock(), createElementBlock("code", _hoisted_315, toDisplayString(JSON.stringify($props.value)), 1)) : $setup.kind === "array" ? (openBlock(), createElementBlock(Fragment, { key: 3 }, [
+    !$setup.items.length ? (openBlock(), createElementBlock("span", _hoisted_413, "（空）")) : $props.variant === "steps" ? (openBlock(), createElementBlock("ol", _hoisted_513, [
       (openBlock(true), createElementBlock(Fragment, null, renderList($setup.items, (item, index) => {
         return openBlock(), createElementBlock("li", {
           key: index,
@@ -57744,11 +58989,11 @@ function render33(_ctx, _cache, $props, $setup, $data, $options) {
     ]))
   ], 64));
 }
-__component32.render = render33;
-var PlotValue_default = __component32;
+__component33.render = render34;
+var PlotValue_default = __component33;
 
 // src/dvs2/ui/components/record/PlotView.vue
-var __component33 = /* @__PURE__ */ defineComponent({
+var __component34 = /* @__PURE__ */ defineComponent({
   __name: "PlotView",
   props: {
     plot: { type: Object, required: true }
@@ -57773,9 +59018,9 @@ var __component33 = /* @__PURE__ */ defineComponent({
 });
 var _hoisted_140 = { class: "dvs:space-y-4" };
 var _hoisted_227 = { class: "dvs:flex dvs:items-center dvs:justify-between dvs:gap-2" };
-var _hoisted_315 = { class: "dvs:text-[0.82em] dvs:text-dvs-faint" };
-var _hoisted_413 = { class: "dvs:ms-auto dvs:inline-flex dvs:shrink-0 dvs:rounded-lg dvs:bg-dvs-raised dvs:p-0.5 dvs:text-[0.82em] dvs:whitespace-nowrap dvs:ring-1 dvs:ring-dvs-border" };
-var _hoisted_513 = ["onClick"];
+var _hoisted_316 = { class: "dvs:text-[0.82em] dvs:text-dvs-faint" };
+var _hoisted_414 = { class: "dvs:ms-auto dvs:inline-flex dvs:shrink-0 dvs:rounded-lg dvs:bg-dvs-raised dvs:p-0.5 dvs:text-[0.82em] dvs:whitespace-nowrap dvs:ring-1 dvs:ring-dvs-border" };
+var _hoisted_514 = ["onClick"];
 var _hoisted_610 = {
   key: 0,
   class: "dvs:rounded-lg dvs:border-l-[3px] dvs:border-dvs-accent dvs:bg-dvs-accent-soft dvs:px-3 dvs:py-2"
@@ -57796,15 +59041,15 @@ var _hoisted_1310 = {
   key: 1,
   class: "dvs:rounded dvs:bg-dvs-raised dvs:px-1 dvs:text-[0.85em] dvs:font-normal dvs:text-dvs-faint dvs:ring-1 dvs:ring-dvs-border"
 };
-function render34(_ctx, _cache, $props, $setup, $data, $options) {
+function render35(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("div", _hoisted_140, [
     createBaseVNode("div", _hoisted_227, [
-      createBaseVNode("span", _hoisted_315, [
+      createBaseVNode("span", _hoisted_316, [
         $setup.custom ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
           createTextVNode("含 " + toDisplayString($setup.custom) + " 个作者自定义字段", 1)
         ], 64)) : createCommentVNode("v-if", true)
       ]),
-      createBaseVNode("div", _hoisted_413, [
+      createBaseVNode("div", _hoisted_414, [
         (openBlock(), createElementBlock(Fragment, null, renderList($setup.modes, ([value, label]) => {
           return createBaseVNode("button", {
             key: value,
@@ -57814,7 +59059,7 @@ function render34(_ctx, _cache, $props, $setup, $data, $options) {
               $setup.mode === value ? "dvs:bg-dvs-solid dvs:font-medium dvs:text-dvs-text dvs:shadow-sm" : "dvs:text-dvs-muted dvs:hover:text-dvs-text"
             ]),
             onClick: ($event) => $setup.mode = value
-          }, toDisplayString(label), 11, _hoisted_513);
+          }, toDisplayString(label), 11, _hoisted_514);
         }), 64))
       ])
     ]),
@@ -57852,11 +59097,11 @@ function render34(_ctx, _cache, $props, $setup, $data, $options) {
     }), 128))
   ]);
 }
-__component33.render = render34;
-var PlotView_default = __component33;
+__component34.render = render35;
+var PlotView_default = __component34;
 
 // src/dvs2/ui/components/record/PlotRecord.vue
-var __component34 = /* @__PURE__ */ defineComponent({
+var __component35 = /* @__PURE__ */ defineComponent({
   __name: "PlotRecord",
   props: {
     ctx: { type: Object, required: true }
@@ -57873,7 +59118,7 @@ var __component34 = /* @__PURE__ */ defineComponent({
   }
 });
 var _hoisted_141 = { class: "dvs2-plot-record" };
-function render35(_ctx, _cache, $props, $setup, $data, $options) {
+function render36(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("div", _hoisted_141, [
     createVNode($setup["SavedAnalyses"], {
       ctx: $props.ctx,
@@ -57897,8 +59142,8 @@ function render35(_ctx, _cache, $props, $setup, $data, $options) {
     }, 8, ["icon"])
   ]);
 }
-__component34.render = render35;
-var PlotRecord_default = __component34;
+__component35.render = render36;
+var PlotRecord_default = __component35;
 
 // src/dvs2/ext/plot_plan/display.ts
 var PlotSummary = defineComponent({
@@ -58113,7 +59358,7 @@ async function prepareUserPrompt(options) {
     environment = await template.prepareContext({ ...options.context, ...options.ejs, runType: "dvs_input_inject", isDryRun: false }, options.context.message_id);
     assertCurrent();
   }
-  const formats = payload.tables ? preparePromptFormats(payload.tables.tables, options.yaml, { ...payload.tables.uniqueKeys }) : undefined;
+  const formats = payload.tables ? preparePromptFormats(payload.tables.tables, options.yaml, { ...payload.tables.uniqueKeys }, false, undefined, (owner, table) => internalRows(payload, owner, table)) : undefined;
   const expand = (text) => {
     if (!formats)
       return withoutTablePromptData(text);
@@ -58462,7 +59707,7 @@ async function scanVariableWorldbooks(options) {
   const initial = new Map, rawReinsertions = new Set;
   const promptState = options.state && createPromptState(options.state, assertCurrent, (error) => {
     failure ??= error;
-  });
+  }, options.internal);
   const filter = (value, first) => {
     try {
       assertCurrent();
@@ -58510,7 +59755,7 @@ async function scanVariableWorldbooks(options) {
     try {
       assertCurrent();
       templatePrepared = true;
-      Object.assign(value, { dvs_state: promptState, ...options.ejs, generateType: "normal" });
+      Object.assign(value, { ...options.ejs, ...promptState && { dvs_state: promptState }, generateType: "normal" });
     } catch (error) {
       failure ??= error;
     }
@@ -59087,6 +60332,7 @@ function createDvsRuntime(owner, service, options) {
   let updateStatus = { phase: "idle", attempt: 0, maxAttempts: 0, retryDelayMs: 0 };
   let statusScope;
   const invalidTargets = new WeakMap;
+  let referenceScope = { unconfirmed: false };
   const assertConfirmed = (target) => {
     const error = invalidTargets.get(target.message)?.get(target.swipeid);
     if (error)
@@ -59221,7 +60467,14 @@ function createDvsRuntime(owner, service, options) {
       publishRegistration();
       return;
     }
-    await captureRead(target);
+    const read = await captureRead(target);
+    if (!generation && !referenceScope.unconfirmed) {
+      try {
+        await cleanupCurrent(read);
+      } catch (error) {
+        options.reportError(error);
+      }
+    }
     ready = true;
     publishRegistration();
     await notify();
@@ -59261,10 +60514,10 @@ function createDvsRuntime(owner, service, options) {
   const captureRead = async (target, signal = querySignal, allowSourceReplacement = false, preparationSource) => {
     assertConfirmed(target);
     const lease = assertRegistered();
-    const scope = adapter.context(), { chat: capturedChat, chatId: capturedChatId } = scope, capturedAvatar = adapter.avatar();
+    const scope = adapter.context(), { chat: capturedChat, chatId: capturedChatId } = scope, capturedAvatar = adapter.avatar(), capturedReferenceScope = referenceScope;
     const assertCurrent = () => {
       if (allowSourceReplacement && target.floorid === 0 && capturedChat[0] !== target.message) {
-        if (adapter.context().chat !== capturedChat || adapter.context().chatId !== capturedChatId || adapter.avatar() !== capturedAvatar)
+        if (referenceScope !== capturedReferenceScope || adapter.context().chat !== capturedChat || adapter.context().chatId !== capturedChatId || adapter.avatar() !== capturedAvatar)
           throw new Error("正文替换期间聊天已切换。");
       } else
         target.assertCurrent();
@@ -59302,8 +60555,10 @@ function createDvsRuntime(owner, service, options) {
         chat: chat.debounce(false),
         helper: sql,
         uniqueKeys: lease.uniqueKeys,
+        definitions,
         entries,
         lastFid: currentVersion ? parseUuid(currentVersion) : null,
+        hasHistoricalFid: () => adapter.readReferences().length > 0,
         ...adapter.context().chat.length === 1 && preparationTarget.floorid === 0 ? {
           greeting: {
             welcomeId: preparationTarget.swipeid,
@@ -59340,8 +60595,10 @@ function createDvsRuntime(owner, service, options) {
       chat,
       sql,
       chatDbId,
+      referenceScope: capturedReferenceScope,
       registration: lease,
       schemas: result.schemas,
+      internalSchemas: result.internalSchemas,
       signal,
       assertCurrent: (() => {
         const version = target.version();
@@ -59361,6 +60618,12 @@ function createDvsRuntime(owner, service, options) {
       }
     };
   };
+  const cleanupCurrent = (read) => cleanupOrphans(read.sql, Object.assign(Object.create(null), read.schemas, ...Object.values(read.internalSchemas ?? {})), () => {
+    read.assertCurrent();
+    if (referenceScope !== read.referenceScope || referenceScope.unconfirmed)
+      throw new Error("聊天已重新载入或关联尚未确认保存，保留清理计数。");
+    return adapter.readReferences().map(parseUuid);
+  });
   const message = (target, type, tolerateBroken = false) => ({
     floorid: target.floorid,
     swipeid: target.swipeid,
@@ -59386,6 +60649,8 @@ function createDvsRuntime(owner, service, options) {
       changed();
       const read = await captureRead(source, preparationAbort.signal, allowSourceReplacement), lease = assertRegistered();
       const turnChat = adapter.context().chat;
+      const turnReferenceScope = referenceScope;
+      const isTurnReferenceScope = () => referenceScope === turnReferenceScope && adapter.context().chatId === source.chatId && adapter.avatar() === source.avatar && registration === lease;
       const config = await readScriptConfig(configPort());
       read.assertCurrent();
       if (!config?.enabled)
@@ -59503,6 +60768,7 @@ function createDvsRuntime(owner, service, options) {
               adapter,
               entries: await readWorldbooks(adapter.worldbooks, source.avatar, helper.assertCurrent),
               state,
+              internal: (key) => internalState(controller.runtime.payload, key),
               messages: structuredClone(adapter.context().chat.slice(0, ai.floorid + 1)).map((row) => ({
                 ...row,
                 mes: row.mes
@@ -59514,7 +60780,13 @@ function createDvsRuntime(owner, service, options) {
             return entries;
           },
           injectEjs: () => {},
-          cleanupOrphans: (refs) => cleanupOrphans(read.sql, { ...read.schemas }, () => refs().map(parseUuid))
+          cleanupOrphans: (refs) => cleanupOrphans(read.sql, Object.assign(Object.create(null), read.schemas, ...Object.values(read.internalSchemas ?? {})), () => {
+            if (!isTurnReferenceScope())
+              throw new Error("聊天已切换，保留原聊天的清理计数。");
+            if (turnReferenceScope.unconfirmed)
+              throw new Error("聊天关联尚未确认保存，保留清理计数。");
+            return refs().map(parseUuid);
+          })
         },
         host: {
           preNarrativeUi: {
@@ -59523,7 +60795,7 @@ function createDvsRuntime(owner, service, options) {
                 throw new Error("生成拦截缺少固定用户消息。");
               const messages = await preNarrativeMessages(adapter, userTarget, prev ? source : undefined, options.promptRegex);
               read.assertCurrent();
-              const formats = preparePromptFormats(ctx.payload.tables?.tables ?? {}, options.yaml);
+              const formats = preparePromptFormats(ctx.payload.tables?.tables ?? {}, options.yaml, {}, false, undefined, (owner, table) => internalRows(ctx.payload, owner, table));
               return {
                 ...messages,
                 expandData: (text) => {
@@ -59617,10 +60889,21 @@ function createDvsRuntime(owner, service, options) {
             if (adapter.context().chat === turnChat && registration === lease)
               publishStatus(status);
           },
-          associateVersion: (version) => {
+          associateVersion: async (version) => {
             if (!ai)
               throw new Error("DVS 关联没有固定 AI 目标。");
-            return ai.associateVersion(version);
+            if (!isTurnReferenceScope())
+              throw new Error("聊天已重新载入或切换，未保存旧回合关联。");
+            try {
+              await ai.associateVersion(version);
+              if (!isTurnReferenceScope())
+                throw new Error("聊天已重新载入或切换，旧回合关联不用于当前清理。");
+            } catch (error) {
+              if (isTurnReferenceScope())
+                turnReferenceScope.unconfirmed = true;
+              throw error;
+            }
+            turnReferenceScope.unconfirmed = false;
           },
           reportError: options.reportError,
           onUpdate: notify,
@@ -59720,6 +61003,7 @@ function createDvsRuntime(owner, service, options) {
           const entries = await scanVariableWorldbooks({
             adapter,
             stage: "user",
+            internal: (key) => internalState(controller.runtime.payload, key),
             ejs: controller.runtime.exchange.ejs,
             entries: await readWorldbooks(adapter.worldbooks, source.avatar, helper.assertCurrent),
             state,
@@ -59822,7 +61106,14 @@ function createDvsRuntime(owner, service, options) {
       try {
         const target = adapter.context().chatId ? adapter.latest("ai") : undefined;
         if (target) {
-          await captureRead(target);
+          const read = await captureRead(target);
+          if (!referenceScope.unconfirmed) {
+            try {
+              await cleanupCurrent(read);
+            } catch (error) {
+              options.reportError(error);
+            }
+          }
           ready = true;
         }
       } catch (error) {
@@ -59855,7 +61146,15 @@ function createDvsRuntime(owner, service, options) {
           if (adapter.helper.builtin?.duringGenerating())
             throw new Error("酒馆正在生成，请等待结束后再修改变量。");
         },
-        notify
+        notify: async () => {
+          try {
+            if (!generation && !referenceScope.unconfirmed)
+              await cleanupCurrent(read);
+          } catch (error) {
+            options.reportError(error);
+          }
+          await notify();
+        }
       });
     },
     async readFloorData(target) {
@@ -60106,6 +61405,20 @@ function createDvsRuntime(owner, service, options) {
       }
     },
     refreshCurrent,
+    chatLoaded() {
+      referenceScope = { unconfirmed: false };
+      tablePreparation = undefined;
+    },
+    async recordDeletion() {
+      if (!isReady())
+        return;
+      referenceScope.unconfirmed = true;
+      const target = service.captureTarget("chat");
+      if (!target)
+        return;
+      const command = orphanOperationCommand();
+      await target.execute({ type: "checked-transaction", commands: [{ ...command, binds: serializeBinds(command.binds) }] }, 0);
+    },
     get busy() {
       return !!generation || pending;
     },
@@ -60395,7 +61708,11 @@ ${turn.supplement}`;
       Object.assign(environment, runtime.ejs());
       return;
     }
-    const target = typeof environment.message_id === "number" && !adapter.context().chat[environment.message_id]?.is_user ? adapter.capture(environment.message_id) : adapter.latest("ai");
+    const id = environment.message_id;
+    const message = typeof id === "number" ? adapter.context().chat[id] : undefined;
+    if (typeof id === "number" && (!message || message.is_system || message.extra?.type === "narrator"))
+      return;
+    const target = message && !message.is_user ? adapter.capture(id) : adapter.latest("ai");
     if (!target)
       return;
     const assertCurrent = () => target.assertCurrent();
@@ -60476,12 +61793,22 @@ ${turn.supplement}`;
     }
   };
   listen("GENERATION_STOPPED", onStopped, "first");
-  for (const name of ["CHAT_CHANGED", "MESSAGE_SWIPED", "MESSAGE_DELETED", "CHARACTER_DELETED"]) {
+  for (const name of [
+    "CHAT_CHANGED",
+    "MESSAGE_SWIPED",
+    "MESSAGE_DELETED",
+    "MESSAGE_SWIPE_DELETED",
+    "CHARACTER_DELETED"
+  ]) {
     if (!context.eventTypes?.[name])
       continue;
     listen(name, () => {
+      if (name === "CHAT_CHANGED")
+        runtime.chatLoaded();
       if (name === "MESSAGE_DELETED" && current?.replacement)
         return;
+      if (name === "MESSAGE_DELETED" || name === "MESSAGE_SWIPE_DELETED")
+        runtime.recordDeletion().catch(reportError);
       if (current) {
         current.stopped = true;
         current.ended = true;
@@ -60625,7 +61952,7 @@ async function testModel(snapshot, signal, options) {
 
 // src/dvs2/ui/components/RequestErrorsWindow.vue
 var action = "dvs:inline-flex dvs:cursor-pointer dvs:items-center dvs:gap-1.5 dvs:rounded-lg dvs:px-2.5 dvs:py-1.5 dvs:text-[0.9em] dvs:text-dvs-muted dvs:hover:bg-dvs-hover dvs:hover:text-dvs-text dvs:disabled:cursor-default dvs:disabled:opacity-40";
-var __component35 = /* @__PURE__ */ defineComponent({
+var __component36 = /* @__PURE__ */ defineComponent({
   __name: "RequestErrorsWindow",
   emits: ["close"],
   setup(__props, { expose: __expose, emit: __emit }) {
@@ -60702,9 +62029,9 @@ var _hoisted_147 = {
   "aria-label": "DVS 错误记录"
 };
 var _hoisted_228 = { class: "dvs:flex dvs:items-center dvs:gap-2 dvs:border-b dvs:border-dvs-border dvs:px-4 dvs:py-3" };
-var _hoisted_316 = { class: "dvs:text-sm dvs:text-dvs-faint" };
-var _hoisted_414 = { class: "dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-2 dvs:border-b dvs:border-dvs-border dvs:px-4 dvs:py-2" };
-var _hoisted_514 = ["disabled"];
+var _hoisted_317 = { class: "dvs:text-sm dvs:text-dvs-faint" };
+var _hoisted_415 = { class: "dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-2 dvs:border-b dvs:border-dvs-border dvs:px-4 dvs:py-2" };
+var _hoisted_515 = ["disabled"];
 var _hoisted_611 = {
   key: 0,
   role: "status",
@@ -60727,7 +62054,7 @@ var _hoisted_148 = { class: "dvs:text-[0.84em] dvs:text-dvs-muted" };
 var _hoisted_156 = { class: "dvs:text-[0.8em] dvs:text-dvs-faint" };
 var _hoisted_166 = { class: "dvs:mt-1 dvs:block dvs:text-[0.92em] dvs:break-words dvs:text-dvs-remove" };
 var _hoisted_176 = { class: "dvs:mt-1 dvs:block dvs:text-[0.82em] dvs:break-all dvs:text-dvs-faint" };
-var _hoisted_185 = { class: "dvs:flex dvs:justify-end dvs:gap-1 dvs:px-2 dvs:pb-2" };
+var _hoisted_186 = { class: "dvs:flex dvs:justify-end dvs:gap-1 dvs:px-2 dvs:pb-2" };
 var _hoisted_194 = ["onClick"];
 var _hoisted_204 = ["onClick"];
 var _hoisted_2110 = {
@@ -60742,7 +62069,7 @@ var _hoisted_235 = {
   key: 1,
   class: "dvs:mb-2 dvs:text-[0.9em] dvs:text-dvs-muted"
 };
-function render36(_ctx, _cache, $props, $setup, $data, $options) {
+function render37(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("div", _hoisted_147, [
     createBaseVNode("header", _hoisted_228, [
       createVNode($setup["PhWarningCircle"], {
@@ -60750,7 +62077,7 @@ function render36(_ctx, _cache, $props, $setup, $data, $options) {
         class: "dvs:shrink-0 dvs:text-dvs-remove"
       }),
       _cache[1] || (_cache[1] = createBaseVNode("h3", { class: "dvs:m-0 dvs:text-base dvs:font-semibold" }, "DVS 错误记录", -1)),
-      createBaseVNode("span", _hoisted_316, toDisplayString($setup.records.length) + " 条", 1),
+      createBaseVNode("span", _hoisted_317, toDisplayString($setup.records.length) + " 条", 1),
       createBaseVNode("button", {
         type: "button",
         class: normalizeClass([$setup.action, "dvs:ms-auto"]),
@@ -60760,7 +62087,7 @@ function render36(_ctx, _cache, $props, $setup, $data, $options) {
         createVNode($setup["PhX"], { size: 18 })
       ])
     ]),
-    createBaseVNode("div", _hoisted_414, [
+    createBaseVNode("div", _hoisted_415, [
       _cache[3] || (_cache[3] = createBaseVNode("p", { class: "dvs:m-0 dvs:flex-1 dvs:basis-52 dvs:text-[0.88em] dvs:text-dvs-muted" }, " 最新记录在前，最多保留 30 条。仅保存在当前页面，刷新后丢失。 ", -1)),
       createBaseVNode("button", {
         type: "button",
@@ -60770,7 +62097,7 @@ function render36(_ctx, _cache, $props, $setup, $data, $options) {
       }, [
         createVNode($setup["PhTrash"], { size: 15 }),
         _cache[2] || (_cache[2] = createTextVNode("清空记录 ", -1))
-      ], 8, _hoisted_514)
+      ], 8, _hoisted_515)
     ]),
     _cache[6] || (_cache[6] = createBaseVNode("p", { class: "dvs:mx-4 dvs:my-2 dvs:text-[0.86em] dvs:text-dvs-faint" }, " 详情包含模型请求与返回内容，分享前请检查其中的角色、聊天和提示词信息。 ", -1)),
     $setup.feedback ? (openBlock(), createElementBlock("p", _hoisted_611, toDisplayString($setup.feedback), 1)) : createCommentVNode("v-if", true),
@@ -60809,7 +62136,7 @@ function render36(_ctx, _cache, $props, $setup, $data, $options) {
                 ])
               ])
             ], 8, _hoisted_108),
-            createBaseVNode("div", _hoisted_185, [
+            createBaseVNode("div", _hoisted_186, [
               createBaseVNode("button", {
                 type: "button",
                 class: normalizeClass($setup.action),
@@ -60839,8 +62166,8 @@ function render36(_ctx, _cache, $props, $setup, $data, $options) {
     ])
   ], 512);
 }
-__component35.render = render36;
-var RequestErrorsWindow_default = __component35;
+__component36.render = render37;
+var RequestErrorsWindow_default = __component36;
 
 // src/dvs2/ui/request-errors.ts
 var opened;
@@ -60854,7 +62181,7 @@ function openDvsRequestErrors(owner = window) {
 }
 
 // src/dvs2/ui/components/config/ConfigField.vue
-var __component36 = /* @__PURE__ */ defineComponent({
+var __component37 = /* @__PURE__ */ defineComponent({
   __name: "ConfigField",
   props: {
     label: { type: String, required: true },
@@ -60873,7 +62200,7 @@ var __component36 = /* @__PURE__ */ defineComponent({
 });
 var _hoisted_149 = { class: "dvs:mb-1 dvs:flex dvs:min-h-5 dvs:items-center dvs:gap-2" };
 var _hoisted_230 = ["for"];
-function render37(_ctx, _cache, $props, $setup, $data, $options) {
+function render38(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("div", {
     class: normalizeClass(["dvs:min-w-0", $props.full && "dvs:@[34rem]:col-span-2"])
   }, [
@@ -60894,8 +62221,8 @@ function render37(_ctx, _cache, $props, $setup, $data, $options) {
     }, toDisplayString($props.hint), 3)) : createCommentVNode("v-if", true)
   ], 2);
 }
-__component36.render = render37;
-var ConfigField_default = __component36;
+__component37.render = render38;
+var ConfigField_default = __component37;
 
 // src/dvs2/ui/components/config/config-model.ts
 var PURPOSE_NAMES = { variable: "变量更新", input_inject: "输入增强" };
@@ -60973,7 +62300,7 @@ var configSignature = (item) => stableConfigJson({ name: item.name, config: item
 var errorText = (error, fallback = "操作未完成，请重试。") => error instanceof Error && error.message ? error.message : fallback;
 
 // src/dvs2/ui/components/config/ConfigEditor.vue
-var __component37 = /* @__PURE__ */ defineComponent({
+var __component38 = /* @__PURE__ */ defineComponent({
   __name: "ConfigEditor",
   props: {
     draft: { type: Object, required: true },
@@ -61210,9 +62537,9 @@ var __component37 = /* @__PURE__ */ defineComponent({
 });
 var _hoisted_150 = ["disabled"];
 var _hoisted_231 = { class: "dvs:grid dvs:grid-cols-1 dvs:gap-x-3 dvs:gap-y-3 dvs:@[34rem]:grid-cols-2" };
-var _hoisted_317 = ["id", "aria-invalid"];
-var _hoisted_415 = ["id", "aria-invalid"];
-var _hoisted_515 = ["id", "placeholder"];
+var _hoisted_318 = ["id", "aria-invalid"];
+var _hoisted_416 = ["id", "aria-invalid"];
+var _hoisted_516 = ["id", "placeholder"];
 var _hoisted_612 = { class: "dvs:relative dvs:flex dvs:gap-1.5" };
 var _hoisted_712 = ["id", "aria-invalid", "aria-expanded"];
 var _hoisted_811 = ["aria-selected", "onMousedown"];
@@ -61225,7 +62552,7 @@ var _hoisted_1410 = { class: "dvs:relative" };
 var _hoisted_157 = ["id", "onUpdate:modelValue", "min", "step"];
 var _hoisted_167 = { class: "dvs:mb-1.5 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-2" };
 var _hoisted_177 = ["for"];
-var _hoisted_186 = ["id", "rows", "aria-invalid"];
+var _hoisted_187 = ["id", "rows", "aria-invalid"];
 var _hoisted_195 = { class: "dvs:mb-1.5 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-2" };
 var _hoisted_205 = ["for"];
 var _hoisted_2111 = ["id", "rows"];
@@ -61234,9 +62561,9 @@ var _hoisted_236 = ["for"];
 var _hoisted_245 = ["id", "rows", "aria-invalid"];
 var _hoisted_255 = { class: "dvs:mb-1.5 dvs:flex dvs:items-center dvs:gap-2" };
 var _hoisted_265 = { class: "dvs:space-y-1" };
-var _hoisted_273 = { class: "dvs:w-[8em] dvs:shrink-0" };
+var _hoisted_274 = { class: "dvs:w-[8em] dvs:shrink-0" };
 var _hoisted_283 = { class: "dvs:ms-auto dvs:flex dvs:items-center dvs:gap-2" };
-function render38(_ctx, _cache, $props, $setup, $data, $options) {
+function render39(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("form", {
     class: "dvs:@container",
     novalidate: "",
@@ -61267,7 +62594,7 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
               placeholder: "例如：DeepSeek 变量",
               autocomplete: "off",
               "aria-invalid": $setup.touched && !!$setup.errors.name
-            }, null, 10, _hoisted_317), [
+            }, null, 10, _hoisted_318), [
               [vModelText, $setup.form.name]
             ])
           ]),
@@ -61289,7 +62616,7 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
               placeholder: "https://api.deepseek.com",
               autocomplete: "off",
               "aria-invalid": $setup.touched && !!$setup.errors.apiUrl
-            }, null, 10, _hoisted_415), [
+            }, null, 10, _hoisted_416), [
               [
                 vModelText,
                 $setup.form.config.apiUrl,
@@ -61328,7 +62655,7 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
               type: "password",
               autocomplete: "new-password",
               placeholder: $setup.keyPlaceholder
-            }, null, 10, _hoisted_515), [
+            }, null, 10, _hoisted_516), [
               [vModelText, $setup.keyInput]
             ])
           ]),
@@ -61556,7 +62883,7 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
               spellcheck: "false",
               placeholder: '{"thinking": {"type": "disabled"}}',
               "aria-invalid": !!$setup.extraError
-            }, null, 10, _hoisted_186), [
+            }, null, 10, _hoisted_187), [
               [vModelText, $setup.extraText]
             ]),
             $setup.extraError ? (openBlock(), createElementBlock("p", {
@@ -61656,7 +62983,7 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
                 weight: "fill",
                 class: normalizeClass(["dvs:mt-[0.2em] dvs:shrink-0", $setup.statusLook[item.status].tone])
               }, null, 8, ["class"])),
-              createBaseVNode("span", _hoisted_273, toDisplayString(label), 1),
+              createBaseVNode("span", _hoisted_274, toDisplayString(label), 1),
               createBaseVNode("span", {
                 class: normalizeClass(["dvs:min-w-0", $setup.look.muted])
               }, [
@@ -61754,11 +63081,11 @@ function render38(_ctx, _cache, $props, $setup, $data, $options) {
     ], 8, _hoisted_150)
   ], 32);
 }
-__component37.render = render38;
-var ConfigEditor_default = __component37;
+__component38.render = render39;
+var ConfigEditor_default = __component38;
 
 // src/dvs2/ui/components/config/ConfigSelect.vue
-var __component38 = /* @__PURE__ */ defineComponent({
+var __component39 = /* @__PURE__ */ defineComponent({
   __name: "ConfigSelect",
   props: {
     id: { type: String, required: false },
@@ -61781,8 +63108,8 @@ var __component38 = /* @__PURE__ */ defineComponent({
 });
 var _hoisted_151 = { class: "dvs:relative dvs:min-w-0 dvs:flex-1" };
 var _hoisted_237 = ["id", "value", "disabled", "aria-invalid"];
-var _hoisted_318 = ["value"];
-function render39(_ctx, _cache, $props, $setup, $data, $options) {
+var _hoisted_319 = ["value"];
+function render40(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("div", _hoisted_151, [
     createBaseVNode("select", {
       id: $props.id,
@@ -61797,7 +63124,7 @@ function render39(_ctx, _cache, $props, $setup, $data, $options) {
           key: option.value,
           value: option.value,
           class: normalizeClass($setup.look.option)
-        }, toDisplayString(option.label), 11, _hoisted_318);
+        }, toDisplayString(option.label), 11, _hoisted_319);
       }), 128))
     ], 42, _hoisted_237),
     !$setup.look.native ? (openBlock(), createBlock($setup["PhCaretDown"], {
@@ -61808,12 +63135,12 @@ function render39(_ctx, _cache, $props, $setup, $data, $options) {
     }, null, 8, ["class"])) : createCommentVNode("v-if", true)
   ]);
 }
-__component38.render = render39;
-var ConfigSelect_default = __component38;
+__component39.render = render40;
+var ConfigSelect_default = __component39;
 
 // src/dvs2/ui/components/config/ConfigPanel.vue
 var sectionTitle2 = "dvs:mb-2 dvs:flex dvs:items-center dvs:gap-2 dvs:text-[0.8em] dvs:font-semibold dvs:tracking-wide";
-var __component39 = /* @__PURE__ */ defineComponent({
+var __component40 = /* @__PURE__ */ defineComponent({
   __name: "ConfigPanel",
   props: {
     entry: { type: String, required: true },
@@ -62303,9 +63630,9 @@ var _hoisted_238 = {
   key: 0,
   class: "dvs:flex dvs:min-w-0 dvs:items-baseline dvs:gap-1.5"
 };
-var _hoisted_319 = { class: "dvs:shrink-0 dvs:font-medium" };
-var _hoisted_416 = ["title"];
-var _hoisted_516 = {
+var _hoisted_320 = { class: "dvs:shrink-0 dvs:font-medium" };
+var _hoisted_417 = ["title"];
+var _hoisted_517 = {
   key: 1,
   class: "dvs:mb-3"
 };
@@ -62324,7 +63651,7 @@ var _hoisted_1411 = { class: "dvs:min-w-0 dvs:flex-1" };
 var _hoisted_159 = { class: "dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-1.5" };
 var _hoisted_168 = { class: "dvs:font-medium" };
 var _hoisted_178 = { class: "dvs:truncate dvs:font-dvs-mono" };
-var _hoisted_187 = { class: "dvs:truncate" };
+var _hoisted_188 = { class: "dvs:truncate" };
 var _hoisted_196 = { class: "dvs:ms-auto dvs:flex dvs:gap-1.5" };
 var _hoisted_206 = {
   key: 2,
@@ -62336,7 +63663,7 @@ var _hoisted_239 = { class: "dvs:m-0" };
 var _hoisted_246 = { class: "dvs:m-0" };
 var _hoisted_256 = { class: "dvs:mt-3 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-1.5" };
 var _hoisted_266 = { class: "dvs:ms-auto dvs:flex dvs:gap-1.5" };
-var _hoisted_274 = { class: "dvs:flex dvs:items-center dvs:gap-2 dvs:px-3 dvs:pt-2.5 dvs:pb-1 dvs:font-medium" };
+var _hoisted_275 = { class: "dvs:flex dvs:items-center dvs:gap-2 dvs:px-3 dvs:pt-2.5 dvs:pb-1 dvs:font-medium" };
 var _hoisted_284 = { class: "dvs:px-3 dvs:pt-1 dvs:pb-3" };
 var _hoisted_293 = { class: "dvs:ms-auto dvs:flex dvs:gap-1.5" };
 var _hoisted_303 = {
@@ -62345,7 +63672,7 @@ var _hoisted_303 = {
 };
 var _hoisted_3110 = { class: "dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-x-3 dvs:gap-y-1.5" };
 var _hoisted_323 = { class: "dvs:mt-2 dvs:flex dvs:flex-wrap dvs:items-center dvs:gap-x-3 dvs:gap-y-1.5" };
-function render40(_ctx, _cache, $props, $setup, $data, $options) {
+function render41(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("section", {
     class: normalizeClass(["dvs:@container", [$setup.greeting ? "dvs-ui" : "dvs-config-native", $setup.look.shell, $setup.look.text]]),
     "aria-label": "DVS 配置"
@@ -62408,7 +63735,7 @@ function render40(_ctx, _cache, $props, $setup, $data, $options) {
               class: normalizeClass(["dvs:shrink-0", $setup.look.muted])
             }, toDisplayString(row.title), 3),
             row.name ? (openBlock(), createElementBlock("dd", _hoisted_238, [
-              createBaseVNode("span", _hoisted_319, toDisplayString(row.name), 1),
+              createBaseVNode("span", _hoisted_320, toDisplayString(row.name), 1),
               row.follow ? (openBlock(), createElementBlock("span", {
                 key: 0,
                 class: normalizeClass(["dvs:shrink-0 dvs:text-[0.88em]", $setup.look.faint])
@@ -62416,7 +63743,7 @@ function render40(_ctx, _cache, $props, $setup, $data, $options) {
               createBaseVNode("span", {
                 class: normalizeClass(["dvs:truncate dvs:font-dvs-mono dvs:text-[0.88em]", $setup.look.faint]),
                 title: row.url
-              }, toDisplayString(row.url), 11, _hoisted_416)
+              }, toDisplayString(row.url), 11, _hoisted_417)
             ])) : (openBlock(), createElementBlock("dd", {
               key: 1,
               class: normalizeClass($setup.look.remove)
@@ -62424,7 +63751,7 @@ function render40(_ctx, _cache, $props, $setup, $data, $options) {
           ]);
         }), 128))
       ])) : createCommentVNode("v-if", true)
-    ], 2)) : (openBlock(), createElementBlock("header", _hoisted_516, [
+    ], 2)) : (openBlock(), createElementBlock("header", _hoisted_517, [
       createBaseVNode("h4", _hoisted_613, [
         _cache[8] || (_cache[8] = createTextVNode(" DVS 配置 ", -1)),
         createVNode($setup["ConfigButton"], {
@@ -62596,7 +63923,7 @@ function render40(_ctx, _cache, $props, $setup, $data, $options) {
                       createBaseVNode("span", {
                         class: normalizeClass($setup.look.faint)
                       }, "·", 2),
-                      createBaseVNode("span", _hoisted_187, toDisplayString($setup.hostOf(config.config.apiUrl)), 1),
+                      createBaseVNode("span", _hoisted_188, toDisplayString($setup.hostOf(config.config.apiUrl)), 1),
                       createVNode($setup["PhKey"], {
                         size: 13,
                         weight: $setup.secretOf(config.id).weight,
@@ -62780,7 +64107,7 @@ function render40(_ctx, _cache, $props, $setup, $data, $options) {
               key: 0,
               class: normalizeClass(["dvs:overflow-hidden dvs:rounded-lg", $setup.look.boxNew])
             }, [
-              createBaseVNode("div", _hoisted_274, [
+              createBaseVNode("div", _hoisted_275, [
                 createVNode($setup["PhPlus"], {
                   size: 14,
                   weight: "bold",
@@ -62873,11 +64200,11 @@ function render40(_ctx, _cache, $props, $setup, $data, $options) {
     ])
   ], 2);
 }
-__component39.render = render40;
-var ConfigPanel_default = __component39;
+__component40.render = render41;
+var ConfigPanel_default = __component40;
 
 // src/dvs2/ui/components/config/FunctionConfig.vue
-var __component40 = /* @__PURE__ */ defineComponent({
+var __component41 = /* @__PURE__ */ defineComponent({
   __name: "FunctionConfig",
   props: {
     idPrefix: { type: String, required: true },
@@ -62930,11 +64257,11 @@ var _hoisted_240 = {
   "aria-label": "功能",
   class: "dvs:space-y-3"
 };
-var _hoisted_320 = { class: "dvs:grid dvs:grid-cols-2 dvs:gap-2" };
-var _hoisted_417 = ["aria-checked", "aria-label", "onClick"];
-var _hoisted_517 = { class: "dvs:grid dvs:grid-cols-1 dvs:gap-3 dvs:@[30rem]:grid-cols-2" };
+var _hoisted_321 = { class: "dvs:grid dvs:grid-cols-2 dvs:gap-2" };
+var _hoisted_418 = ["aria-checked", "aria-label", "onClick"];
+var _hoisted_518 = { class: "dvs:grid dvs:grid-cols-1 dvs:gap-3 dvs:@[30rem]:grid-cols-2" };
 var _hoisted_614 = ["aria-checked", "aria-label", "onClick"];
-function render41(_ctx, _cache, $props, $setup, $data, $options) {
+function render42(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("section", {
     "aria-label": "功能配置",
     class: normalizeClass(["dvs:overflow-hidden dvs:rounded-lg", $setup.look.box])
@@ -62973,7 +64300,7 @@ function render41(_ctx, _cache, $props, $setup, $data, $options) {
         }, "角色卡功能设置", 2)
       ]),
       createBaseVNode("div", _hoisted_240, [
-        createBaseVNode("div", _hoisted_320, [
+        createBaseVNode("div", _hoisted_321, [
           (openBlock(true), createElementBlock(Fragment, null, renderList($setup.primary, (row) => {
             return openBlock(), createElementBlock("button", {
               key: row.key,
@@ -62994,10 +64321,10 @@ function render41(_ctx, _cache, $props, $setup, $data, $options) {
                 })) : createCommentVNode("v-if", true)
               ], 2),
               createTextVNode(" " + toDisplayString(row.label), 1)
-            ], 10, _hoisted_417);
+            ], 10, _hoisted_418);
           }), 128))
         ]),
-        createBaseVNode("div", _hoisted_517, [
+        createBaseVNode("div", _hoisted_518, [
           (openBlock(true), createElementBlock(Fragment, null, renderList($setup.optimizations, (row) => {
             return openBlock(), createElementBlock("div", {
               key: row.key,
@@ -63044,8 +64371,8 @@ function render41(_ctx, _cache, $props, $setup, $data, $options) {
     ])
   ], 2);
 }
-__component40.render = render41;
-var FunctionConfig_default = __component40;
+__component41.render = render42;
+var FunctionConfig_default = __component41;
 
 // src/dvs2/ui/theme.ts
 function installDvsTheme(owner, port) {
@@ -63313,7 +64640,7 @@ function mountDvsConfig(owner, runtime, options) {
 }
 
 // src/dvs2/ui/components/record/DvsRecord.vue
-var __component41 = /* @__PURE__ */ defineComponent({
+var __component42 = /* @__PURE__ */ defineComponent({
   __name: "DvsRecord",
   props: {
     icon: { type: null, required: true },
@@ -63356,12 +64683,12 @@ var __component41 = /* @__PURE__ */ defineComponent({
 });
 var _hoisted_161 = ["open"];
 var _hoisted_241 = { class: "dvs:shrink-0 dvs:font-medium dvs:whitespace-nowrap" };
-var _hoisted_321 = {
+var _hoisted_324 = {
   key: 0,
   class: "dvs:text-dvs-faint"
 };
-var _hoisted_418 = { class: "dvs:whitespace-nowrap dvs:tabular-nums" };
-var _hoisted_518 = {
+var _hoisted_419 = { class: "dvs:whitespace-nowrap dvs:tabular-nums" };
+var _hoisted_519 = {
   key: 0,
   class: "dvs:text-dvs-faint"
 };
@@ -63379,7 +64706,7 @@ var _hoisted_912 = {
   key: 1,
   class: "dvs:px-1.5 dvs:pt-1 dvs:pb-1.5"
 };
-function render42(_ctx, _cache, $props, $setup, $data, $options) {
+function render43(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("details", {
     class: normalizeClass([
       $setup.DVS_UI_ROOT_CLASS,
@@ -63425,11 +64752,11 @@ function render42(_ctx, _cache, $props, $setup, $data, $options) {
       }, [
         (openBlock(true), createElementBlock(Fragment, null, renderList($props.meta, (item, index) => {
           return openBlock(), createElementBlock(Fragment, { key: item }, [
-            index ? (openBlock(), createElementBlock("span", _hoisted_321, "·")) : createCommentVNode("v-if", true),
-            createBaseVNode("span", _hoisted_418, toDisplayString(item), 1)
+            index ? (openBlock(), createElementBlock("span", _hoisted_324, "·")) : createCommentVNode("v-if", true),
+            createBaseVNode("span", _hoisted_419, toDisplayString(item), 1)
           ], 64);
         }), 128)),
-        $props.meta.length && _ctx.$slots.meta ? (openBlock(), createElementBlock("span", _hoisted_518, "·")) : createCommentVNode("v-if", true),
+        $props.meta.length && _ctx.$slots.meta ? (openBlock(), createElementBlock("span", _hoisted_519, "·")) : createCommentVNode("v-if", true),
         renderSlot(_ctx.$slots, "meta", { open: $setup.open })
       ], 2)) : $setup.open ? (openBlock(), createElementBlock("span", _hoisted_615)) : createCommentVNode("v-if", true),
       createCommentVNode(" 非最新楼层：可展开查看，没有操作按钮，标出原因。 "),
@@ -63474,8 +64801,8 @@ function render42(_ctx, _cache, $props, $setup, $data, $options) {
     ])) : createCommentVNode("v-if", true)
   ], 42, _hoisted_161);
 }
-__component41.render = render42;
-var DvsRecord_default = __component41;
+__component42.render = render43;
+var DvsRecord_default = __component42;
 
 // src/dvs2/ui.ts
 var CSS2 = `
@@ -64192,7 +65519,7 @@ async function attachWorldbookCompression(owner, reportError, supplied, options 
 }
 
 // src/dvs2/ui/components/WorldbookCompressionWindow.vue
-var __component42 = /* @__PURE__ */ defineComponent({
+var __component43 = /* @__PURE__ */ defineComponent({
   __name: "WorldbookCompressionWindow",
   props: {
     books: { type: Map, required: true },
@@ -64229,9 +65556,9 @@ var _hoisted_247 = {
   class: "dvs-scroll dvs:min-h-0 dvs:overflow-y-auto",
   "aria-live": "polite"
 };
-var _hoisted_324 = { class: "dvs:flex dvs:items-center dvs:gap-2" };
-var _hoisted_419 = { class: "dvs:m-0 dvs:text-base dvs:font-semibold" };
-var _hoisted_519 = { class: "dvs:space-y-2 dvs:break-words dvs:text-sm dvs:leading-relaxed dvs:text-dvs-muted" };
+var _hoisted_325 = { class: "dvs:flex dvs:items-center dvs:gap-2" };
+var _hoisted_420 = { class: "dvs:m-0 dvs:text-base dvs:font-semibold" };
+var _hoisted_520 = { class: "dvs:space-y-2 dvs:break-words dvs:text-sm dvs:leading-relaxed dvs:text-dvs-muted" };
 var _hoisted_616 = { key: 0 };
 var _hoisted_715 = { key: 1 };
 var _hoisted_814 = ["aria-label", "aria-valuenow", "aria-valuemax"];
@@ -64240,7 +65567,7 @@ var _hoisted_1011 = { class: "dvs:list-disc dvs:space-y-1 dvs:ps-6 dvs:text-dvs-
 var _hoisted_1118 = { key: 0 };
 var _hoisted_1217 = { key: 1 };
 var _hoisted_1314 = { class: "dvs:flex dvs:justify-end dvs:border-t dvs:border-dvs-border dvs:px-4 dvs:py-3" };
-function render43(_ctx, _cache, $props, $setup, $data, $options) {
+function render44(_ctx, _cache, $props, $setup, $data, $options) {
   return openBlock(), createElementBlock("div", {
     role: "document",
     "aria-label": [...$props.books.values()].some((book) => book.kind === "script") ? "角色卡解压" : "世界书解压",
@@ -64252,7 +65579,7 @@ function render43(_ctx, _cache, $props, $setup, $data, $options) {
           key,
           class: "dvs:space-y-3 dvs:border-b dvs:border-dvs-border dvs:p-4 dvs:last:border-0"
         }, [
-          createBaseVNode("header", _hoisted_324, [
+          createBaseVNode("header", _hoisted_325, [
             book.phase === "decode-failed" || book.phase === "save-unconfirmed" ? (openBlock(), createBlock($setup["PhWarningCircle"], {
               key: 0,
               size: 20,
@@ -64271,7 +65598,7 @@ function render43(_ctx, _cache, $props, $setup, $data, $options) {
               size: 20,
               class: "dvs:shrink-0 dvs:text-dvs-accent"
             })),
-            createBaseVNode("h3", _hoisted_419, [
+            createBaseVNode("h3", _hoisted_420, [
               book.kind === "script" && book.phase === "saving" ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
                 createTextVNode("正在将脚本写入角色卡…")
               ], 64)) : (openBlock(), createElementBlock(Fragment, { key: 1 }, [
@@ -64279,7 +65606,7 @@ function render43(_ctx, _cache, $props, $setup, $data, $options) {
               ], 64))
             ])
           ]),
-          createBaseVNode("div", _hoisted_519, [
+          createBaseVNode("div", _hoisted_520, [
             book.phase === "decoding" || book.phase === "saving" ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
               createBaseVNode("p", null, "《" + toDisplayString(book.book) + "》", 1),
               book.phase === "decoding" ? (openBlock(), createElementBlock("p", _hoisted_616, "已解压 " + toDisplayString(book.succeeded) + " / " + toDisplayString(book.total) + " 个" + toDisplayString(book.kind === "script" ? "脚本" : "条目"), 1)) : (openBlock(), createElementBlock("p", _hoisted_715, toDisplayString(book.total) + " 个" + toDisplayString(book.kind === "script" ? "脚本" : "条目") + "已全部解压，正在等待酒馆确认保存。", 1)),
@@ -64331,8 +65658,8 @@ function render43(_ctx, _cache, $props, $setup, $data, $options) {
     ])
   ], 8, _hoisted_169);
 }
-__component42.render = render43;
-var WorldbookCompressionWindow_default = __component42;
+__component43.render = render44;
+var WorldbookCompressionWindow_default = __component43;
 
 // src/dvs2/ui/worldbook-compression-dialog.ts
 function createWorldbookCompressionDialog(owner, reportError, saveChoices) {

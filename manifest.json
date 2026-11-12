@@ -8,6 +8,6 @@
   "dependencies": [
     "third-party/JS-Slash-Runner"
   ],
-  "version": "0.6.4",
+  "version": "0.6.5",
   "auto_update": false
 }

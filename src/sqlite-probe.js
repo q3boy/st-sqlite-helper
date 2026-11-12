@@ -203,6 +203,9 @@
     });
   }
 
+  // src/shared/chat-database-codec.ts
+  var sqliteHeader = new TextEncoder().encode("SQLite format 3\x00");
+
   // src/worker/storage.ts
   var PROBE_FILE_PREFIX = "__st_sqlite_helper_probe__/";
   var indexedDbSource = (source) => ("mode" in source) && source.mode === "indexeddb";
