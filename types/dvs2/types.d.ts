@@ -64,13 +64,14 @@ export type Dependency = ExtensionKey | {
     readonly key: ExtensionKey;
 };
 export type ExtensionDependencies = Partial<Record<StageName, readonly Dependency[]>>;
-export interface InternalTableDefinition {
-    readonly name: string;
-    readonly uniqueKeys: string | readonly string[];
-}
 export type InternalSchemas = Record<string, Record<string, TableSchema>>;
 export interface ExtensionDefinition {
-    readonly internalTables?: readonly InternalTableDefinition[];
+    readonly author?: import('./author-contracts').DvsAuthorExtension;
+    readonly dvsTableOptions?: import('./ext/tables/schema').DvsTableOptions;
+    readonly migrations?: readonly {
+        readonly version: string;
+        readonly sql: string;
+    }[];
     readonly key: ExtensionKey;
     readonly default_config?: Readonly<Record<string, unknown>>;
     readonly controller?: ExtensionControllerDefinition;
@@ -83,7 +84,7 @@ export interface ExtensionControllerDefinition {
     new (helper: ExtensionHelper): Extension;
 }
 export interface Extension {
-    readonly helper: ExtensionHelper;
+    readonly helper?: ExtensionHelper;
     collectPre?(ctx: StageContext<'collect'>): MaybePromise<void>;
     collectPost?(ctx: StageContext<'collect'>, task: UserTaskAvailability): MaybePromise<void>;
     userReqPre?(ctx: StageContext<'userReq'>, request: ModelRequestDraft): MaybePromise<void>;
@@ -115,6 +116,7 @@ export interface UserMessage extends MessageSource {
 export interface AiMessage extends MessageSource {
     readonly capsule: MessageCapsules;
     readonly versionid?: string;
+    readonly tablesCommitted?: true;
 }
 export interface PreviousMessage extends MessageSource {
     readonly versionid?: string;
@@ -143,6 +145,7 @@ export interface StageContext<S extends StageName, C = unknown> extends StageCon
     getCapsule(): CapsuleData | undefined;
     setCapsule(value: CapsuleData): void;
     setEjs(name: string, value: unknown): void;
+    setMacro(name: string, value: import('./author-templates').DvsMacro): void;
 }
 export type ExtensionResults = Record<ExtensionKey, unknown>;
 export interface LorebookIdentity {
@@ -177,7 +180,7 @@ export type CommittedTablesPayload = Omit<SourceTablesPayload, 'state' | 'tables
 export type TablesPayload<S extends StageName> = S extends 'aiResp' ? SourceTablesPayload | CommittedTablesPayload : SourceTablesPayload;
 export interface StagePayload<S extends StageName = StageName> {
     tables?: TablesPayload<S> & {
-        readonly internal?: TablesPayload<S>;
+        internal(key: string): TablesPayload<S>;
     };
     lb_opt?: LorebookOptimizePayload;
     tables_opt?: TablesOptimizePayload;
@@ -230,6 +233,7 @@ export interface StageExchange {
         ai: CapsuleRecords;
     };
     readonly ejs: Record<string, unknown>;
+    macros?: Record<string, Record<string, import('./author-templates').DvsMacro>>;
 }
 export interface PreparedModelRequest {
     readonly tasks: TaskMap;
@@ -238,6 +242,7 @@ export interface PreparedModelRequest {
     readonly snapshot: RequestSnapshot;
 }
 export interface TurnRuntime {
+    tablesCommitted: boolean;
     readonly config: DvsScriptConfig;
     userSkipped: boolean;
     user?: UserMessage;
@@ -259,10 +264,13 @@ export interface TurnRuntime {
     readonly capsuleBase: Partial<Record<RequestStage, CapsuleRecords>>;
 }
 export interface ExtensionHelper {
+    llm(type: 'pre' | 'post', messages: readonly ModelMessage[], signal?: AbortSignal, configId?: string): Promise<string>;
     readonly sqlite: PublicDatabaseApi;
     readonly lorebook: WorldbookReader;
 }
 export interface StageHelper {
+    readonly tablesCommitted?: boolean;
+    commitTables?(): Promise<void>;
     readonly schemas?: Readonly<Record<string, TableSchema>>;
     readonly internalSchemas?: InternalSchemas;
     readonly char: BusinessDatabaseHandle;
@@ -272,6 +280,8 @@ export interface StageHelper {
     readonly signal: AbortSignal;
     assertCurrent(): void;
     readLorebook(): Promise<LorebookEntry[]>;
+    /** Internal prompt preparation; request.data supplied by authors is already final. */
+    expandAuthorMacros?(text: string): string;
 }
 export interface TurnPreparation {
     prepareNarrativeTables(entries: readonly Readonly<LorebookEntry>[]): void;
@@ -318,6 +328,7 @@ export type CapsuleKind = 'user' | 'ai';
 export type CapsuleSummaries = Partial<Record<ExtensionKey, JsonValue>>;
 export interface CapsuleDocument {
     records: CapsuleRecords;
+    tablesCommitted?: true;
     analyses?: CapsuleAnalysis[];
 }
 export interface CapsuleAnalysis {
@@ -379,6 +390,7 @@ export interface DisplayHelper {
     assertCurrent(): void;
 }
 export interface DisplayActions {
+    openMemory(target: import('./ext/memory/contracts').MemoryWindowTarget): Promise<void>;
     reroll(): Promise<void>;
     clearUser(): Promise<void>;
     reopenPreNarrative(): Promise<void>;

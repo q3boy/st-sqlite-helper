@@ -2,6 +2,8 @@ import type { JsonValue, SqlInputValue } from '../../../core/binds';
 import type { SqlValue } from '../../../vendor/sqljs';
 import type { BusinessDatabaseHandle } from '../../../sdk/public-contracts';
 import type { DvsPreNarrativeRegistration } from '../pre_narr_ui/contracts';
+import type { DvsTableOptions } from './schema';
+export type { DvsTableOption, DvsTableOptions } from './schema';
 export * from '../pre_narr_ui/contracts';
 export type DvsValues = Record<string, SqlInputValue>;
 export type DvsTables = Record<string, DvsValues[]>;
@@ -54,6 +56,7 @@ export interface DvsState {
     readonly chat: BusinessDatabaseHandle;
     readonly fid: Uint8Array;
     table(name: string): DvsTable;
+    internal(key: string): DvsState;
     transaction<T>(callback: (state: DvsState) => T | Promise<T>): Promise<T>;
 }
 export interface DvsUpdateSourceState {
@@ -61,11 +64,16 @@ export interface DvsUpdateSourceState {
     readonly chat: BusinessDatabaseHandle;
     readonly fid: Uint8Array | null;
     table(name: string): DvsPromptTable;
+    internal(key: string): DvsUpdateSourceState;
 }
 export interface DvsRegistration {
     scriptId: string;
+    extensions?: readonly import('../../author-contracts').DvsAuthorExtension[];
+    disabledBuiltins?: readonly import('../../author-contracts').DvsOptionalBuiltin[];
+    requiredBuiltins?: readonly import('../../author-contracts').DvsBuiltin[];
     preNarrativeUi?: readonly DvsPreNarrativeRegistration[];
-    uniqueKeys: Record<string, readonly string[]>;
+    uniqueKeys?: Record<string, readonly string[]>;
+    dvsTableOptions?: DvsTableOptions;
     /** Request-only rows start empty on every attempt and must be removed by preUpdate. */
     virtualTables?: Record<string, DvsVirtualTable>;
     narrativePrepare(input: {
@@ -88,6 +96,10 @@ export interface DvsUpdateStatus {
     attempt: number;
     maxAttempts: number;
     retryDelayMs: number;
+    memoryCompression?: {
+        start: number;
+        end: number;
+    };
 }
 export interface DvsLorebookVersionOptions {
     onExpired: 'WARNING_MESSAGE' | 'AUTO_UPDATE';
@@ -101,6 +113,7 @@ export interface DvsRegisterOptions {
     signal?: AbortSignal;
 }
 export interface DvsApi {
+    readonly CHAR_KEY: '_char';
     getInject(): Promise<DvsInjectFlags>;
     setInject(flags: DvsInjectFlags): Promise<DvsInjectFlags>;
     reInject(): Promise<void>;

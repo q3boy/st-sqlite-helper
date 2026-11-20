@@ -1,0 +1,43 @@
+# 随卡扩展
+
+## 接入现成扩展
+
+假设拿到一个导出 `journal` 的模块和两个 SQL 条目，要把它接进一张已经使用 DVS 的卡：
+
+1. 在卡片现有的注册脚本中导入 `journal`，把它追加到原来那次 `DVS.register` 的 `extensions` 数组。已有其他扩展时一起保留。按卡片原有方式打包，让发给玩家的角色脚本包含模块或能从实际导入地址加载它。单文件卡可以在同一脚本里定义并注册 `journal`。完整接线见[随卡注册作者扩展](../../dvs-docs/references/author-extension-api.md)。
+2. 把配套的 `[DVS:DDL:journal]v1.0.0` 和 `[DVS:初始化:journal]welcome_0` 加入角色绑定的世界书，保留卡片原有的角色卡组 DDL。扩展对象已通过 `dvsTableOptions` 声明内部表、业务键与版本模式。示例的初值对应第一个开场白，卡里使用其他开场白时按需调整初始化条目。
+3. 本卡的作者扩展随注册固定启用。扩展若提供可调参数，按它的说明用 `DVS.getConfig(key)`、`DVS.setConfig(key, values)` 读取或修改。卡片依赖内置功能时，在主注册中用 `requiredBuiltins` 固定启用，例如日志依赖变量功能可声明 `requiredBuiltins: ['tables']`。不使用某个可排除内置功能时配置 `disabledBuiltins`，是否另做同类功能由卡作者决定。[字段范围与面板显示规则](../../dvs-docs/references/author-extension-api.md#配置与模板)
+4. 用第一个开场白新建聊天，启用卡片脚本和变量功能。对指南中的 `journal`，正文世界书里的 `[[DVS_EXT:journal:entry:welcome]]` 应在请求中展开为“今天抵达青禾书店。”。第一次 AI 回复完成后，展开该楼胶囊可看到本次写入的日志。
+
+## 开发日志扩展
+
+采用接口指南中可直接编译的 [journal.ts、建表 SQL 与初值](../../dvs-docs/references/author-extension-api.md)。示例把楼层号的字符串作为日志编号，保存这一条 AI 回复的正文。两个 swipe 的楼层号相同，各自在自己的表版本中保存同一编号的日志。
+
+| 需要什么结果 | journal 在哪里做 |
+| --- | --- |
+| 正文生成前引用上轮留下的日志 | 在 `collect` 声明对 `tables` 的依赖。`collectPre` 读起点状态，用 `ctx.setMacro('entry', …)` 提供正文宏，用 `ctx.setEjs('entryCount', …)` 提供本轮的日志条数。 |
+| 把新回复写入它自己的楼层版本 | 在 `aiResp` 声明对 `tables` 的依赖。`aiRespPost` 从 `ctx.payload.tables.internal('journal').state` 写入日志内部表。需要在胶囊显示时，用 `ctx.setCapsule` 保存展示记录。 |
+| 玩家回看或切换 swipe 时显示对应日志 | 在扩展定义上提供 `ejs.entry(ctx, id)`，从 `ctx.state.internal('journal').table('日志条目')` 按编号读取。示例日志按楼层保存，生成时读取本轮起点，回看时读取目标回复所选 swipe 的版本。 |
+
+只实现业务需要的阶段。若要让模型参与本轮合并请求，在请求阶段填写任务，在响应阶段处理分给本扩展的结果；扩展内需要单独请求文本时，使用构造器收到的 `helper.llm` 并传入本轮信号。扩展体系外的独立脚本可用 `DVS.llm()`。[阶段与模型接口](../../dvs-docs/references/author-extension-api.md#扩展入口与数据)
+
+若要自定义胶囊，折叠时可用 `summarize` 返回摘要，展开时在 DVS 提供的容器中挂载 DOM 或 Vue，并返回卸载函数。重做和清除操作由 DVS 提供。[胶囊摘要与详情](../../dvs-docs/references/author-extension-api.md#胶囊摘要与详情)
+
+## 核对历史分支
+
+在 Prompt Template 设置中开启「渲染楼层时执行EJS」和「启用 render before/after 注入支持」。在卡片世界书中新建名为 `[RENDER:AFTER] 本楼日志` 的条目，将触发方式设为蓝灯（常驻）。沿用当前的「兼容模式」设置，按下表设置这条世界书条目的启用开关：
+
+| Prompt Template 兼容模式 | 世界书中这条日志模板的开关 |
+| --- | --- |
+| 开启 | 关闭条目 |
+| 关闭 | 启用条目 |
+
+把下面的 EJS 放入条目正文。它按示例的日志编号读取当前显示的 AI 回复，在楼层末尾显示日志：
+
+```ejs
+<% if (!is_user && !is_system && message_id > 0) { %>
+  <p>本楼日志：<%= await dvs_ext.journal.entry(String(message_id)) %></p>
+<% } %>
+```
+
+在第 2 楼生成两段内容不同的 AI 回复，分别等后处理完成，再续写到第 4 楼。切换历史第 2 楼的两个 swipe 并切回，观察“本楼日志”后的文字是否随该楼正文往返，第 4 楼是否一直显示自己的正文。若酒馆只在末楼提供可点击的箭头，可用酒馆助手公开的 `setChatMessages([{ message_id: 2, swipe_id }], { refresh: 'all' })` 选中已有分支，再看聊天页面的实际渲染。

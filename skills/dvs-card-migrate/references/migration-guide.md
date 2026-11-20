@@ -74,7 +74,7 @@ node tools/dvs-card-migrate.mjs "/path/to/card/index.yaml" --filter-rules common
 | `dvs_input_inject === true` | `dvs.exts.tables_opt: true` 和 `dvs.config.lb_opt.llm_filter: true`；否则两项 false |
 | `dvs_input_inject === true && dvs_plot === true` | `dvs.exts.plot_plan: true`；否则 false，保留旧总开关下实际生效的行为 |
 
-转换移除这三个已转换的旧字段，保留其他作者变量。已有合法 `dvs` 时以它为准，不让旧字段覆盖它；已有新对象非法时报告错误。运行时读取旧玩家配置也使用同样规则。新配置的两项筛选与规划独立选择，不需要保留旧总开关的联动；基础扩展与新 API 见[配置接口](../../dvs-docs/references/dvs-api.md#输入增强接口)。旧 `getInject/setInject` 仍可使用，但它的 filter 同时控制两种筛选，不能表达只开其中一种；不要误把自定义面板的联动当作新版 DVS 的限制。
+转换移除这三个已转换的旧字段，保留其他作者变量。已有合法 `dvs` 时以它为准，不让旧字段覆盖它；已有新对象非法时报告错误。运行时读取旧玩家配置也使用同样规则。新配置的两项筛选与规划独立选择，不需要保留旧总开关的联动；基础扩展与新 API 见[配置接口](../../dvs-docs/references/input-enhancement-api.md#输入增强接口)。旧 `getInject/setInject` 仍可使用，但它的 filter 同时控制两种筛选，不能表达只开其中一种；不要误把自定义面板的联动当作新版 DVS 的限制。
 
 索引里的配置是下次导入的作者默认值，不等于玩家正在使用的脚本变量。工具不接触在线配置，也不会用新默认值覆盖玩家选择。交付时说明脚本如何更新和重载，并让玩家核对实际启用项。
 

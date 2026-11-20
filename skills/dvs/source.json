@@ -1,6 +1,7 @@
 {
   "sources": {
     "doc/dvs/指南/场景/接入与检查.md": "references/setup-guide.md",
+    "doc/dvs/指南/场景/配置记忆.md": "references/memory-guide.md",
     "examples/dvs-minimal-card/card.json": "assets/dvs-minimal-card/card.json",
     "examples/dvs-minimal-card/dvs.js": "assets/dvs-minimal-card/dvs.js",
     "examples/dvs-minimal-card/index.yaml": "assets/dvs-minimal-card/index.yaml",
@@ -48,5 +49,5 @@
       }
     }
   },
-  "contentHash": "b7f15269d6528b2b4d0542eea1f22a526a7c26f09f4e82dba8205aa21500e088"
+  "contentHash": "a305fade4fac6bedc67fdafbf55ea255513e68d8d6dfdbd4d8bf70a686537c67"
 }

@@ -1,6 +1,6 @@
 ---
 name: dvs
-description: 用于 DVS 新卡接入、已有卡整体调整、跨文件检查和开发场景选择，也可按文件清单压缩普通角色卡或 DVS 卡的世界书和角色脚本。
+description: 用于 DVS 新卡接入、已有卡调整、记忆扩展配置、跨文件检查和开发场景选择，也可按文件清单压缩普通角色卡或 DVS 卡的世界书和角色脚本。
 ---
 
 # 开发 DVS 角色卡
@@ -11,10 +11,12 @@ description: 用于 DVS 新卡接入、已有卡整体调整、跨文件检查�
 
 | 本次需求 | 指导 |
 | --- | --- |
+| 开发随卡扩展，或把现成扩展接进卡片 | 使用 `dvs-author-extension`，按[随卡扩展](../dvs-docs/references/author-extension-guide.md)接入模块和配套条目 |
 | 增加表或修改字段、业务键 | [新增数据表](../dvs-docs/references/data-model-guide.md#新增数据表)、[修改字段或业务键](../dvs-docs/references/data-model-guide.md#修改字段或业务键) |
 | 派生描述、固定计算或事件结算 | [加工正文数据与计算结果](../dvs-docs/references/data-processing-guide.md#加工正文数据与计算结果) |
 | 在按钮或脚本中调用玩家的模型生成摘要等文本 | [独立调用模型](../dvs-docs/references/dvs-api.md#独立调用模型)，无须注册角色卡 |
 | 筛选资料或规划剧情 | [筛选资料与剧情规划](../dvs-docs/references/input-enhancement-guide.md#筛选资料与剧情规划) |
+| 为卡片启用记忆、选择记录模块或指定时间地点写法 | [为角色卡配置记忆](references/memory-guide.md) |
 | 拦截正文生成，用于正文前确认人设、购物、前置交互对话等场景 | [制作生成拦截界面](../dvs-docs/references/generation-interception-guide.md#制作生成拦截界面) |
 | 制作或修改悬浮状态栏 | [制作悬浮状态栏](../dvs-docs/references/statusbar-guide.md#制作悬浮状态栏) |
 | 转换旧标签和默认配置 | [旧卡升级](../dvs-docs/references/migration-guide.md)，使用本包 `scripts/dvs-card-migrate.mjs` |
@@ -28,7 +30,7 @@ description: 用于 DVS 新卡接入、已有卡整体调整、跨文件检查�
 ## 完成卡片接入
 
 1. 分开静态设定和动态状态，明确字段含义、单位、初值、业务键及变化规则。固定公式由代码计算；只有需要临时事件输入时才使用虚拟表。
-2. 同步 DDL、各开场白 INIT、注册声明、世界书规则与宏。真实表以 `rid` 区分历史行，业务键只要求在一份状态中唯一；已有聊天按更高版本迁移，保留历史及关联。
+2. 同步 DDL、各开场白 INIT、注册声明、世界书规则与宏。用 `dvsTableOptions` 分别选择默认可见性和历史保存方式；真实表以 `rid` 区分行版本，业务键只要求在一份状态中唯一。已有聊天按更高版本迁移，保留有版本表的历史关联，无版本表按两槽位规则处理。
 3. 新卡使用 `[DVS:…]` 标签：多个范围用逗号连接，范围与用途用分号分隔，例如 `[DVS:正文,后处理;可筛选]`。默认脚本变量使用 `{ "dvs": { "enabled": true } }`。只保留一个业务注册脚本，提供 `narrativePrepare` 和 `beforeGen`；准备回调使用收到的本轮起点。完整步骤查[作者手册](../dvs-docs/references/dvs-author-guide.md)，准确签名查[接口参考](../dvs-docs/references/dvs-api.md)。
 4. 只实现本次需要的筛选、规划、结算或界面。按所选场景同步相关文件，再核对源文件与导入包；旧写法转换不会自动更新打包工具、版本号或生成卡包。
 

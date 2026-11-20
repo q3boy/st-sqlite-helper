@@ -44,6 +44,18 @@
 
 普通方法按 SQL 首关键字检查，不接受追加语句、`WITH`、`PRAGMA` 或显式事务控制；`exec` 可以包含多条 DDL。`runSql` 不做这类前缀和单语句限制，但仍通过固定目标、服务事务和后台保存执行。不要在其中手写 `BEGIN/COMMIT`，也不能破坏 `__stsh_` 内部对象。具体边界见[SQL 方法](helper-sql.md#sql-方法)。
 
+## 生成业务记录标识
+
+需要 BLOB 主键时，直接绑定二进制 UUIDv7；写入 JSON 或消息变量时选择字符串：
+
+```js
+const rid = SqliteHelper.uuidV7();
+await db.update('INSERT INTO notes(rid, content) VALUES (?, ?)', [rid, '本轮笔记']);
+const reference = SqliteHelper.uuidV7('string');
+```
+
+`db` 是事先取得的固定数据库代理，示例表须由业务创建。生成方法本身不访问数据库。格式和排序规则见[UUIDv7 接口契约](helper-api.md#生成-uuidv7)。
+
 ## 决定哪些修改必须共同成功
 
 例如“扣除金币”和“增加物品”必须同时成功时，使用一次 `transaction`，把两条带参数的命令放入同一数组。后面的命令失败且回滚成功时，整次调用不生效。两次独立 `update` 是两个事务，第二次失败不会撤销第一次；`Promise.all` 也不能代替事务。

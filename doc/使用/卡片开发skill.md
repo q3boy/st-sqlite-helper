@@ -10,6 +10,7 @@
 | `dvs-data-model` | 新增数据表、修改字段或业务键、安排已有聊天的数据迁移 |
 | `dvs-data-processing` | 将好感度转为正文阶段描述，用 `preUpdate` 完成固定计算或事件结算 |
 | `dvs-input-enhancement` | 筛选世界书和变量行、配置剧情规划 |
+| `dvs-author-extension` | 给卡开发随卡扩展，或接入已有扩展及配套 SQL、世界书模板 |
 | `dvs-generation-interception` | 制作正文前的交互界面，接入条件、模型请求、确认结果与正文交接 |
 | `dvs-statusbar` | 制作读取 DVS 数据的悬浮状态栏，处理刷新和界面清理 |
 | `dvs-card-migrate` | 用随包工具转换旧版 DVS 标签和脚本默认配置 |
@@ -18,7 +19,7 @@
 
 ## 安装到 Codex
 
-在已安装的 SQLite Helper 扩展目录，或与它同版本的完整发布包中，找到 `skills/`。将其中九个 skill 文件夹一起复制到卡片项目的 `.agents/skills/`，也可按下文只选需要的包。总入口的文件应位于 `.agents/skills/dvs/SKILL.md`。跨项目共用时，复制到用户目录的 `.agents/skills/`。开发源码中的 skill 配套同一源码版本，可能引用尚未正式发布的接口。
+在已安装的 SQLite Helper 扩展目录，或与它同版本的完整发布包中，找到 `skills/`。将其中十个 skill 文件夹一起复制到卡片项目的 `.agents/skills/`，也可按下文只选需要的包。总入口的文件应位于 `.agents/skills/dvs/SKILL.md`。跨项目共用时，复制到用户目录的 `.agents/skills/`。开发源码中的 skill 配套同一源码版本，可能引用尚未正式发布的接口。
 
 按需安装时，选择场景 skill，并同时保留 `dvs-docs` 和 `st-sqlite-scripting` 两个资料来源；只使用 Helper 时保留 `st-sqlite-scripting` 和 `dvs-docs`，后者供查阅文档中的 DVS 交叉引用。各包 `source.json` 的 `requires` 列出直接引用的资料包，安装时也要保留这些资料包自身的依赖。文件夹保持同级，名称不变，跨包相对链接才有效。
 

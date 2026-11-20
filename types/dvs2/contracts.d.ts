@@ -1,5 +1,9 @@
 import type { DvsApi as TablesApi, DvsFloorData } from './ext/tables/contracts';
+import type { UuidV7Api } from '../uuid-v7';
 export * from './ext/tables/contracts';
+export type * from './author-contracts';
+export type { MemoryConfig, MemoryConfigPatch } from './ext/memory/contracts';
+export type { ModelRequestDraft, ModelTask, UserTaskAvailability, ExtensionDependencies } from './types';
 export type ExtensionKey = string;
 export type ExtensionOverrides = Record<ExtensionKey, boolean>;
 export interface DvsScriptConfig {
@@ -25,7 +29,7 @@ export interface DvsConfigApi {
     }>;
 }
 /** Author-facing API; execution and UI internals are not part of the declaration package. */
-export interface DvsApi extends TablesApi, DvsConfigApi {
+export interface DvsApi extends TablesApi, DvsConfigApi, UuidV7Api {
     llm(type: 'pre' | 'post', messages: readonly {
         role: 'system' | 'user' | 'assistant';
         content: string;

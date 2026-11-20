@@ -1,8 +1,11 @@
 {
   "sources": {
     "doc/dvs/指南/DVS作者使用手册.md": "references/dvs-author-guide.md",
+    "doc/dvs/指南/DVS作者扩展接口.md": "references/author-extension-api.md",
     "doc/dvs/指南/DVS场景开发指南.md": "references/dvs-scenarios.md",
     "doc/dvs/指南/DVS接口与进阶用法.md": "references/dvs-api.md",
+    "doc/dvs/指南/DVS生成拦截接口.md": "references/generation-interception-api.md",
+    "doc/dvs/指南/DVS输入增强接口.md": "references/input-enhancement-api.md",
     "doc/dvs/指南/场景/悬浮状态栏.md": "references/statusbar-guide.md",
     "doc/dvs/指南/场景/接入与检查.md": "references/setup-guide.md",
     "doc/dvs/指南/场景/数据加工.md": "references/data-processing-guide.md",
@@ -10,6 +13,8 @@
     "doc/dvs/指南/场景/旧卡转换.md": "references/migration-guide.md",
     "doc/dvs/指南/场景/生成拦截.md": "references/generation-interception-guide.md",
     "doc/dvs/指南/场景/输入增强.md": "references/input-enhancement-guide.md",
+    "doc/dvs/指南/场景/配置记忆.md": "references/memory-guide.md",
+    "doc/dvs/指南/场景/随卡扩展.md": "references/author-extension-guide.md",
     "doc/使用/README.md": "references/usage-index.md",
     "doc/使用/卡片开发skill.md": "references/skill-usage.md",
     "doc/使用/安装引导脚本.md": "references/installer-guide.md",
@@ -34,5 +39,5 @@
     "st-sqlite-scripting"
   ],
   "generated": {},
-  "contentHash": "f1203f512eb1ea2fd885c68370187e2ecc85e1fbbc2dc28a0846482487ee8028"
+  "contentHash": "07c71e0326d507f3bbf75fd5e7721e96c037c7cce8c8b4374145bbbb7987cbf9"
 }

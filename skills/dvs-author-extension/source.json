@@ -1,0 +1,13 @@
+{
+  "sources": {
+    "doc/dvs/指南/场景/随卡扩展.md": "references/author-extension-guide.md",
+    "LICENSE": "LICENSE",
+    "skills/dvs-author-extension/SKILL.md": "SKILL.md",
+    "skills/NOTICE.md": "NOTICE.md"
+  },
+  "requires": [
+    "dvs-docs"
+  ],
+  "generated": {},
+  "contentHash": "f8912c02f71f9a22b597d3c41b419eb7cf25626ddffc3e6b4ffcb9d109cd2062"
+}

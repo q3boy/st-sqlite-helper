@@ -1877,329 +1877,22 @@
     };
   });
 
-  // node_modules/@noble/hashes/utils.js
-  /*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
-  function isBytes(a) {
-    return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
-  }
-  function abytes(value, length, title = "") {
-    const bytes = isBytes(value);
-    const len = value?.length;
-    const needsLen = length !== undefined;
-    if (!bytes || needsLen && len !== length) {
-      const prefix = title && `"${title}" `;
-      const ofLen = needsLen ? ` of length ${length}` : "";
-      const got = bytes ? `length=${len}` : `type=${typeof value}`;
-      throw new Error(prefix + "expected Uint8Array" + ofLen + ", got " + got);
-    }
-    return value;
-  }
-  function aexists(instance, checkFinished = true) {
-    if (instance.destroyed)
-      throw new Error("Hash instance has been destroyed");
-    if (checkFinished && instance.finished)
-      throw new Error("Hash#digest() has already been called");
-  }
-  function aoutput(out, instance) {
-    abytes(out, undefined, "digestInto() output");
-    const min = instance.outputLen;
-    if (out.length < min) {
-      throw new Error('"digestInto() output" expected to be of length >=' + min);
-    }
-  }
-  function clean(...arrays) {
-    for (let i = 0;i < arrays.length; i++) {
-      arrays[i].fill(0);
-    }
-  }
-  function createView(arr) {
-    return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
-  }
-  function rotr(word, shift) {
-    return word << 32 - shift | word >>> shift;
-  }
-  function createHasher(hashCons, info = {}) {
-    const hashC = (msg, opts) => hashCons(opts).update(msg).digest();
-    const tmp = hashCons(undefined);
-    hashC.outputLen = tmp.outputLen;
-    hashC.blockLen = tmp.blockLen;
-    hashC.create = (opts) => hashCons(opts);
-    Object.assign(hashC, info);
-    return Object.freeze(hashC);
-  }
-  var oidNist = (suffix) => ({
-    oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
-  });
-
-  // node_modules/@noble/hashes/_md.js
-  function Chi(a, b, c) {
-    return a & b ^ ~a & c;
-  }
-  function Maj(a, b, c) {
-    return a & b ^ a & c ^ b & c;
-  }
-
-  class HashMD {
-    blockLen;
-    outputLen;
-    padOffset;
-    isLE;
-    buffer;
-    view;
-    finished = false;
-    length = 0;
-    pos = 0;
-    destroyed = false;
-    constructor(blockLen, outputLen, padOffset, isLE) {
-      this.blockLen = blockLen;
-      this.outputLen = outputLen;
-      this.padOffset = padOffset;
-      this.isLE = isLE;
-      this.buffer = new Uint8Array(blockLen);
-      this.view = createView(this.buffer);
-    }
-    update(data) {
-      aexists(this);
-      abytes(data);
-      const { view, buffer, blockLen } = this;
-      const len = data.length;
-      for (let pos = 0;pos < len; ) {
-        const take = Math.min(blockLen - this.pos, len - pos);
-        if (take === blockLen) {
-          const dataView = createView(data);
-          for (;blockLen <= len - pos; pos += blockLen)
-            this.process(dataView, pos);
-          continue;
-        }
-        buffer.set(data.subarray(pos, pos + take), this.pos);
-        this.pos += take;
-        pos += take;
-        if (this.pos === blockLen) {
-          this.process(view, 0);
-          this.pos = 0;
-        }
-      }
-      this.length += data.length;
-      this.roundClean();
-      return this;
-    }
-    digestInto(out) {
-      aexists(this);
-      aoutput(out, this);
-      this.finished = true;
-      const { buffer, view, blockLen, isLE } = this;
-      let { pos } = this;
-      buffer[pos++] = 128;
-      clean(this.buffer.subarray(pos));
-      if (this.padOffset > blockLen - pos) {
-        this.process(view, 0);
-        pos = 0;
-      }
-      for (let i = pos;i < blockLen; i++)
-        buffer[i] = 0;
-      view.setBigUint64(blockLen - 8, BigInt(this.length * 8), isLE);
-      this.process(view, 0);
-      const oview = createView(out);
-      const len = this.outputLen;
-      if (len % 4)
-        throw new Error("_sha2: outputLen must be aligned to 32bit");
-      const outLen = len / 4;
-      const state = this.get();
-      if (outLen > state.length)
-        throw new Error("_sha2: outputLen bigger than state");
-      for (let i = 0;i < outLen; i++)
-        oview.setUint32(4 * i, state[i], isLE);
-    }
-    digest() {
-      const { buffer, outputLen } = this;
-      this.digestInto(buffer);
-      const res = buffer.slice(0, outputLen);
-      this.destroy();
-      return res;
-    }
-    _cloneInto(to) {
-      to ||= new this.constructor;
-      to.set(...this.get());
-      const { blockLen, buffer, length, finished, destroyed, pos } = this;
-      to.destroyed = destroyed;
-      to.finished = finished;
-      to.length = length;
-      to.pos = pos;
-      if (length % blockLen)
-        to.buffer.set(buffer);
-      return to;
-    }
-    clone() {
-      return this._cloneInto();
-    }
-  }
-  var SHA256_IV = /* @__PURE__ */ Uint32Array.from([
-    1779033703,
-    3144134277,
-    1013904242,
-    2773480762,
-    1359893119,
-    2600822924,
-    528734635,
-    1541459225
-  ]);
-
-  // node_modules/@noble/hashes/sha2.js
-  var SHA256_K = /* @__PURE__ */ Uint32Array.from([
-    1116352408,
-    1899447441,
-    3049323471,
-    3921009573,
-    961987163,
-    1508970993,
-    2453635748,
-    2870763221,
-    3624381080,
-    310598401,
-    607225278,
-    1426881987,
-    1925078388,
-    2162078206,
-    2614888103,
-    3248222580,
-    3835390401,
-    4022224774,
-    264347078,
-    604807628,
-    770255983,
-    1249150122,
-    1555081692,
-    1996064986,
-    2554220882,
-    2821834349,
-    2952996808,
-    3210313671,
-    3336571891,
-    3584528711,
-    113926993,
-    338241895,
-    666307205,
-    773529912,
-    1294757372,
-    1396182291,
-    1695183700,
-    1986661051,
-    2177026350,
-    2456956037,
-    2730485921,
-    2820302411,
-    3259730800,
-    3345764771,
-    3516065817,
-    3600352804,
-    4094571909,
-    275423344,
-    430227734,
-    506948616,
-    659060556,
-    883997877,
-    958139571,
-    1322822218,
-    1537002063,
-    1747873779,
-    1955562222,
-    2024104815,
-    2227730452,
-    2361852424,
-    2428436474,
-    2756734187,
-    3204031479,
-    3329325298
-  ]);
-  var SHA256_W = /* @__PURE__ */ new Uint32Array(64);
-
-  class SHA2_32B extends HashMD {
-    constructor(outputLen) {
-      super(64, outputLen, 8, false);
-    }
-    get() {
-      const { A, B, C, D, E, F, G, H } = this;
-      return [A, B, C, D, E, F, G, H];
-    }
-    set(A, B, C, D, E, F, G, H) {
-      this.A = A | 0;
-      this.B = B | 0;
-      this.C = C | 0;
-      this.D = D | 0;
-      this.E = E | 0;
-      this.F = F | 0;
-      this.G = G | 0;
-      this.H = H | 0;
-    }
-    process(view, offset) {
-      for (let i = 0;i < 16; i++, offset += 4)
-        SHA256_W[i] = view.getUint32(offset, false);
-      for (let i = 16;i < 64; i++) {
-        const W15 = SHA256_W[i - 15];
-        const W2 = SHA256_W[i - 2];
-        const s0 = rotr(W15, 7) ^ rotr(W15, 18) ^ W15 >>> 3;
-        const s1 = rotr(W2, 17) ^ rotr(W2, 19) ^ W2 >>> 10;
-        SHA256_W[i] = s1 + SHA256_W[i - 7] + s0 + SHA256_W[i - 16] | 0;
-      }
-      let { A, B, C, D, E, F, G, H } = this;
-      for (let i = 0;i < 64; i++) {
-        const sigma1 = rotr(E, 6) ^ rotr(E, 11) ^ rotr(E, 25);
-        const T1 = H + sigma1 + Chi(E, F, G) + SHA256_K[i] + SHA256_W[i] | 0;
-        const sigma0 = rotr(A, 2) ^ rotr(A, 13) ^ rotr(A, 22);
-        const T2 = sigma0 + Maj(A, B, C) | 0;
-        H = G;
-        G = F;
-        F = E;
-        E = D + T1 | 0;
-        D = C;
-        C = B;
-        B = A;
-        A = T1 + T2 | 0;
-      }
-      A = A + this.A | 0;
-      B = B + this.B | 0;
-      C = C + this.C | 0;
-      D = D + this.D | 0;
-      E = E + this.E | 0;
-      F = F + this.F | 0;
-      G = G + this.G | 0;
-      H = H + this.H | 0;
-      this.set(A, B, C, D, E, F, G, H);
-    }
-    roundClean() {
-      clean(SHA256_W);
-    }
-    destroy() {
-      this.set(0, 0, 0, 0, 0, 0, 0, 0);
-      clean(this.buffer);
-    }
-  }
-
-  class _SHA256 extends SHA2_32B {
-    A = SHA256_IV[0] | 0;
-    B = SHA256_IV[1] | 0;
-    C = SHA256_IV[2] | 0;
-    D = SHA256_IV[3] | 0;
-    E = SHA256_IV[4] | 0;
-    F = SHA256_IV[5] | 0;
-    G = SHA256_IV[6] | 0;
-    H = SHA256_IV[7] | 0;
-    constructor() {
-      super(32);
-    }
-  }
-  var sha256 = /* @__PURE__ */ createHasher(() => new _SHA256, /* @__PURE__ */ oidNist(1));
-
-  // src/platform-crypto.ts
-  function randomUuid(source = crypto) {
+  // src/uuid-v7.ts
+  function uuidV7(format = "binary", source = crypto) {
+    if (format !== "binary" && format !== "string")
+      throw new Error("UUIDv7 格式须为 binary 或 string。");
     const bytes = source.getRandomValues(new Uint8Array(16));
-    bytes[6] = bytes[6] & 15 | 64;
+    let time = Date.now();
+    for (let index = 5;index >= 0; index--) {
+      bytes[index] = time % 256;
+      time = Math.floor(time / 256);
+    }
+    bytes[6] = bytes[6] & 15 | 112;
     bytes[8] = bytes[8] & 63 | 128;
+    if (format === "binary")
+      return bytes;
     const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-  }
-  async function sha2562(bytes) {
-    return Array.from(sha256(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
   }
 
   // src/core/errors.ts
@@ -2383,7 +2076,7 @@
 
   // src/protocol.ts
   var PROTOCOL_VERSION = 27;
-  var BUILD_ID = "0fb9e11a-67e5-4598-afe6-96df415f0636";
+  var BUILD_ID = "18bc5e05-d6e5-4c42-a5be-b8055e2a207e";
   var extensionEntryPath = undefined;
   var EXTENSION_NAME = extensionEntryPath?.match(/^\/scripts\/extensions\/third-party\/([^/]+)\/src\/index\.js$/)?.[1] ?? "st-sqlite-helper";
   var EXTENSION_TEMPLATE_PATH = `third-party/${EXTENSION_NAME}/src`;
@@ -2487,7 +2180,7 @@
             });
           if (!create)
             return;
-          const id = randomUuid();
+          const id = uuidV7("string");
           this.checkTarget(binding, id, false);
           const next = {
             id,
@@ -2918,9 +2611,9 @@
           return structuredClone(existing);
         const info = await records.referenceInfo(oldEntity, kind === "chat");
         if (!info && await records.referenceInfo(newEntity, kind === "chat"))
-          return { taskId: randomUuid(), kind, oldEntity, newEntity, stage: "applied" };
+          return { taskId: uuidV7("string"), kind, oldEntity, newEntity, stage: "applied" };
         const ticket = {
-          taskId: randomUuid(),
+          taskId: uuidV7("string"),
           kind,
           oldEntity,
           newEntity,
@@ -4389,8 +4082,9 @@
   function indexTableName(name) {
     return `_dvs_index_${name}`;
   }
-  function createIndexSql(name) {
-    return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(indexTableName(name))} (fid BLOB NOT NULL CHECK (typeof(fid) = 'blob' AND length(fid) = 16), rid BLOB NOT NULL CHECK (typeof(rid) = 'blob' AND length(rid) = 16), PRIMARY KEY (fid,rid)) WITHOUT ROWID`;
+  function createIndexSql(name, useVersion = true) {
+    const fid = useVersion ? "BLOB NOT NULL CHECK (typeof(fid) = 'blob' AND length(fid) = 16)" : "INTEGER NOT NULL CHECK (typeof(fid) = 'integer' AND fid IN (0, 128))";
+    return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(indexTableName(name))} (fid ${fid}, rid BLOB NOT NULL CHECK (typeof(rid) = 'blob' AND length(rid) = 16), PRIMARY KEY (fid,rid)) WITHOUT ROWID`;
   }
 
   // src/storage-database.ts
@@ -5226,7 +4920,7 @@
         if (extVersion !== undefined && !sameDefinition(extVersion, DVS_EXT_VERSION_TABLE_SQL))
           result.dvs.push("DVS 系统表 _dvs_ext_version 的定义与当前版本不同。");
         for (const [name, sql] of tables)
-          if (name.startsWith("_dvs_index_") && !sameDefinition(sql, createIndexSql(name.slice("_dvs_index_".length))))
+          if (name.startsWith("_dvs_index_") && !sameDefinition(sql, createIndexSql(name.slice("_dvs_index_".length))) && !sameDefinition(sql, createIndexSql(name.slice("_dvs_index_".length), false)))
             result.dvs.push(`DVS 索引表 ${name} 的定义与当前版本不同。`);
       }
     } catch (error) {
@@ -5740,6 +5434,324 @@
         throw failed(error);
       }
     }
+  }
+
+  // node_modules/@noble/hashes/utils.js
+  /*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
+  function isBytes(a) {
+    return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
+  }
+  function abytes(value, length, title = "") {
+    const bytes = isBytes(value);
+    const len = value?.length;
+    const needsLen = length !== undefined;
+    if (!bytes || needsLen && len !== length) {
+      const prefix = title && `"${title}" `;
+      const ofLen = needsLen ? ` of length ${length}` : "";
+      const got = bytes ? `length=${len}` : `type=${typeof value}`;
+      throw new Error(prefix + "expected Uint8Array" + ofLen + ", got " + got);
+    }
+    return value;
+  }
+  function aexists(instance, checkFinished = true) {
+    if (instance.destroyed)
+      throw new Error("Hash instance has been destroyed");
+    if (checkFinished && instance.finished)
+      throw new Error("Hash#digest() has already been called");
+  }
+  function aoutput(out, instance) {
+    abytes(out, undefined, "digestInto() output");
+    const min = instance.outputLen;
+    if (out.length < min) {
+      throw new Error('"digestInto() output" expected to be of length >=' + min);
+    }
+  }
+  function clean(...arrays) {
+    for (let i = 0;i < arrays.length; i++) {
+      arrays[i].fill(0);
+    }
+  }
+  function createView(arr) {
+    return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
+  }
+  function rotr(word, shift) {
+    return word << 32 - shift | word >>> shift;
+  }
+  function createHasher(hashCons, info = {}) {
+    const hashC = (msg, opts) => hashCons(opts).update(msg).digest();
+    const tmp = hashCons(undefined);
+    hashC.outputLen = tmp.outputLen;
+    hashC.blockLen = tmp.blockLen;
+    hashC.create = (opts) => hashCons(opts);
+    Object.assign(hashC, info);
+    return Object.freeze(hashC);
+  }
+  var oidNist = (suffix) => ({
+    oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
+  });
+
+  // node_modules/@noble/hashes/_md.js
+  function Chi(a, b, c) {
+    return a & b ^ ~a & c;
+  }
+  function Maj(a, b, c) {
+    return a & b ^ a & c ^ b & c;
+  }
+
+  class HashMD {
+    blockLen;
+    outputLen;
+    padOffset;
+    isLE;
+    buffer;
+    view;
+    finished = false;
+    length = 0;
+    pos = 0;
+    destroyed = false;
+    constructor(blockLen, outputLen, padOffset, isLE) {
+      this.blockLen = blockLen;
+      this.outputLen = outputLen;
+      this.padOffset = padOffset;
+      this.isLE = isLE;
+      this.buffer = new Uint8Array(blockLen);
+      this.view = createView(this.buffer);
+    }
+    update(data) {
+      aexists(this);
+      abytes(data);
+      const { view, buffer, blockLen } = this;
+      const len = data.length;
+      for (let pos = 0;pos < len; ) {
+        const take = Math.min(blockLen - this.pos, len - pos);
+        if (take === blockLen) {
+          const dataView = createView(data);
+          for (;blockLen <= len - pos; pos += blockLen)
+            this.process(dataView, pos);
+          continue;
+        }
+        buffer.set(data.subarray(pos, pos + take), this.pos);
+        this.pos += take;
+        pos += take;
+        if (this.pos === blockLen) {
+          this.process(view, 0);
+          this.pos = 0;
+        }
+      }
+      this.length += data.length;
+      this.roundClean();
+      return this;
+    }
+    digestInto(out) {
+      aexists(this);
+      aoutput(out, this);
+      this.finished = true;
+      const { buffer, view, blockLen, isLE } = this;
+      let { pos } = this;
+      buffer[pos++] = 128;
+      clean(this.buffer.subarray(pos));
+      if (this.padOffset > blockLen - pos) {
+        this.process(view, 0);
+        pos = 0;
+      }
+      for (let i = pos;i < blockLen; i++)
+        buffer[i] = 0;
+      view.setBigUint64(blockLen - 8, BigInt(this.length * 8), isLE);
+      this.process(view, 0);
+      const oview = createView(out);
+      const len = this.outputLen;
+      if (len % 4)
+        throw new Error("_sha2: outputLen must be aligned to 32bit");
+      const outLen = len / 4;
+      const state = this.get();
+      if (outLen > state.length)
+        throw new Error("_sha2: outputLen bigger than state");
+      for (let i = 0;i < outLen; i++)
+        oview.setUint32(4 * i, state[i], isLE);
+    }
+    digest() {
+      const { buffer, outputLen } = this;
+      this.digestInto(buffer);
+      const res = buffer.slice(0, outputLen);
+      this.destroy();
+      return res;
+    }
+    _cloneInto(to) {
+      to ||= new this.constructor;
+      to.set(...this.get());
+      const { blockLen, buffer, length, finished, destroyed, pos } = this;
+      to.destroyed = destroyed;
+      to.finished = finished;
+      to.length = length;
+      to.pos = pos;
+      if (length % blockLen)
+        to.buffer.set(buffer);
+      return to;
+    }
+    clone() {
+      return this._cloneInto();
+    }
+  }
+  var SHA256_IV = /* @__PURE__ */ Uint32Array.from([
+    1779033703,
+    3144134277,
+    1013904242,
+    2773480762,
+    1359893119,
+    2600822924,
+    528734635,
+    1541459225
+  ]);
+
+  // node_modules/@noble/hashes/sha2.js
+  var SHA256_K = /* @__PURE__ */ Uint32Array.from([
+    1116352408,
+    1899447441,
+    3049323471,
+    3921009573,
+    961987163,
+    1508970993,
+    2453635748,
+    2870763221,
+    3624381080,
+    310598401,
+    607225278,
+    1426881987,
+    1925078388,
+    2162078206,
+    2614888103,
+    3248222580,
+    3835390401,
+    4022224774,
+    264347078,
+    604807628,
+    770255983,
+    1249150122,
+    1555081692,
+    1996064986,
+    2554220882,
+    2821834349,
+    2952996808,
+    3210313671,
+    3336571891,
+    3584528711,
+    113926993,
+    338241895,
+    666307205,
+    773529912,
+    1294757372,
+    1396182291,
+    1695183700,
+    1986661051,
+    2177026350,
+    2456956037,
+    2730485921,
+    2820302411,
+    3259730800,
+    3345764771,
+    3516065817,
+    3600352804,
+    4094571909,
+    275423344,
+    430227734,
+    506948616,
+    659060556,
+    883997877,
+    958139571,
+    1322822218,
+    1537002063,
+    1747873779,
+    1955562222,
+    2024104815,
+    2227730452,
+    2361852424,
+    2428436474,
+    2756734187,
+    3204031479,
+    3329325298
+  ]);
+  var SHA256_W = /* @__PURE__ */ new Uint32Array(64);
+
+  class SHA2_32B extends HashMD {
+    constructor(outputLen) {
+      super(64, outputLen, 8, false);
+    }
+    get() {
+      const { A, B, C, D, E, F, G, H } = this;
+      return [A, B, C, D, E, F, G, H];
+    }
+    set(A, B, C, D, E, F, G, H) {
+      this.A = A | 0;
+      this.B = B | 0;
+      this.C = C | 0;
+      this.D = D | 0;
+      this.E = E | 0;
+      this.F = F | 0;
+      this.G = G | 0;
+      this.H = H | 0;
+    }
+    process(view, offset) {
+      for (let i = 0;i < 16; i++, offset += 4)
+        SHA256_W[i] = view.getUint32(offset, false);
+      for (let i = 16;i < 64; i++) {
+        const W15 = SHA256_W[i - 15];
+        const W2 = SHA256_W[i - 2];
+        const s0 = rotr(W15, 7) ^ rotr(W15, 18) ^ W15 >>> 3;
+        const s1 = rotr(W2, 17) ^ rotr(W2, 19) ^ W2 >>> 10;
+        SHA256_W[i] = s1 + SHA256_W[i - 7] + s0 + SHA256_W[i - 16] | 0;
+      }
+      let { A, B, C, D, E, F, G, H } = this;
+      for (let i = 0;i < 64; i++) {
+        const sigma1 = rotr(E, 6) ^ rotr(E, 11) ^ rotr(E, 25);
+        const T1 = H + sigma1 + Chi(E, F, G) + SHA256_K[i] + SHA256_W[i] | 0;
+        const sigma0 = rotr(A, 2) ^ rotr(A, 13) ^ rotr(A, 22);
+        const T2 = sigma0 + Maj(A, B, C) | 0;
+        H = G;
+        G = F;
+        F = E;
+        E = D + T1 | 0;
+        D = C;
+        C = B;
+        B = A;
+        A = T1 + T2 | 0;
+      }
+      A = A + this.A | 0;
+      B = B + this.B | 0;
+      C = C + this.C | 0;
+      D = D + this.D | 0;
+      E = E + this.E | 0;
+      F = F + this.F | 0;
+      G = G + this.G | 0;
+      H = H + this.H | 0;
+      this.set(A, B, C, D, E, F, G, H);
+    }
+    roundClean() {
+      clean(SHA256_W);
+    }
+    destroy() {
+      this.set(0, 0, 0, 0, 0, 0, 0, 0);
+      clean(this.buffer);
+    }
+  }
+
+  class _SHA256 extends SHA2_32B {
+    A = SHA256_IV[0] | 0;
+    B = SHA256_IV[1] | 0;
+    C = SHA256_IV[2] | 0;
+    D = SHA256_IV[3] | 0;
+    E = SHA256_IV[4] | 0;
+    F = SHA256_IV[5] | 0;
+    G = SHA256_IV[6] | 0;
+    H = SHA256_IV[7] | 0;
+    constructor() {
+      super(32);
+    }
+  }
+  var sha256 = /* @__PURE__ */ createHasher(() => new _SHA256, /* @__PURE__ */ oidNist(1));
+
+  // src/platform-crypto.ts
+  async function sha2562(bytes) {
+    return Array.from(sha256(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
   }
 
   // src/worker/write-errors.ts
@@ -8132,9 +8144,9 @@
       reasons: changed ? [reason(valid && distinct.length === 1 ? "rebuild-dvs-table" : "reset-gc-counter", "_dvs_gc_counter")] : []
     };
   }
-  function normalizeDvsIndex(rows, entities) {
+  function normalizeDvsIndex(rows, entities, useVersion = true) {
     const rids = new Set(entities.rids.filter(validIdentifier).map(scopedValueKey));
-    const retained = unique(rows.filter((row) => validIdentifier(row[0]) && validIdentifier(row[1]) && (entities.state !== "known" || rids.has(scopedValueKey(row[1])))));
+    const retained = unique(rows.filter((row) => (useVersion ? validIdentifier(row[0]) : row[0] === 0 || row[0] === 128) && validIdentifier(row[1]) && (entities.state !== "known" || rids.has(scopedValueKey(row[1])))));
     return { rows: retained, removed: rows.length - retained.length };
   }
   function decideDvsTables(facts) {
@@ -8179,7 +8191,7 @@
       const normalized = normalizeDvsIndex(rows, {
         state: business && ridColumn >= 0 ? "known" : "unknown",
         rids: business && ridColumn >= 0 ? business.rows.map((row) => row[ridColumn]) : []
-      });
+      }, table.useVersion);
       if (!table.matches || !sameRows(rows, normalized.rows)) {
         result.repairs.push({ name: table.name, columns: ["fid", "rid"], rows: normalized.rows });
         result.reasons.push(reason(normalized.removed ? "remove-invalid-dvs-records" : "rebuild-dvs-table", table.name));
@@ -8222,7 +8234,7 @@
 
   // src/worker/scoped-database-repair.ts
   var quote4 = (value) => `"${value.replaceAll('"', '""')}"`;
-  function definition(name) {
+  function definition(name, useVersion = true) {
     if (name === "__stsh_meta")
       return { sql: SCOPED_META_TABLE_SQL, columns: ["key", "value"] };
     if (name === "_dvs_ext_version")
@@ -8232,7 +8244,7 @@
     if (name === "_dvs_gc_counter")
       return { sql: DVS_GC_COUNTER_TABLE_SQL, columns: ["singleton", "successful_updates"] };
     if (name.startsWith("_dvs_index_"))
-      return { sql: createIndexSql(name.slice("_dvs_index_".length)), columns: ["fid", "rid"] };
+      return { sql: createIndexSql(name.slice("_dvs_index_".length), useVersion), columns: ["fid", "rid"] };
   }
   function validateIdentity(identity, options) {
     if (!identity || !["char", "chat"].includes(identity.scope) || !isUuid(identity.charDbId) || (identity.scope === "chat" ? !isUuid(identity.chatDbId) : identity.chatDbId !== undefined) || options.expectedIndexes?.some((name) => typeof name !== "string" || !name.startsWith("_dvs_index_") || name.length < 12 || name.includes("\x00")))
@@ -8261,14 +8273,17 @@
       }));
       for (const object of facts.objects.filter((object) => object.type === "table" && !object.name.startsWith("sqlite_"))) {
         try {
-          const columns = (await db.query({ sql: "SELECT name FROM pragma_table_xinfo(?) ORDER BY cid", binds: [object.name] })).rows.map((row) => String(row[0]));
+          const fields = (await db.query({ sql: "SELECT name,type FROM pragma_table_xinfo(?) ORDER BY cid", binds: [object.name] })).rows;
+          const columns = fields.map((row) => String(row[0]));
+          const useVersion = object.name.startsWith("_dvs_index_") ? String(fields.find((row) => row[0] === "fid")?.[1]).toUpperCase() !== "INTEGER" : undefined;
           const rows = (await db.query({ sql: `SELECT ${columns.map(quote4).join(",")} FROM ${quote4(object.name)}` })).rows;
           rows.sort((a, b) => scopedValueKey(a).localeCompare(scopedValueKey(b)));
-          const expected = definition(object.name);
+          const expected = definition(object.name, useVersion);
           facts.tables.push({
             ...object,
             columns,
             rows,
+            ...useVersion !== undefined ? { useVersion } : {},
             ...expected ? {
               expectedColumns: expected.columns,
               matches: object.sql !== null && sameDefinition(object.sql, expected.sql)
@@ -8333,8 +8348,8 @@
       ...[...groups.values()].map(({ row, count }) => guard2(`SELECT count(*)=? FROM ${quote4(name)} WHERE ${columns.map((column) => `typeof(${quote4(column)})=typeof(?) AND quote(${quote4(column)})=quote(?) COLLATE BINARY`).join(" AND ")}`, [count, ...row.flatMap((value) => [value, value])]))
     ];
   }
-  function createTable(name, asName) {
-    const original = definition(name).sql.replace("IF NOT EXISTS ", "");
+  function createTable(name, asName, useVersion = true) {
+    const original = definition(name, useVersion).sql.replace("IF NOT EXISTS ", "");
     const sql = original.replace(`CREATE TABLE ${name === "__stsh_meta" ? name : quote4(name)} `, () => `CREATE TABLE ${quote4(asName)} `);
     return { sql };
   }
@@ -8354,7 +8369,7 @@
       commands.push(...guardRows(table.name, table.columns, table.rows));
     const copies = repairs.map((repair, index) => ({ ...repair, copy: `__stsh_scoped_copy_${index}` }));
     for (const repair of copies) {
-      commands.push(createTable(repair.name, repair.copy));
+      commands.push(createTable(repair.name, repair.copy, facts.tables.find((table) => table.name === repair.name)?.useVersion));
       for (const row of repair.rows)
         commands.push({
           sql: `INSERT INTO ${quote4(repair.copy)}(${repair.columns.map(quote4).join(",")}) VALUES(${row.map(() => "?").join(",")})`,
@@ -8365,7 +8380,7 @@
     for (const repair of copies) {
       if (facts.tables.some((table) => table.name === repair.name))
         commands.push({ sql: `DROP TABLE ${quote4(repair.name)}` });
-      commands.push(createTable(repair.name, repair.name), {
+      commands.push(createTable(repair.name, repair.name, facts.tables.find((table) => table.name === repair.name)?.useVersion), {
         sql: `INSERT INTO ${quote4(repair.name)}(${repair.columns.map(quote4).join(",")}) SELECT ${repair.columns.map(quote4).join(",")} FROM ${quote4(repair.copy)}`
       });
       const extensions = facts.objects.filter((object) => object.table === repair.name && object.sql && ["index", "trigger"].includes(object.type));
@@ -8688,8 +8703,8 @@
       block("conflicting-records");
     if (!plan.reasons.length) {
       plan.kind = "restart";
-      plan.newCharDbId = request.scope === "chat" ? role.id : allocate ? randomUuid() : undefined;
-      plan.chats = [...files].sort().map((file) => ({ file, chatDbId: allocate ? randomUuid() : "" }));
+      plan.newCharDbId = request.scope === "chat" ? role.id : allocate ? uuidV7("string") : undefined;
+      plan.chats = [...files].sort().map((file) => ({ file, chatDbId: allocate ? uuidV7("string") : "" }));
       plan.loss = [
         request.scope === "chat" ? "此聊天将开始使用新的插件数据，原有数据不会恢复对应关系；旧数据库文件保留。" : "这个角色及列出的聊天将开始使用新的插件数据，原有对应关系不再使用；旧数据库文件保留。"
       ];
@@ -8831,7 +8846,7 @@
   // src/dvs2/ext/tables/orphan-cleanup.ts
   var committedVersions = new WeakMap;
   function compileOrphanPruneCommands(tables, references) {
-    const prefix = `_dvs_gc_${randomUuid().replaceAll("-", "")}`;
+    const prefix = `_dvs_gc_${uuidV7("string").replaceAll("-", "")}`;
     const keep = quoteIdentifier(`${prefix}_keep`), invalid = quoteIdentifier(`${prefix}_invalid`);
     const commands = [
       { kind: "write", sql: `CREATE TEMP TABLE ${keep} (fid BLOB PRIMARY KEY) WITHOUT ROWID` },
@@ -8847,14 +8862,16 @@
       const index = quoteIdentifier(schema.indexName);
       commands.push({
         kind: "write",
-        sql: `INSERT OR IGNORE INTO ${invalid} (fid) SELECT DISTINCT fid FROM ${index}`
+        sql: `INSERT OR IGNORE INTO ${invalid} (fid) SELECT DISTINCT fid FROM ${index} WHERE EXISTS (SELECT 1 FROM pragma_table_info(?) WHERE name = 'fid' AND upper(type) = 'BLOB')`,
+        binds: [schema.indexName]
       });
     }
     commands.push({ kind: "write", sql: `DELETE FROM ${invalid} WHERE fid IN (SELECT fid FROM ${keep})` });
     for (const schema of tables)
       commands.push({
         kind: "write",
-        sql: `DELETE FROM ${quoteIdentifier(schema.indexName)} WHERE fid IN (SELECT fid FROM ${invalid})`
+        sql: `DELETE FROM ${quoteIdentifier(schema.indexName)} WHERE fid IN (SELECT fid FROM ${invalid}) AND EXISTS (SELECT 1 FROM pragma_table_info(?) WHERE name = 'fid' AND upper(type) = 'BLOB')`,
+        binds: [schema.indexName]
       });
     for (const schema of tables) {
       const table = quoteIdentifier(schema.name), index = quoteIdentifier(schema.indexName);
@@ -9191,7 +9208,7 @@
               break;
             }
           }
-          storageId ??= randomUuid();
+          storageId ??= uuidV7("string");
           const same = storageId === this.configuration?.storageId && mode === this.mode;
           const configGeneration = same ? old.configGeneration : (old?.configGeneration ?? 0) + 1;
           if (!Number.isSafeInteger(configGeneration))
@@ -10306,7 +10323,7 @@
       });
       promise.catch(() => {});
       const a = {
-        id: randomUuid(),
+        id: uuidV7("string"),
         targetBuildId,
         purpose,
         participants: new Map([...ports].map((p) => [p, false])),
@@ -10514,8 +10531,8 @@
         this.entities.set(entity, { id: observed, waiters: [] });
         return Promise.resolve({ identityId: observed });
       }
-      entry ??= { id: randomUuid(), waiters: [] };
-      entry.token = randomUuid();
+      entry ??= { id: uuidV7("string"), waiters: [] };
+      entry.token = uuidV7("string");
       entry.owner = owner;
       this.entities.set(entity, entry);
       const candidate = entry, token = entry.token;
@@ -10728,7 +10745,7 @@
   function createWorkerRuntime(options) {
     const { engine, saveDebounceMs } = options;
     engine.catch(() => {});
-    const instanceId = randomUuid();
+    const instanceId = uuidV7("string");
     let exited = false;
     const chatIdentities = new Map;
     const ports = new Set;
@@ -10875,7 +10892,7 @@
       let commands, id;
       try {
         commands = writeCommands(operation);
-        id = operation.callId ?? randomUuid();
+        id = operation.callId ?? uuidV7("string");
       } catch (error) {
         throw beforeBusinessSqlError(error);
       }

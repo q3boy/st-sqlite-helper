@@ -16,6 +16,14 @@
 
 例如在聊天 A 取得 `chatA` 后切到 B，`chatA` 仍操作 A，重新读取 `SqliteHelper.chat` 才取得 B。长期持有、解构、防抖或等待授权都不会让原代理跟随当前聊天；目录配置变化则拒绝旧代理，不转写新目录。
 
+## 生成 UUIDv7
+
+`SqliteHelper.uuidV7()` 或 `SqliteHelper.uuidV7('binary')` 同步返回新的 16 字节 `Uint8Array`，可直接绑定 SQLite BLOB；`SqliteHelper.uuidV7('string')` 返回小写、带连字符的标准 UUID 字符串。`DVS.uuidV7` 提供相同接口。
+
+生成只使用本地时钟和运行环境的随机源，不读取数据库、不发送 Worker 请求，也不触发目录授权。每次返回独立值；同一毫秒内不承诺严格递增。插件内部新生成的数据库身份、请求编号、fid 和 rid 使用同一生成器，原有字符串或 BLOB 存储格式不变。已有标识继续使用，不迁移。
+
+前 6 字节是毫秒时间戳，其余部分含版本位、变体位和随机数据。省略格式时返回二进制；传入 `binary`、`string` 以外的格式会抛错。
+
 ## 公开操作与防抖
 
 公共代理只提供 `debounce`、`query`、`update`、`exec`、`transaction` 和 `runSql`。flush、refresh、checked-transaction、目录管理、连接销毁和重启属于插件内部，完整公共类型使用扩展包中的 `types/sqlite-helper.d.ts`。没有公共同步保存选项或保存订阅。

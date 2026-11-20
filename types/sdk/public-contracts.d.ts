@@ -1,9 +1,10 @@
 import type { SqlBinds } from '../core/binds';
+import type { UuidV7Api } from '../uuid-v7';
 import type { MutationResult, QueryResult } from '../core/database';
 import type { SqlCommand } from '../protocol';
 import type { ServiceErrorData, FailureKind, ExecutionState } from '../core/errors';
 /** Each property access captures a fixed target; each write commits its own memory transaction. */
-export interface PublicDatabaseApi {
+export interface PublicDatabaseApi extends UuidV7Api {
     readonly root: BusinessDatabaseHandle;
     readonly char: BusinessDatabaseHandle | null;
     readonly chat: BusinessDatabaseHandle | null;

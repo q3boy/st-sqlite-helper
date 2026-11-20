@@ -1,9 +1,18 @@
 (() => {
-  // src/platform-crypto.ts
-  function randomUuid(source = crypto) {
+  // src/uuid-v7.ts
+  function uuidV7(format = "binary", source = crypto) {
+    if (format !== "binary" && format !== "string")
+      throw new Error("UUIDv7 格式须为 binary 或 string。");
     const bytes = source.getRandomValues(new Uint8Array(16));
-    bytes[6] = bytes[6] & 15 | 64;
+    let time = Date.now();
+    for (let index = 5;index >= 0; index--) {
+      bytes[index] = time % 256;
+      time = Math.floor(time / 256);
+    }
+    bytes[6] = bytes[6] & 15 | 112;
     bytes[8] = bytes[8] & 63 | 128;
+    if (format === "binary")
+      return bytes;
     const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   }
@@ -296,7 +305,7 @@
     let root;
     let created = false;
     let failure;
-    const name = `__st_sqlite_helper_probe__-${randomUuid()}`;
+    const name = `__st_sqlite_helper_probe__-${uuidV7("string")}`;
     try {
       if (typeof navigator === "undefined" || typeof navigator.storage?.getDirectory !== "function")
         throw new Error("当前浏览器没有可用的 OPFS。");
@@ -341,7 +350,7 @@
     return failure ?? { available: true };
   }
   async function probeIndexedDb() {
-    const key = `${PROBE_FILE_PREFIX}${randomUuid()}`;
+    const key = `${PROBE_FILE_PREFIX}${uuidV7("string")}`;
     let stage = "write";
     let failure;
     try {

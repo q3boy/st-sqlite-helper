@@ -27,6 +27,8 @@ export interface ScopedTableFact {
     /** Present only for known Helper/DVS tables. */
     expectedColumns?: readonly string[];
     matches?: boolean;
+    /** Index fid storage mode read from the table's declared column type. */
+    useVersion?: boolean;
 }
 export interface ScopedObjectFact {
     name: string;
@@ -71,7 +73,7 @@ export declare function decideDvsCounter(table: ScopedTableFact | undefined): Ta
 export declare function normalizeDvsIndex(rows: ScopedCell[][], entities: {
     state: 'known' | 'unknown';
     rids: readonly ScopedCell[];
-}): {
+}, useVersion?: boolean): {
     rows: ScopedCell[][];
     removed: number;
 };

@@ -16,7 +16,7 @@ export interface ModelRequestTrace {
 export interface DvsRequestErrorRecord {
     id: number;
     time: string;
-    purpose: 'input_inject' | 'variable';
+    purpose: 'input_inject' | 'variable' | 'memory_compression';
     attempt: number;
     stage: string;
     reason: string;
